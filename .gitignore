@@ -1,0 +1,6 @@
+node_modules/
+data/
+apps/web/dist/
+.env
+.sandbox-vendor/
+*.log

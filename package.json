@@ -1,0 +1,27 @@
+{
+  "name": "agentco",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A company run by AI agents: brain-inspired leaders, cheap-model workers, a live traceable dashboard.",
+  "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "npm run build:web && npm run start:server",
+    "start:server": "node --disable-warning=ExperimentalWarning apps/server/src/index.ts",
+    "build:web": "node apps/web/build.mjs",
+    "typecheck": "tsc -p apps/server/tsconfig.json && tsc -p apps/web/tsconfig.json",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"apps/server/test/**/*.test.ts\"",
+    "check": "npm run typecheck && npm test && npm run build:web"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.28.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^6.0.0"
+  }
+}
