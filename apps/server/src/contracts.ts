@@ -33,6 +33,8 @@ import type {
   AffectState,
   CalibrationStats,
   Okr,
+  BrainBlockId,
+  Department,
 } from "../../../packages/shared/src/index.ts";
 
 // ───────────────────────────── Tracing ─────────────────────────────
@@ -236,6 +238,7 @@ export interface OrgView {
   managerChain(agentId: string): Agent[];
   listActiveAgents(): Agent[];
   departmentName(departmentId: string): string;
+  department(departmentId: string): Department | null;
   needs(agentId: string): NeedsState;
   /** Remaining monthly budget for the agent (USD), considering the company cap too. */
   budgetRemainingUsd(agentId: string): number;
@@ -262,6 +265,12 @@ export interface TaskView {
   createObjective(input: CreateObjectiveInput): Task;
   /** Merge into task.state (persisted working memory). */
   patchState(taskId: string, patch: Record<string, unknown>): Task;
+  /**
+   * TODO List (Interruptible): a reason string when something more urgent is waiting
+   * for this agent — an unanswered human message, or a ready task whose priority
+   * exceeds `currentPriority` — else null. Brain engines poll it between blocks.
+   */
+  interruptFor(agentId: string, currentPriority: number): string | null;
 }
 
 export interface CognitiveStatePatch {
@@ -272,8 +281,11 @@ export interface CognitiveStatePatch {
 }
 
 export interface AgentStateWriter {
-  /** Updates status/activity on the agent row and emits agent.status (throttled for the UI). */
-  setActivity(agentId: string, status: Agent["status"], activity: string | null): void;
+  /**
+   * Updates status/activity (and, for brain agents, the diagram block) on the agent row
+   * and emits agent.status (throttled for the UI).
+   */
+  setActivity(agentId: string, status: Agent["status"], activity: string | null, block?: BrainBlockId | null): void;
   updateCognitiveState(agentId: string, patch: CognitiveStatePatch): Agent;
 }
 
@@ -325,6 +337,7 @@ export type EngineOutcome =
   | "completed" // task done (result = output) / message answered (reply = output)
   | "waiting" // delegated subtasks; re-run on trigger=subtasks_completed
   | "blocked" // asked a human / escalated; re-run on trigger=human_answer
+  | "yielded" // interrupted for more urgent work: task → todo, taskState kept as checkpoint, attempts NOT incremented
   | "failed";
 
 export interface EngineResult {

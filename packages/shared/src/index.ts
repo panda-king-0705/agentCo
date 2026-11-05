@@ -57,12 +57,17 @@ export interface Okr {
  * Workers carry a minimal identity (mission + values) and ignore the rest.
  */
 export interface AgentIdentity {
-  mission: string; // "Life view": why this role exists
-  worldview: string; // how it sees its domain
-  values: string[];
-  vision: string;
-  /** Desire weights, 0..1. curiosity widens perspectives/recall; epistemic tightens truth checks. */
-  desires: { taskDriven: number; curiosity: number; epistemic: number };
+  mission: string; // the role's mandate, one line
+  worldview: string; // Self-Identity › Worldview: how it sees its domain
+  lifeView: string; // Self-Identity › Life View: what a good working life is for this agent (informs Value)
+  values: string[]; // Self-Identity › Value
+  vision: string; // Desire › Vision (text); weight in desires.vision
+  /**
+   * Desire weights, 0..1 (docs/BRAIN.md). taskDriven narrows focus; curiosity widens
+   * literature review and perspectives; epistemic tightens the truthful gate;
+   * vision up-weights subprocesses aligned with the vision/OKRs.
+   */
+  desires: { taskDriven: number; curiosity: number; epistemic: number; vision: number };
   /** Self-determination motivation, 0..1. autonomy = "freedom". */
   motivation: { autonomy: number; competence: number; purpose: number };
   okrs: Okr[];
@@ -83,6 +88,7 @@ export interface AffectState {
 
 /** Maslow-style needs computed from platform facts (never LLM-reported). */
 export interface NeedsState {
+  physiological: "ok" | "low"; // any budget/compute left at all; "low" = only essential work
   safety: "ok" | "low"; // budget headroom; "low" = conservation mode (prefer cheap candidates)
   belonging: "ok" | "low"; // has a manager / reports reachable
   esteem: "ok" | "low"; // recent success rate
@@ -96,12 +102,65 @@ export interface CalibrationStats {
   brier: number; // mean squared error of confidence vs outcome
 }
 
+export type FiveElement = "wood" | "fire" | "earth" | "metal" | "water";
+
+/** Role Arrangement › Eight Characters and Five Elements (八字五行), computed from the agent's "birth" (createdAt). */
+export interface BaZiChart {
+  birth: string; // ISO timestamp the chart was cast from
+  pillars: [string, string, string, string]; // year, month, day, hour, e.g. "甲子"
+  pinyin: [string, string, string, string]; // "jia-zi"
+  dayMaster: string; // day stem, e.g. "甲"
+  dayMasterElement: FiveElement;
+  elements: Record<FiveElement, number>; // count over the 8 characters
+}
+
 export interface Persona {
   style: string; // communication style, one line
   traits: string[];
-  /** Optional MBTI-style label; shapes tone only, never used for routing. */
+  /** Role Arrangement › Personality / MBTI, e.g. "INTJ". Used by role arrangement (docs/BRAIN.md). */
   personalityType: string | null;
+  /** Role Arrangement › Eight Characters and Five Elements. Weight in role arrangement is configurable. */
+  baZi: BaZiChart | null;
 }
+
+/**
+ * One block of the founder's brain-inspired architecture diagram (docs/BRAIN.md).
+ * Spans carry it as attribute `agentco.brain.block`; the console lights the block up.
+ */
+export type BrainBlockId =
+  | "self_management.identity.self_identity"
+  | "self_management.identity.desire"
+  | "self_management.identity.motivation"
+  | "self_management.identity.self_narrative"
+  | "self_management.identity.okr"
+  | "self_management.role_arrangement"
+  | "self_management.sensibility_emotion"
+  | "self_management.human_nature"
+  | "todo_list"
+  | "metacognition.project_management.data_driven_analysis"
+  | "metacognition.project_management.economic_concepts"
+  | "metacognition.project_management.rollback_failure_recovery"
+  | "metacognition.project_management.reflection_replanning"
+  | "metacognition.project_management.online_learning"
+  | "metacognition.monitoring.ood"
+  | "metacognition.monitoring.calibration"
+  | "metacognition.monitoring.reverse_thinking"
+  | "metacognition.monitoring.truthful_efficient_good"
+  | "metacognition.self_ability"
+  | "metacognition.target_understanding.problem_definition"
+  | "metacognition.target_understanding.literature_review"
+  | "metacognition.target_understanding.analysis"
+  | "metacognition.confidence"
+  | "metacognition.cognitive_control.decomposition"
+  | "metacognition.cognitive_control.candidate_solutions"
+  | "metacognition.solving_evaluation.solving"
+  | "metacognition.solving_evaluation.feedback"
+  | "metacognition.memory.local_working"
+  | "metacognition.memory.long_term"
+  | "global_memory.working"
+  | "global_memory.episodic"
+  | "global_memory.procedural"
+  | "global_memory.conceptual";
 
 export interface Agent {
   id: string;
@@ -116,6 +175,8 @@ export interface Agent {
   modelOverride: string | null; // ModelProfile.id
   status: AgentStatus;
   activity: string | null; // human-readable "Decomposing T-12 into 3 subtasks"
+  /** The diagram block the agent is in right now (brain agents), for the live brain view. */
+  brainBlock: BrainBlockId | null;
   currentTaskId: string | null;
   currentRunId: string | null;
   identity: AgentIdentity;

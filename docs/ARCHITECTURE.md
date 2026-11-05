@@ -169,6 +169,7 @@ interrupt/pause/destroy can abort it, then apply the result:
 | outcome | task | conversation (trigger=message) |
 |---|---|---|
 | completed | `done`, result=output; if root & originConversationId → post the result there as the assignee | post reply |
+| yielded | `todo`, state merged (checkpoint), attempts **not** incremented | post reply |
 | waiting | `waiting` | post reply |
 | blocked | `blocked` | post reply |
 | failed | attempts<max → `todo` else `failed` + escalate | post "I hit an error: …" |
@@ -204,46 +205,19 @@ the next run gets `trigger: "recovery"` and `recoveryNotice`:
 
 ### BrainEngine — executives & managers (high-level thinking)
 
-One run = one pass of the cycle; every stage is a `stage` span named
-`brain.<stage>` with its model calls as children. JSON-mode outputs, validated
-with defaults on parse failure.
+**Spec of record: [docs/BRAIN.md](BRAIN.md).** It follows the founder's
+brain-inspired architecture diagram block for block — Self-management
+(Identity, Role Arrangement, Sensibility/Emotion, Human Nature, OKRs,
+Self-Narrative), the interruptible TODO list, Metacognition (on matters) and
+Global Memory — with one module and one traced `BrainBlockId` per diagram
+box. It supersedes the earlier 8-stage table that stood here.
 
-| # | Stage (span) | Diagram block | Model tier (default) | Output / effect |
-|---|---|---|---|---|
-| 0 | `brain.recall` | Memory: local/long-term, Literature review | none (FTS) | memories (k = 4 + 4·curiosity), blackboard, inbox, subtask results |
-| 1 | `brain.target_understanding` | Target Understanding: problem definition, literature review, analysis (perspectives) | standard | `{problem, successCriteria[], perspectives[], unknowns[], intent: "chat"|"work"}` — perspectives count 2-4 from curiosity |
-| 2 | `brain.self_assessment` | Self-ability Understanding: LLM capability, tools/MCP, budget/resource → Competence | none (computed) | `{tools, reports:[{id,title,skills}], budgetRemaining, needs, modelTier}` |
-| 3 | `brain.risk_assessment` | Confidence · Risk/Uncertainty · Monitoring (OOD, calibration, reverse thinking) | economy | `{confidence, risks[], premortem, outOfDistribution}` → **calibrated** confidence = raw − bias·min(1, n/20), bias = meanConfidence − successRate |
-| 3b | gate | Early stop / Fallback | — | calibrated < 0.25 or (OOD && confidence < 0.5) or frustration > 0.7 → escalate to manager / `question` approval to the Board for the CEO → outcome `blocked` |
-| 4 | `brain.planning` | Cognitive Control: decomposition, candidate solutions (high-cost / low-cost / low-effort), Project mgmt: economic concepts | **agent tier** | `{candidates:[{name, approach, estCostUsd, value}], chosen, mode: "direct"|"delegate", subtasks:[{title, description, assigneeId, value, estCostUsd, acceptanceCriteria}]}`; chosen = max value/cost (needs.safety=low ⇒ cheapest acceptable); TODO list persisted to task.state.plan |
-| 5 | `brain.solving` | Solving | agent tier | direct: bounded tool loop (≤ 6 steps) producing a result; delegate: `delegate_task` per subtask (delegation spans) → outcome `waiting` |
-| 6 | `brain.evaluation` | Solving & Evaluation: feedback; Monitoring: truthful / efficient / good (真·善·美) | standard | runs on direct results and on trigger=subtasks_completed: `{score, meetsCriteria, truthful, efficient, good, issues[], decision: accept|revise|rollback|escalate}`; revise → back to 4 with feedback (≤ `BRAIN_MAX_REVISIONS`=2); rollback → cancel open subtasks, re-plan |
-| 7 | `brain.learning` | Reflection/replanning, Online learning/evolving, Self-narrative generator, OKRs, Emotion feedback | economy | `{lesson, narrative, okrProgress}` → procedural memory (lesson), episodic memory, calibration update (predicted confidence vs outcome), affect update, narrative + OKR progress |
-
-Message trigger: stages 0-1 run; `intent: chat` → reply directly (standard
-tier, persona-styled); `intent: work` → `tasks.createObjective` assigned to
-itself (originConversationId set), reply "Opened T-n: … I'll report back", and
-the scheduler picks the objective next. This is how a Boardroom request flows
-CEO → C-suite → workers and the final report lands back in the Boardroom.
-
-**Identity → behaviour (so the diagram has teeth, not decoration):**
-
-- identity (mission, worldview, values, vision, OKRs, narrative) is the
-  system-prompt charter for every brain stage;
-- `desires.curiosity` → perspectives count and recall breadth;
-  `desires.epistemic` → evaluation strictness (accept requires score ≥ 0.6 +
-  0.3·epistemic);
-- `motivation.autonomy` low → escalate more (gate threshold +0.1);
-- `needs.safety = low` (budget < 20 %) → conservation mode: cheapest
-  acceptable candidate, no revisions;
-- `affect.frustration` rises 0.25 per failed/rejected outcome, decays 0.15
-  per success; > 0.7 forces the escalate gate (Emotion → Feedback/Update);
-- **Role arrangement**: delegation picks assignees among direct reports by
-  role/mandate fit (LLM proposes, engine validates it's a real active report,
-  else picks by keyword overlap with mandate). Personality type shapes tone
-  only. "Eight Characters & Five Elements" from the diagram is not used for
-  assignment — it has no predictive value for role fit; `persona.traits`
-  can carry it as flavour if wanted.
+Message trigger: Self-management charter + Target Understanding; intent
+`chat` → reply (stage `chat.reply`); intent `work` → `tasks.createObjective`
+assigned to itself (traceId = run's, parentSpanId = run span,
+originConversationId set), reply "Opened T-n: … I'll report back". This is
+how a Boardroom request flows CEO → C-suite → workers and the final report
+lands back in the Boardroom.
 
 ### ModelRouter
 
@@ -255,10 +229,9 @@ CEO → C-suite → workers and the final report lands back in the Boardroom.
 - Everything defaults to the **mock** provider when no key is configured, so
   the whole company runs offline, deterministically, for demos and tests.
   The console shows a "MOCK MODELS" badge when `live=false`.
-- Stage cascade (`STAGE_ROUTING` env JSON overrides):
-  target_understanding→standard, risk_assessment→economy, planning→agent,
-  solving→agent, evaluation→standard, learning→economy, reflex.step→agent,
-  chat.reply→standard.
+- Stage cascade (`STAGE_ROUTING` env JSON overrides): defaults in
+  [BRAIN.md §4](BRAIN.md#4-stage-routing-defaults-stage_routing-keys);
+  keys are diagram block ids plus `chat.reply` and `reflex.step`.
 - Budget check before each call (estimate = prompt chars/4 × input price +
   maxOutput × output price), actual cost recorded after.
 - `routingSavingsUsd` metric = Σ(cost if call had run on frontier − actual).
