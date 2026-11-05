@@ -271,6 +271,11 @@ export interface TaskView {
    * exceeds `currentPriority` — else null. Brain engines poll it between blocks.
    */
   interruptFor(agentId: string, currentPriority: number): string | null;
+  /**
+   * Rollback / Failure Recovery: cancel an open task (and, cascading, its open
+   * subtasks), aborting any running run on it. No-op on terminal tasks.
+   */
+  cancel(taskId: string, reason: string): void;
 }
 
 export interface CognitiveStatePatch {
@@ -278,6 +283,10 @@ export interface CognitiveStatePatch {
   calibration?: CalibrationStats;
   narrative?: string;
   okrs?: Okr[];
+  /** Self-Narrative Generator › BIO / Assets (replaces the list). */
+  assets?: string[];
+  /** Self-Narrative Generator › Resource Connection (replaces the list). */
+  resourceConnections?: string[];
 }
 
 export interface AgentStateWriter {

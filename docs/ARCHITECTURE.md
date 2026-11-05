@@ -250,7 +250,7 @@ chars/4, so cost dashboards are populated (labelled mock).
 |---|---|---|
 | `delegate_task {assigneeId, title, description, acceptanceCriteria?, value?, estCostUsd?}` | managers, executives | subtask under the current task (or a new objective if none), assignee must be in the caller's reporting subtree (CEO: anyone); `delegation` span; parent → waiting |
 | `send_message {toAgentId, content}` | all | agent_dm conversation; lands in recipient inbox (does not trigger a run) |
-| `escalate {reason, question}` | all | message to manager + inbox; CEO → `question` approval to the Board |
+| `escalate {reason, question}` | all | **Up the chain, like a real company.** Non-CEO: creates an *escalation* subtask of the caller's current task, assigned to the caller's **manager** (`state.kind = "escalation"`, `state.escalatedBy`, value 900 so it interrupts the manager's TODO list), plus a message in the manager's inbox; the caller's engine returns `waiting`, and the normal parent wake-up (`subtasks_completed`) resumes it with the manager's answer as the subtask result. CEO: a `question` approval to the Board → `blocked` → `human_answer`. |
 | `ask_human {question}` | managers, executives | `question` approval; outcome blocked |
 | `memory_search {query, scope?, kind?, limit?}` | all | ranked memories |
 | `memory_write {content, kind, scope, tags?}` | all (global semantic/procedural: managers+) | stored + `memory.written` event |
