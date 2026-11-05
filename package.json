@@ -4,8 +4,13 @@
   "private": true,
   "description": "A company run by AI agents: brain-inspired leaders, cheap-model workers, a live traceable dashboard.",
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
-  "engines": { "node": ">=22.18" },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "start": "npm run build:web && npm run start:server",

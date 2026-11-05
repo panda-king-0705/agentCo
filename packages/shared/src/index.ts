@@ -495,7 +495,10 @@ export interface CompanyEvent {
   traceId: string | null;
   /** One-line human summary for the activity feed. */
   summary: string;
-  /** The changed entity (Agent, Task, Run, Span, Message, Approval, ...) */
+  /**
+   * The changed entity (Agent, Task, Run, Span, Message, Approval, ...). span.* events carry the
+   * Span WITHOUT `input`/`output` (fetch the detail from /api/runs/:id or /api/traces/:id).
+   */
   data: unknown;
 }
 
@@ -613,7 +616,7 @@ export interface MetricsOverview {
   runSuccessRate: number | null; // null when no finished runs
   avgRunMs: number | null;
   tokens24h: { input: number; output: number };
-  /** Cost saved by routing to cheaper tiers vs. running every call on frontier. */
+  /** Cost saved this calendar month (same window as spentMonthUsd) by routing to cheaper tiers vs. running every call on frontier. */
   routingSavingsUsd: number;
 }
 

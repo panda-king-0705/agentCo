@@ -271,6 +271,11 @@ export interface TaskView {
    * exceeds `currentPriority` — else null. Brain engines poll it between blocks.
    */
   interruptFor(agentId: string, currentPriority: number): string | null;
+  /**
+   * Rollback / Failure Recovery: cancel an open task (and, cascading, its open
+   * subtasks), aborting any running run on it. No-op on terminal tasks.
+   */
+  cancel(taskId: string, reason: string): void;
 }
 
 export interface CognitiveStatePatch {
@@ -278,6 +283,10 @@ export interface CognitiveStatePatch {
   calibration?: CalibrationStats;
   narrative?: string;
   okrs?: Okr[];
+  /** Self-Narrative Generator › BIO / Assets (replaces the list). */
+  assets?: string[];
+  /** Self-Narrative Generator › Resource Connection (replaces the list). */
+  resourceConnections?: string[];
 }
 
 export interface AgentStateWriter {
@@ -291,8 +300,36 @@ export interface AgentStateWriter {
 
 // ───────────────────────────── Engines ─────────────────────────────
 
+/** Historical profile of one block's model calls for one agent (OOD Monitoring, docs/BRAIN.md). */
+export interface BlockProfile {
+  block: string; // BrainBlockId or stage label, matched against llm spans' attributes["agentco.stage"]
+  calls: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  p95InputTokens: number | null;
+  p95OutputTokens: number | null;
+  meanCostUsd: number | null;
+  errorRate: number | null; // share of llm spans with status error
+}
+
+/** The agent's recent run rhythm (Human Nature › fatigue, valence decay). */
+export interface RunStreak {
+  /** Runs in a row ending with the current one, each starting within `idleGapMs` of the previous one's end (≥ 1). */
+  consecutiveRuns: number;
+  /** Idle time between the previous run's end and the current run's start (ms; 0 when there is none). */
+  idleMsBefore: number;
+}
+
+export interface MetricsView {
+  /** Profile of this agent's llm spans whose agentco.stage = block, over the last `days` (default 14). */
+  blockProfile(agentId: string, block: string, days?: number): BlockProfile;
+  /** Optional (engines fall back to a streak of 1): the agent's current run streak from the runs table. */
+  runStreak?(agentId: string, idleGapMs: number, maxRuns?: number): RunStreak;
+}
+
 export interface PlatformServices {
   models: ModelRouter;
+  metrics: MetricsView;
   tools: ToolExecutor;
   memory: MemoryService;
   tracer: Tracer;
@@ -376,13 +413,22 @@ export interface SpendEntry {
   costUsd: number;
   /** What the same token counts would have cost on the frontier primary profile. */
   frontierCostUsd: number;
+  /** The reservation assertCanSpend took for this call; recordSpend releases it. */
+  reservationId?: string;
 }
 
 /** Implemented by core (middleware/budget.ts); consumed by the model router. */
 export interface BudgetGate {
-  /** Throws an Error with name "BudgetExceededError" (see BudgetExceededErrorShape). */
-  assertCanSpend(agentId: string, estimateUsd: number): void;
+  /**
+   * Throws an Error with name "BudgetExceededError" (see BudgetExceededErrorShape) when
+   * spent + outstanding reservations + estimate would pass a cap. With `reservationId`
+   * the estimate is reserved until recordSpend (entry.reservationId) or release(), so
+   * calls in flight count against the caps.
+   */
+  assertCanSpend(agentId: string, estimateUsd: number, reservationId?: string): void;
   recordSpend(entry: SpendEntry): void;
+  /** Drops a reservation (the call failed or was aborted). Idempotent. */
+  release?(reservationId: string): void;
 }
 
 /** Fixed factory signatures (see docs/ARCHITECTURE.md → ownership). */

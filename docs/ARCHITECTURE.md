@@ -126,10 +126,17 @@ Default model tiers: CEO/C-suite `frontier`, managers `standard`, workers
 
 **Lifecycle.** Create (from template or custom), pause/resume, destroy.
 Destroy = terminate: abort active run, cancel its queued runs, re-assign its
-open tasks and its direct reports to its manager (CEO can't be destroyed while
-it has reports — 409), set status `terminated`, keep rows for audit, archive
-its workspace to `data/workspaces/.terminated/<agentId>`. (Fixes the reference
-repo's orphaned-memory limitation with an explicit policy.)
+open tasks (through `TaskService.reassign`: an in-flight attempt is refunded,
+the old assignee's run-scoped state — checkpoint, recovery — is dropped,
+waiting/blocked tasks keep their status so their wake-ups still fire) and its
+direct reports to its manager, set status `terminated`, keep rows for audit,
+archive its workspace to `data/workspaces/.terminated/<agentId>`. An agent
+with no active manager to inherit (the CEO) can't be destroyed while it has
+reports **or open tasks** — 409, so work is never orphaned. (Fixes the
+reference repo's orphaned-memory limitation with an explicit policy.)
+`PATCH /api/agents/:id` validates `modelTier`, `modelOverride` (a configured
+profile id), `monthlyBudgetUsd` (finite, ≥ 0), department, manager and
+reporting cycles (400).
 
 **Hiring by agents.** `hire_agent` (executives only) creates an approval when
 `hiringRequiresApproval` or headcount ≥ `maxHeadcount`; on approval the agent
@@ -157,6 +164,8 @@ todo ──▶ in_progress ──▶ done | failed
 **Scheduler** (tick 750 ms): if company not paused, pick `todo` tasks by
 priority whose assignee is active (not paused/terminated/busy) and within
 budget, up to `maxConcurrentRuns` (default 4) total and 1 run per agent.
+Ineligible assignees are excluded in SQL and the ready list is paged (keyset)
+until the free slots are filled, so no backlog can starve other agents.
 Chat messages bypass the queue (a run starts immediately if the agent is free;
 otherwise the message waits and is picked first when it frees up).
 
@@ -233,7 +242,12 @@ lands back in the Boardroom.
   [BRAIN.md §4](BRAIN.md#4-stage-routing-defaults-stage_routing-keys);
   keys are diagram block ids plus `chat.reply` and `reflex.step`.
 - Budget check before each call (estimate = prompt chars/4 × input price +
-  maxOutput × output price), actual cost recorded after.
+  maxOutput × output price), actual cost recorded after. The estimate is
+  **reserved** while the call is in flight (`assertCanSpend(…, reservationId)`,
+  released by `recordSpend` or `release()`), so concurrent calls cannot
+  overrun a hard cap together.
+- A provider timeout is a provider error (fallback profile); only the run's
+  own abort signal cancels a call.
 - `routingSavingsUsd` metric = Σ(cost if call had run on frontier − actual).
 
 **Mock provider** (deterministic, `models/providers/mock.ts`): reads the
@@ -250,8 +264,13 @@ chars/4, so cost dashboards are populated (labelled mock).
 |---|---|---|
 | `delegate_task {assigneeId, title, description, acceptanceCriteria?, value?, estCostUsd?}` | managers, executives | subtask under the current task (or a new objective if none), assignee must be in the caller's reporting subtree (CEO: anyone); `delegation` span; parent → waiting |
 | `send_message {toAgentId, content}` | all | agent_dm conversation; lands in recipient inbox (does not trigger a run) |
-| `escalate {reason, question}` | all | message to manager + inbox; CEO → `question` approval to the Board |
+| `escalate {reason, question}` | all | **Up the chain, like a real company.** Non-CEO: creates an *escalation* subtask of the caller's current task, assigned to the caller's **manager** (`state.kind = "escalation"`, `state.escalatedBy`, value 900 so it interrupts the manager's TODO list), plus a message in the manager's inbox; the caller's engine returns `waiting`, and the normal parent wake-up (`subtasks_completed`) resumes it with the manager's answer as the subtask result. CEO: a `question` approval to the Board → `blocked` → `human_answer`. |
 | `ask_human {question}` | managers, executives | `question` approval; outcome blocked |
+
+`escalate` / `ask_human` called inside a tool loop end that loop (waiting on
+the escalation subtask / blocked on the approval); an engine never opens a
+second escalation for the same question, and once a manager or the Board has
+answered, the task is not escalated again (BRAIN.md → escalation budget).
 | `memory_search {query, scope?, kind?, limit?}` | all | ranked memories |
 | `memory_write {content, kind, scope, tags?}` | all (global semantic/procedural: managers+) | stored + `memory.written` event |
 | `blackboard_read {key?}` / `blackboard_write {key, value}` | all / managers+ | global working memory |
@@ -286,7 +305,11 @@ cross-agent tree):
 - Inputs/outputs are redacted (port of the reference `redact.ts`:
   `redact()` for prose, `redactMachine()` for tool args / llm I/O) and
   truncated to 2000 chars before persistence.
-- Events table is append-only; SSE replays from `Last-Event-ID`.
+- Events table is append-only; SSE replays from `Last-Event-ID` asynchronously, in pages up to the
+  head, waiting for `drain` (a `resync` event asks the console to refetch when the backlog cannot be
+  replayed exactly; a `Last-Event-ID` ahead of the head — fresh DB after a restart — is treated as a
+  new client). Streams are capped at `SSE_MAX_CLIENTS` (503 beyond). span.* events omit the
+  input/output previews.
 
 ## Context governance (ported)
 
@@ -311,7 +334,9 @@ traceId, runId, assigneeId+status, agentId+at.
 ## API
 
 All JSON; errors `{error:{code,message}}`; bearer `APP_AUTH_TOKEN` required
-when bound off loopback.
+when bound off loopback. Every request's Host must name this server, and
+state-changing requests need `Content-Type: application/json` and an allowed
+Origin (SECURITY.md → Browser attacks).
 
 ```
 GET    /api/health
@@ -349,14 +374,14 @@ GET    /api/memory                        MemoryItem[] global (?q=&kind=)
 GET    /api/metrics/overview              MetricsOverview
 GET    /api/metrics/timeseries            TimeseriesPoint[] (?metric=cost|runs|tokens&hours=24)
 GET    /api/events                        CompanyEvent[] (?since=<seq>&limit=)
-GET    /api/events/stream                 SSE: `id: <seq>`, `event: <type>`, `data: <CompanyEvent json>`; heartbeat comment every 15 s
+GET    /api/events/stream                 SSE: `id: <seq>`, `event: <type>`, `data: <CompanyEvent json>`; heartbeat comment every 15 s; `event: resync` = refetch state
 GET    /*                                 console (apps/web/dist), SPA fallback to index.html
 ```
 
 ## Configuration (env)
 
 ```
-PORT=3000 HOST=127.0.0.1 APP_AUTH_TOKEN=
+PORT=3000 HOST=127.0.0.1 APP_AUTH_TOKEN= ALLOWED_ORIGINS= ALLOWED_HOSTS=
 DATA_DIR=./data
 ORG_TEMPLATE=startup|enterprise  COMPANY_NAME=AgentCo
 DAILY_BUDGET_USD=5 MONTHLY_BUDGET_USD=100 MAX_CONCURRENT_RUNS=4 MAX_HEADCOUNT=60
