@@ -1,5 +1,5 @@
 /**
- * Metacognition › Monitoring: OOD Monitoring (NCU/NKX) · Calibration ·
+ * Metacognition › Monitoring: OOD Monitoring (NCU/NKI) · Calibration ·
  * Reverse Thinking · Truthful / Efficient / Good.
  *
  * OOD Monitoring is profile-guided (founder, Q2): the agent profiles its own

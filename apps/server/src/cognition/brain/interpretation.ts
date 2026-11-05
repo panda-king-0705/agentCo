@@ -14,7 +14,7 @@ export const Q1_LABELS = {
   metacognitionLeft: ["执行力", "能力"],
 } as const;
 
-// ── Q2 — "OOD Monitoring (NCU/NKX)": profile-guided OOD monitoring of each block's
+// ── Q2 — "OOD Monitoring (NCU/NKI)": profile-guided OOD monitoring of each block's
 // model calls against the block's history and hard constraints (in the spirit of
 // Nsight Compute / NKI kernel profiling): task OOD, performance OOD, constraint pressure.
 export const Q2_OOD = {
