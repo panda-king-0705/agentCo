@@ -291,8 +291,26 @@ export interface AgentStateWriter {
 
 // ───────────────────────────── Engines ─────────────────────────────
 
+/** Historical profile of one block's model calls for one agent (OOD Monitoring, docs/BRAIN.md). */
+export interface BlockProfile {
+  block: string; // BrainBlockId or stage label, matched against llm spans' attributes["agentco.stage"]
+  calls: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  p95InputTokens: number | null;
+  p95OutputTokens: number | null;
+  meanCostUsd: number | null;
+  errorRate: number | null; // share of llm spans with status error
+}
+
+export interface MetricsView {
+  /** Profile of this agent's llm spans whose agentco.stage = block, over the last `days` (default 14). */
+  blockProfile(agentId: string, block: string, days?: number): BlockProfile;
+}
+
 export interface PlatformServices {
   models: ModelRouter;
+  metrics: MetricsView;
   tools: ToolExecutor;
   memory: MemoryService;
   tracer: Tracer;
