@@ -24,7 +24,22 @@ interface ProviderQuirks {
 
 const QUIRKS: Record<string, ProviderQuirks> = {
   openai: { maxTokensField: "max_completion_tokens", sendTemperature: false },
+  // Claude 5.x on Anthropic's OpenAI-compatible endpoint rejects `temperature` ("deprecated for this model").
+  anthropic: { maxTokensField: "max_tokens", sendTemperature: false },
 };
+
+/** Floor for the output budget after a reasoning model ran out of tokens before answering. */
+export const LENGTH_RETRY_MIN_TOKENS = 2048;
+
+/** A 400 caused by sampling parameters the model no longer accepts. */
+export function isTemperatureRejection(status: number, body: string): boolean {
+  return status === 400 && /temperature|top_p/i.test(body);
+}
+
+/** The model hit its output limit before producing anything usable (reasoning models spend tokens thinking first). */
+export function isOutputLimitRejection(status: number, body: string): boolean {
+  return status === 400 && /max_tokens|max_completion_tokens|output limit/i.test(body);
+}
 const DEFAULT_QUIRKS: ProviderQuirks = { maxTokensField: "max_tokens", sendTemperature: true };
 
 export function toOpenAIMessages(messages: ChatMessage[]): Record<string, unknown>[] {
@@ -121,7 +136,49 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.fetchFn = options.fetch ?? fetch;
   }
 
+  /** Profiles learned at runtime to reject `temperature`; never sent to them again. */
+  private readonly noTemperature = new Set<string>();
+
+  /**
+   * One chat completion with two self-healing retries for live-provider quirks:
+   * a 400 rejecting `temperature` is retried once without it (and remembered), and a
+   * response cut off by the output limit before any content is retried once with a
+   * larger budget (reasoning models spend tokens thinking before they answer).
+   */
   async complete(profile: ModelProfile, request: ChatRequest, signal: AbortSignal) {
+    let req = this.noTemperature.has(profile.id) ? { ...request, temperature: undefined } : request;
+    for (let attempt = 0; ; attempt++) {
+      const result = await this.send(profile, req, signal);
+      if (result.kind === "ok") {
+        const r = result.value;
+        const empty = !r.content.trim() && r.toolCalls.length === 0;
+        if (r.finishReason === "length" && empty && attempt < 2) {
+          req = { ...req, maxOutputTokens: Math.max((req.maxOutputTokens ?? 512) * 4, LENGTH_RETRY_MIN_TOKENS) };
+          continue;
+        }
+        return r;
+      }
+      if (attempt < 2 && req.temperature !== undefined && isTemperatureRejection(result.status, result.body)) {
+        this.noTemperature.add(profile.id);
+        req = { ...req, temperature: undefined };
+        continue;
+      }
+      if (attempt < 2 && isOutputLimitRejection(result.status, result.body)) {
+        req = { ...req, maxOutputTokens: Math.max((req.maxOutputTokens ?? 512) * 4, LENGTH_RETRY_MIN_TOKENS) };
+        continue;
+      }
+      throw result.error;
+    }
+  }
+
+  private async send(
+    profile: ModelProfile,
+    request: ChatRequest,
+    signal: AbortSignal,
+  ): Promise<
+    | { kind: "ok"; value: ReturnType<typeof parseResponseBody> }
+    | { kind: "http"; status: number; body: string; error: Error }
+  > {
     const provider = this.providers[profile.provider];
     if (!provider) throw new Error(`provider "${profile.provider}" is not configured`);
     if (!provider.apiKey) throw new Error(`provider "${profile.provider}" has no API key`);
@@ -141,7 +198,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const text = await response.text();
     if (!response.ok) {
       const snippet = redactKey(text.replace(/\s+/g, " ").slice(0, 400), provider.apiKey);
-      throw new Error(`${profile.provider} ${profile.model}: HTTP ${response.status} ${response.statusText}${snippet ? ` — ${snippet}` : ""}`);
+      const error = new Error(`${profile.provider} ${profile.model}: HTTP ${response.status} ${response.statusText}${snippet ? ` — ${snippet}` : ""}`);
+      return { kind: "http", status: response.status, body: text, error };
     }
     let data: unknown;
     try {
@@ -149,7 +207,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     } catch {
       throw new Error(`${profile.provider} ${profile.model}: HTTP ${response.status} but the body is not JSON`);
     }
-    return parseResponseBody(data);
+    return { kind: "ok", value: parseResponseBody(data) };
   }
 }
 

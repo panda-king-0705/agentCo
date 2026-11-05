@@ -1,5 +1,5 @@
 /**
- * `npm run check:models`: one tiny real call per configured live tier (max_tokens 16) to prove the
+ * `npm run check:models`: one tiny real call per configured live tier (max_tokens 64) to prove the
  * keys and model ids work before the company spends real money. Prints model, latency, tokens and
  * cost per tier; exits 1 on an auth / model / network error and 2 when no live model is configured
  * (it refuses to run without keys). Keys are never printed.
@@ -11,7 +11,7 @@ import { loadModelConfig, parseModelSpec, TIERS, type ModelConfig } from "./conf
 import { costUsd } from "./pricing.ts";
 import { OpenAICompatibleProvider } from "./providers/openai.ts";
 
-export const CHECK_MAX_TOKENS = 16;
+export const CHECK_MAX_TOKENS = 64;
 
 export interface CheckModelsOptions {
   fetch?: typeof fetch;
@@ -47,7 +47,7 @@ export function classifyFailure(message: string): CheckFailure {
   const status = /HTTP (\d{3})/.exec(message)?.[1];
   if (status === "401" || status === "403") return "auth";
   if (status === "404") return "model";
-  if (status === "400" && /model/i.test(message)) return "model";
+  if (status === "400" && /model[^.]*(not found|does not exist|not allowed|not supported|invalid)|unknown model|model_not_found|invalid model/i.test(message)) return "model";
   if (!status && /failed|timeout|timed out|abort|ECONN|ENOTFOUND|fetch/i.test(message)) return "network";
   return "other";
 }
@@ -56,7 +56,7 @@ const HINT: Record<CheckFailure, string> = {
   auth: "the API key was rejected — check the *_API_KEY in .env (and that it belongs to this provider)",
   model: "the model id was not found or not allowed — check MODEL_* in .env",
   network: "could not reach the provider — check the network / *_BASE_URL",
-  other: "unexpected provider error",
+  other: "the provider rejected the request — see the provider message below",
 };
 
 /** Tiers whose MODEL_* (explicit or default) names a real provider but resolved to the mock (no key). */
