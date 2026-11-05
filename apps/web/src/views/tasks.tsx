@@ -14,7 +14,7 @@ const DONE_COLS: TaskStatus[] = ["done", "failed", "cancelled"];
 
 function TaskCard({ t, subCount }: { t: Task; subCount: number }) {
   return (
-    <a className={`tcard ts-${t.status}`} href={href(`/tasks/${t.id}`)} data-task={t.id}>
+    <div className={`tcard ts-${t.status}`} role="link" tabIndex={0} data-task={t.id} onClick={() => navigate(`/tasks/${t.id}`)} onKeyDown={(e) => { if (e.key === "Enter") navigate(`/tasks/${t.id}`); }}>
       <div className="row">
         <span className="task-ref">T-{t.number}</span>
         {t.parentTaskId ? <span className="tiny muted">subtask</span> : null}
@@ -31,7 +31,7 @@ function TaskCard({ t, subCount }: { t: Task; subCount: number }) {
         <span title="Priority = value / cost">Pri <b className="num">{t.priority.toFixed(1)}</b></span>
         <span title="Actual cost so far">Spent <b className="num">{money(t.actualCostUsd)}</b></span>
       </div>
-    </a>
+    </div>
   );
 }
 

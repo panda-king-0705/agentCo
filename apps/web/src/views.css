@@ -187,7 +187,7 @@ a.kpi:hover { border-color: var(--accent-line); text-decoration: none; }
 .count { background: var(--surface-3); border-radius: 9px; padding: 0 7px; font-size: 11px; color: var(--ink-2); line-height: 18px; }
 .kcol-body, .dcol-body { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 8px; max-height: 62vh; overflow: auto; }
 .kempty { padding: 14px 6px; text-align: center; }
-.tcard { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border-radius: 7px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
+.tcard { cursor: pointer; display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border-radius: 7px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
 .tcard:hover { border-color: var(--accent-line); text-decoration: none; }
 .tcard-title { font-weight: 550; }
 .tcard-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); }

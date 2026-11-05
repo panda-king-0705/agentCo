@@ -32,7 +32,7 @@ function watch(page, label) {
     if (m.type() === "error" && !finished) errors.push(`[${label}/${phase}] console: ${m.text()}`);
   });
   page.on("pageerror", (e) => {
-    if (!finished) errors.push(`[${label}/${phase}] pageerror: ${e.message}`);
+    if (!finished) errors.push(`[${label}/${phase}] pageerror: ${e.stack?.slice(0, 700)}`);
   });
 }
 
@@ -42,7 +42,7 @@ const go = async (page, hash) => {
 };
 const shot = async (page, name, opts = {}) => {
   await page.waitForTimeout(250);
-  await page.evaluate(() => document.querySelector(".toasts")?.replaceChildren());
+  await page.evaluate(() => { const t = document.querySelector(".toasts"); if (t) t.style.display = "none"; });
   await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: !!opts.full });
 };
 const step = async (name, fn) => {
@@ -60,6 +60,7 @@ const step = async (name, fn) => {
 async function run(scheme, interactive) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: scheme });
   const page = await ctx.newPage();
+  page.setDefaultTimeout(12000);
   watch(page, scheme);
   const S = (n, o) => shot(page, `${scheme}-${n}`, o);
 

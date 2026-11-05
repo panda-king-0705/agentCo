@@ -97,10 +97,11 @@ interface BlkProps {
   shape?: "rect" | "ellipse";
   label: string;
   className?: string;
+  noTag?: boolean;
   children?: ReactNode;
 }
 /** A box that is a diagram block: carries the id, shows live/visited/selected state, is clickable. */
-function Blk({ id, x, y, w, h, shape = "rect", label, className = "", children }: BlkProps) {
+function Blk({ id, x, y, w, h, shape = "rect", label, className = "", noTag, children }: BlkProps) {
   const { active, visited, selected, select } = useContext(BrainCtx);
   const isActive = active === id;
   const n = visited.get(id) ?? 0;
@@ -134,13 +135,13 @@ function Blk({ id, x, y, w, h, shape = "rect", label, className = "", children }
         <rect x={x} y={y} width={w} height={h} rx={7} className={cls} />
       )}
       {children}
-      {isActive ? (
+      {isActive && !noTag ? (
         <g className="tag now" transform={`translate(${right - 36},${tagY})`}>
           <rect width="36" height="14" rx="7" />
           <text x="18" y="10.5" textAnchor="middle" fontSize="9" fontWeight="700">NOW</text>
         </g>
       ) : null}
-      {n ? (
+      {n && !noTag ? (
         <g className="tag seen" transform={`translate(${right - (isActive ? 36 + 34 : 30)},${tagY})`}>
           <rect width="28" height="14" rx="7" />
           <text x="14" y="10.5" textAnchor="middle" fontSize="9" fontWeight="650">{`✓${n > 1 ? n : ""}`}</text>
@@ -387,8 +388,8 @@ function Metacognition({ d, live, memoryCounts }: { d: AgentDetail; live: AgentD
       {/* Monitoring */}
       <Cont x={24} y={574} w={1172} h={58} />
       <T x={40} y={608} size={12.5} bold>Monitoring</T>
-      <Blk id="metacognition.monitoring.ood" x={232} y={582} w={200} h={42} label="OOD Monitoring (NCU/NKX)">
-        <T x={332} y={600} size={11} anchor="middle">OOD Monitoring (NCU/NKX)</T>
+      <Blk id="metacognition.monitoring.ood" x={232} y={582} w={200} h={42} label="OOD Monitoring (NCU/NKI)">
+        <T x={332} y={600} size={11} anchor="middle">OOD Monitoring (NCU/NKI)</T>
         <T x={332} y={614} size={9} anchor="middle" cls="bv">profile calls vs history + limits</T>
       </Blk>
       <Blk id="metacognition.monitoring.calibration" x={446} y={582} w={170} h={42} label="Calibration">
@@ -469,7 +470,7 @@ function Metacognition({ d, live, memoryCounts }: { d: AgentDetail; live: AgentD
         <T x={850} y={780} size={12} bold anchor="middle">Control</T>
       </Blk>
       {[0, 1].map((i) => (
-        <Blk key={i} id="metacognition.cognitive_control.decomposition" x={794 + i * 64} y={660} w={58} h={44} label={`Decomposition subprocess ${i + 1}`}>
+        <Blk key={i} id="metacognition.cognitive_control.decomposition" x={794 + i * 64} y={660} w={58} h={44} label={`Decomposition subprocess ${i + 1}`} noTag>
           <T x={794 + i * 64 + 29} y={679} size={9} anchor="middle">Subprocess {i + 1}</T>
           <T x={794 + i * 64 + 29} y={693} size={9} anchor="middle" cls="bv">Value: xx</T>
         </Blk>
