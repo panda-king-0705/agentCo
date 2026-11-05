@@ -7,7 +7,7 @@
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { BRAIN_SEQUENCE, LLM_BLOCKS, ROLE_TEMPLATES, castBaZi, createFixtureState, makeAgent, rollupRun, toolsFor } from "./fixtures.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -859,7 +859,7 @@ function sendJson(res, status, data) {
   res.end(body);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const arg = (name) => {
     const i = process.argv.indexOf(`--${name}`);
     return i > 0 ? process.argv[i + 1] : undefined;
