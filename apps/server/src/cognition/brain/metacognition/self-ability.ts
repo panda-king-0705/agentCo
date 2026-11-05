@@ -10,7 +10,9 @@
 import type { Agent, ModelProfile, ModelTier } from "../../../../../../packages/shared/src/index.ts";
 import { clamp, round } from "../../coerce.ts";
 import { overlapRatio, truncate } from "../../text.ts";
+import { BELONGING } from "../interpretation.ts";
 import { block, toolContext, type BrainRun } from "../runtime.ts";
+import { belongingResponse } from "../self-management/identity.ts";
 
 export interface Competence {
   score: number;
@@ -85,6 +87,8 @@ export async function selfAbility(run: BrainRun, taskText: string, gaps: string[
   return block(run, "metacognition.self_ability", gaps.length ? "Re-assessing competence and applying remedies" : "Assessing my competence for this", async (span) => {
     const budget = run.platform.org.budgetRemainingUsd(run.agent.id);
     const reports = run.platform.org.directReports(run.agent.id).filter((a) => a.status !== "terminated" && a.status !== "paused");
+    // Belonging low because the leader's reports are unreachable (Maslow): note it as a gap.
+    const unreachable = run.drives.needs.belonging === "low" && BELONGING.leaderTiers.includes(run.agent.tier) && reports.length === 0 && belongingResponse(run).kind === "reports_unreachable";
     const remedy = gaps.length
       ? planRemedies(gaps, {
           tier: run.routingAgent.modelTier,
@@ -129,9 +133,10 @@ export async function selfAbility(run: BrainRun, taskText: string, gaps: string[
       "agentco.reports": reports.length,
       ...(gaps.length ? { "agentco.fallback.gaps": gaps.length, "agentco.remedies": remedy.remedies.join("; ") || "none" } : {}),
     });
+    if (unreachable) span.setAttributes({ "agentco.belonging": "reports_unreachable" });
     return {
       score,
-      gaps: a.gaps,
+      gaps: unreachable ? [...a.gaps.filter((g) => g !== "no direct reports to delegate to"), BELONGING.unreachableReportsGap] : a.gaps,
       budgetRemainingUsd: budget,
       skillCoverage: a.skillCoverage,
       model: { profile: profile.id, tier: profile.tier, contextWindow: profile.contextWindow, supportsTools: profile.supportsTools },

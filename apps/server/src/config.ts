@@ -33,6 +33,8 @@ export interface AppConfig {
   contextCarryTurns: number;
   webFetchEnabled: boolean;
   schedulerTickMs: number;
+  /** Cap on concurrent SSE streams (SSE_MAX_CLIENTS); extra connections get 503. */
+  sseMaxClients: number;
   /** Directory with the built console; defaults to apps/web/dist. */
   webDistDir: string;
   /**
@@ -97,6 +99,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     contextCarryTurns: reader.int("CONTEXT_CARRY_TURNS", 6, 1, 200),
     webFetchEnabled: reader.bool("WEB_FETCH_ENABLED", false),
     schedulerTickMs: reader.int("SCHEDULER_TICK_MS", 750, 10, 60_000),
+    sseMaxClients: reader.int("SSE_MAX_CLIENTS", 50, 1, 10_000),
     webDistDir: resolve(reader.str("WEB_DIST_DIR", defaultWebDist())),
     allowedOrigins: list(reader.str("ALLOWED_ORIGINS", ""))
       .map((o) => o.replace(/\/+$/, "").toLowerCase())

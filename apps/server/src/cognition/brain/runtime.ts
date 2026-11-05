@@ -64,6 +64,8 @@ export interface BrainRun {
   currentBlock: BrainBlockId | null;
   /** Escalation budget of the task (escalation.ts); absent on message runs. */
   escalation?: EscalationState;
+  /** Set when Solving starts: from then on the run is never interrupted (it finishes the step first). */
+  solvingStarted?: boolean;
 }
 
 export function blockSpanName(id: BrainBlockId): string {

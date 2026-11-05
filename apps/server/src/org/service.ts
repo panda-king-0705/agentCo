@@ -145,6 +145,7 @@ export class OrgService implements OrgView, AgentStateWriter {
       agent,
       manager: agent.managerId ? this.getAgent(agent.managerId) : null,
       reports: this.directReports(agentId),
+      reportsEver: this.deps.repos.agents.reportCount(agentId),
       remainingUsd: this.budgetRemainingUsd(agentId),
       limitUsd: this.deps.budget.limitFor(agentId),
       recentRuns: this.deps.repos.runs.list({ agentId, limit: 10 }),

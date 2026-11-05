@@ -44,6 +44,8 @@ export interface RunServiceDeps {
   platform: () => PlatformServices;
   runTimeoutMs: number;
   isPaused: () => boolean;
+  /** Company-wide cap on concurrent runs (settings.maxConcurrentRuns); absent = uncapped. */
+  maxConcurrentRuns?: () => number;
   now: () => Date;
 }
 
@@ -201,10 +203,15 @@ export class RunService implements RunControl {
     }
   }
 
-  /** Starts a chat run for an unanswered human message, or returns null (agent busy/paused, company paused). */
+  /**
+   * Starts a chat run for an unanswered human message, or returns null (agent busy/paused, company
+   * paused, or no capacity under maxConcurrentRuns — the message then stays queued and the
+   * scheduler, which serves queued chat first, starts it when a slot frees up).
+   */
   startMessageRun(message: Message): Run | null {
     const { repos, org, tracer, conversations, bus, governor } = this.deps;
     if (this.deps.isPaused()) return null;
+    if (this.deps.maxConcurrentRuns && this.activeCount() >= this.deps.maxConcurrentRuns()) return null;
     const stored = repos.conversations.getMessage(message.id);
     if (!stored || stored.runId !== null || stored.senderId !== "human") return null;
     const conversation = repos.conversations.get(stored.conversationId);

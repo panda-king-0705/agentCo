@@ -31,15 +31,14 @@ export function CostsView() {
   if (!m.data || !company) return <><PageHead title="Costs" /><Skeleton rows={8} height={18} /></>;
   const d = m.data;
   const s = company.settings;
-  const total = byTier.reduce((n, x) => n + x.value, 0);
   const deptSpend = new Map(d.spendByDepartment.map((x) => [x.departmentId, x.costUsd]));
   return (
     <>
       <PageHead title="Costs" sub={`${money(d.spentTodayUsd)} today, ${money(d.spentMonthUsd)} this month`} />
       <div className="callout" style={{ marginBottom: 14 }}>
         <div>
-          <strong>Routing saved {money(d.routingSavingsUsd)}</strong> against running every call on the frontier tier
-          {total > 0 ? <> ({pct(d.routingSavingsUsd / (d.routingSavingsUsd + total))} lower).</> : "."} Daily budget {money(s.dailyBudgetUsd)}, monthly {money(s.monthlyBudgetUsd)}.
+          <strong>Routing saved {money(d.routingSavingsUsd)} this month</strong> against running every call on the frontier tier
+          {d.spentMonthUsd > 0 ? <> ({pct(d.routingSavingsUsd / (d.routingSavingsUsd + d.spentMonthUsd))} lower than {money(d.routingSavingsUsd + d.spentMonthUsd)}).</> : "."} Daily budget {money(s.dailyBudgetUsd)}, monthly {money(s.monthlyBudgetUsd)}.
         </div>
       </div>
       <div className="grid-2">

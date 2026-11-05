@@ -42,6 +42,11 @@ function wrapText(text: string, cpl: number, maxLines: number): string[] {
   return lines;
 }
 
+// The founder's diagram labels (docs/BRAIN.md §6, Q1 and Q7): drawn as labels only, never interpreted.
+// Mirrors Q1_LABELS / Q7_LABELS in apps/server/src/cognition/brain/interpretation.ts.
+const Q1_LABELS = { desire: "愿力", motivation: "心力", metacognitionLeft: ["执行力", "能力"] } as const;
+const Q7_LABELS = { lifeView: "生", truthful: "真", efficient: "善", good: "美" } as const;
+
 function T({ x, y, size = 11, bold, anchor, cls = "bt", children }: { x: number; y: number; size?: number; bold?: boolean; anchor?: "start" | "middle" | "end"; cls?: string; children: ReactNode }) {
   return (
     <text x={x} y={y} fontSize={size} fontWeight={bold ? 650 : 400} textAnchor={anchor} className={cls}>
@@ -246,7 +251,11 @@ function SelfManagement({ d, live }: { d: AgentDetail; live: AgentDetail["agent"
           ["Resource Connection", id.resourceConnections.length ? `${id.resourceConnections.length}: ${id.resourceConnections.join(", ")}` : "none yet"],
         ].map(([label, text], i) => (
           <Box key={label} x={258} y={96 + i * 47} w={166} h={40}>
-            <T x={266} y={96 + i * 47 + 13} size={11} bold>{label}</T>
+            <T x={266} y={96 + i * 47 + 13} size={11} bold>
+              {label}
+              {/* Q7: the character after Life View — a label only */}
+              {label === "Life View" ? <tspan className="red" fontWeight={400} dx={4}>{Q7_LABELS.lifeView}</tspan> : null}
+            </T>
             <Wrap x={266} y={96 + i * 47 + 26} w={150} size={9.5} lines={1} text={text ?? ""} />
             <title>{text}</title>
           </Box>
@@ -258,7 +267,7 @@ function SelfManagement({ d, live }: { d: AgentDetail; live: AgentDetail["agent"
 
       <Blk id="self_management.identity.desire" x={452} y={70} w={170} h={196} label="Desire">
         <T x={470} y={87} size={12} bold>Desire</T>
-        <T x={604} y={87} size={12} cls="red" anchor="end">愿力</T>
+        <T x={604} y={87} size={12} cls="red" anchor="end">{Q1_LABELS.desire}</T>
         {([["Task Driven", id.desires.taskDriven], ["Curiosity", id.desires.curiosity], ["Epistemic", id.desires.epistemic], ["Vision", id.desires.vision]] as const).map(([label, v], i) => (
           <Box key={label} x={462} y={96 + i * 41} w={150} h={36}>
             <T x={470} y={96 + i * 41 + 13} size={11}>{label}</T>
@@ -270,7 +279,7 @@ function SelfManagement({ d, live }: { d: AgentDetail; live: AgentDetail["agent"
 
       <Blk id="self_management.identity.motivation" x={636} y={70} w={228} h={196} label="Motivation">
         <T x={654} y={87} size={12} bold>Motivation</T>
-        <T x={848} y={87} size={12} cls="red" anchor="end">心力</T>
+        <T x={848} y={87} size={12} cls="red" anchor="end">{Q1_LABELS.motivation}</T>
         <Box x={646} y={96} w={208} h={80}>
           <T x={654} y={110} size={10.5} bold>Freedom / Competence / Purpose</T>
           <Bar x={654} y={118} w={192} v={id.motivation.autonomy} label="Freedom" labelW={72} text={id.motivation.autonomy.toFixed(2)} />
@@ -375,6 +384,9 @@ function Metacognition({ d, live, memoryCounts }: { d: AgentDetail; live: AgentD
     <g>
       <rect x={10} y={470} width={1210} height={492} rx={12} className="band meta" />
       <T x={820} y={490} size={14} bold anchor="middle">Metacognition (on matters)</T>
+      {/* Q1: the red labels at the left of the Metacognition band — labels only */}
+      <T x={24} y={490} size={12} cls="red">{Q1_LABELS.metacognitionLeft[0]}</T>
+      <T x={68} y={490} size={12} cls="red">{Q1_LABELS.metacognitionLeft[1]}</T>
 
       {/* Project Management */}
       <Cont x={24} y={498} w={1172} h={64} />
@@ -401,7 +413,10 @@ function Metacognition({ d, live, memoryCounts }: { d: AgentDetail; live: AgentD
         <T x={715} y={614} size={9} anchor="middle" cls="bv">premortem when c ≥ 0.4</T>
       </Blk>
       <Blk id="metacognition.monitoring.truthful_efficient_good" x={814} y={582} w={354} h={42} label="Truthful / Efficient / Good">
-        <T x={991} y={600} size={11} anchor="middle">Truthful / Efficient / Good</T>
+        {/* Q7: the characters after Truthful / Efficient / Good — labels only */}
+        <T x={991} y={600} size={11} anchor="middle">
+          Truthful <tspan className="red">{Q7_LABELS.truthful}</tspan> / Efficient <tspan className="red">{Q7_LABELS.efficient}</tspan> / Good <tspan className="red">{Q7_LABELS.good}</tspan>
+        </T>
         <T x={991} y={614} size={9} anchor="middle" cls="bv">the three gates Feedback scores</T>
       </Blk>
       <Arrow d="M531,580 V 554" cls="thick" />

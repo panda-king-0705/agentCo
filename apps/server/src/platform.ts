@@ -125,6 +125,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
     platform: () => services,
     runTimeoutMs: config.runTimeoutMs,
     isPaused: () => company.settings().paused,
+    maxConcurrentRuns: () => company.settings().maxConcurrentRuns,
     now,
   });
   org.attachRunControl(runs);

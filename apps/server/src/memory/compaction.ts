@@ -62,7 +62,13 @@ export class ContextGovernor {
       return { conversation, messages, compacted: false };
     }
     const trigger = compactionTrigger(contextWindow, this.config.triggerPct);
-    const state = this.load(conversation.id);
+    const persisted = this.load(conversation.id);
+    // The view is computed relative to the message being answered (the last of `messages`). A
+    // checkpoint that folded it — or anything after it — was made while answering a NEWER message
+    // (an older pending message handled late): it must not be used, or the triggering message is
+    // dropped and the summary would describe the future. Fold this history ephemerally instead.
+    if (persisted && persisted.throughIndex > messages.length - 1) return this.governStale(conversation, messages, persisted, trigger, contextWindow, span);
+    const state = persisted;
     const view = state ? [this.preambleMessage(conversation, state, messages), ...messages.slice(state.throughIndex)] : messages;
     const before = tokensOf(view);
     if (before <= trigger) return { conversation, messages: view, compacted: state !== null };
@@ -71,6 +77,22 @@ export class ContextGovernor {
     const compactedView = [this.preambleMessage(conversation, next, messages), ...messages.slice(next.throughIndex)];
     this.traceCompaction(span, next, before, tokensOf(compactedView), trigger, contextWindow);
     return { conversation, messages: compactedView, compacted: true };
+  }
+
+  /** A history older than the persisted checkpoint: fold it without persisting (the epoch stays). */
+  private governStale(conversation: Conversation, messages: Message[], persisted: CheckpointState, trigger: number, contextWindow: number, span: SpanHandle | null): ConversationHistory {
+    const before = tokensOf(messages);
+    if (before <= trigger) return { conversation, messages, compacted: false };
+    const to = messages.length - this.config.carryTurns;
+    if (to <= 0) return { conversation, messages, compacted: false };
+    const { lines, exchanges } = progressLines(messages.slice(0, to), 0);
+    const progress = lines.length > this.config.maxProgressLines ? [ELISION, ...lines.slice(-this.config.maxProgressLines)] : lines;
+    const objective = messages.find((m) => m.senderId === "human")?.content ?? persisted.objective;
+    // The persisted transcripts already hold every message folded here (they cover a longer history).
+    const state: CheckpointState = { version: persisted.version, throughIndex: to, objective, progress, exchanges, transcriptPath: persisted.transcriptPath };
+    const view = [this.preambleMessage(conversation, state, messages), ...messages.slice(to)];
+    this.traceCompaction(span, state, before, tokensOf(view), trigger, contextWindow);
+    return { conversation, messages: view, compacted: true };
   }
 
   /** The persisted checkpoint for a conversation, if any. */

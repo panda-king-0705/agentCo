@@ -105,6 +105,11 @@ export class AgentRepo {
     return all(this.db, "SELECT * FROM agents WHERE manager_id = ? AND status != 'terminated' ORDER BY created_at, rowid", managerId).map(toAgent);
   }
 
+  /** Every agent ever assigned to this manager, terminated included. */
+  reportCount(managerId: string): number {
+    return Number(one(this.db, "SELECT COUNT(*) AS n FROM agents WHERE manager_id = ?", managerId)?.n ?? 0);
+  }
+
   byRole(roleId: string): Agent | null {
     const row = one(this.db, "SELECT * FROM agents WHERE role_id = ? AND status != 'terminated' ORDER BY created_at LIMIT 1", roleId);
     return row ? toAgent(row) : null;

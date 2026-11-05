@@ -10,7 +10,7 @@ import type { Agent, AgentIdentity, AffectState, NeedsState } from "../../../../
 import { clamp, round } from "../../coerce.ts";
 import { truncate } from "../../text.ts";
 import type { AgentFacts } from "../../prompt.ts";
-import { Q1_LABELS, Q5_BIO_ASSETS_LABEL } from "../interpretation.ts";
+import { alignmentMultiplier, Q1_LABELS, Q5_BIO_ASSETS_LABEL } from "../interpretation.ts";
 import { block, toolContext, type BrainRun } from "../runtime.ts";
 import { toneFor } from "./personality.ts";
 
@@ -40,7 +40,7 @@ export interface Drives {
   recallK: number; // literature review breadth: 4 + 4·curiosity
   perspectives: number; // 2 + round(2·curiosity), −1 when strongly task-driven
   truthfulGate: number; // 0.6 + 0.3·epistemic
-  visionMultiplier: number; // 1 + 0.5·vision for vision/OKR-aligned work
+  visionMultiplier: number; // 1 + 0.5·vision·(0.5 + purpose) for vision/OKR-aligned work (Purpose → OKR weighting)
   earlyStopThreshold: number; // 0.25, +0.1 when autonomy is low
   maxSolveSteps: number; // ≤ 6, shorter when strongly task-driven
   frustrationGate: boolean; // frustration > 0.7 forces the early stop
@@ -95,6 +95,7 @@ export function computeDrives(identity: AgentIdentity, affect: AffectState, need
   const lowAutonomy = autonomy < LOW_AUTONOMY;
   if (lowAutonomy) notes.push("low autonomy: early-stop threshold +0.1");
   const perspectives = clamp(2 + Math.round(2 * curiosity) - (taskDriven > 0.7 ? 1 : 0), 1, 4);
+  const purpose = clamp(identity.motivation.purpose, 0, 1);
   return {
     taskDriven,
     curiosity: round(curiosity, 3),
@@ -102,7 +103,7 @@ export function computeDrives(identity: AgentIdentity, affect: AffectState, need
     vision,
     autonomy: round(autonomy, 3),
     competence: clamp(identity.motivation.competence, 0, 1),
-    purpose: clamp(identity.motivation.purpose, 0, 1),
+    purpose,
     needs,
     lowestUnmetNeed: lowest,
     essentialOnly,
@@ -112,7 +113,8 @@ export function computeDrives(identity: AgentIdentity, affect: AffectState, need
     recallK: Math.round(4 + 4 * curiosity),
     perspectives: essentialOnly ? 1 : perspectives,
     truthfulGate: round(0.6 + 0.3 * epistemic, 3),
-    visionMultiplier: round(1 + 0.5 * vision, 3),
+    // Motivation › Purpose → OKR weighting: purpose scales the vision/OKR alignment multiplier.
+    visionMultiplier: round(alignmentMultiplier(vision, purpose), 3),
     earlyStopThreshold: round(EARLY_STOP_BASE + (lowAutonomy ? 0.1 : 0), 3),
     maxSolveSteps: clamp(6 - (taskDriven > 0.7 ? 2 : 0), 2, 6),
     frustrationGate: affect.frustration > FRUSTRATION_LIMIT,
@@ -140,6 +142,30 @@ export function renderCharter(agent: Agent, facts: AgentFacts): string {
     `Style: ${truncate(agent.persona.style || "clear and direct", 100)}${toneFor(agent.persona.personalityType)}`,
   ];
   return lines.filter(Boolean).join("\n");
+}
+
+// ── Maslow › Belonging: who to reach out to, and why belonging is low.
+
+export interface BelongingResponse {
+  /** ok · manager_missing (manager missing/terminated) · reports_unreachable (a leader's reports all paused/terminated). */
+  kind: "ok" | "manager_missing" | "reports_unreachable";
+  /** Check-in target: the manager, else the next ACTIVE ancestor; null = the Board (CEO, or no active ancestor). */
+  reachOut: Agent | null;
+}
+
+/**
+ * Coherent response to low belonging: with no (active) manager the agent turns to the next active
+ * ancestor — the Board when there is none (the CEO) — which is also where `escalate` goes; when
+ * its reports are unreachable, Self-ability notes the gap (no delegation this run).
+ */
+export function belongingResponse(run: BrainRun): BelongingResponse {
+  const agent = run.agent;
+  const active = (a: Agent | null | undefined): a is Agent => !!a && a.status !== "terminated";
+  const manager = agent.managerId ? run.platform.org.getAgent(agent.managerId) : null;
+  const reachOut = active(manager) ? manager : (run.platform.org.managerChain(agent.id).find(active) ?? null);
+  if (agent.managerId && !active(manager)) return { kind: "manager_missing", reachOut };
+  if (run.drives.needs.belonging === "low") return { kind: "reports_unreachable", reachOut };
+  return { kind: "ok", reachOut };
 }
 
 // ── Blocks: the Self-management pass at the start of every run.
@@ -179,17 +205,20 @@ export async function selfManagementPass(run: BrainRun): Promise<void> {
       "agentco.frustration_gate": d.frustrationGate,
       "agentco.modulations": d.notes.join("; ") || "none",
     });
-    // Belonging is the lowest unmet need → reach out to the manager first.
-    if (d.reachOutFirst && run.task && run.agent.managerId && run.agent.tools.includes("send_message")) {
+    // Belonging is the lowest unmet need → reach out first, coherently with WHY it is low.
+    const belonging = belongingResponse(run);
+    span.setAttributes({ "agentco.belonging": belonging.kind, ...(belonging.reachOut ? { "agentco.belonging.reach_out": belonging.reachOut.id } : {}) });
+    if (d.reachOutFirst && run.task && belonging.reachOut && run.agent.tools.includes("send_message")) {
+      const why = belonging.kind === "manager_missing" ? " (my manager is no longer active, so I'm checking in with you)" : "";
       await run.platform.tools.execute(
         {
           id: `checkin_${run.ctx.run.id}`,
           name: "send_message",
-          arguments: { toAgentId: run.agent.managerId, content: `Checking in: I'm starting T-${run.task.number} "${truncate(run.task.title, 80)}". Anything I should know first?` },
+          arguments: { toAgentId: belonging.reachOut.id, content: `Checking in${why}: I'm starting T-${run.task.number} "${truncate(run.task.title, 80)}". Anything I should know first?` },
         },
         toolContext(run, span),
       );
     }
-    return { needs: d.needs, conservation: d.conservation };
+    return { needs: d.needs, conservation: d.conservation, belonging: belonging.kind };
   });
 }

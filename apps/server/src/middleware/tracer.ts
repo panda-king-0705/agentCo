@@ -137,8 +137,14 @@ export class TracerImpl implements Tracer {
     return truncate(redacted);
   }
 
+  /**
+   * span.* events carry a summary of the span WITHOUT the input/output previews (up to 2 × 2000
+   * chars each): the console merges them into what it already has and fetches the detail
+   * (GET /api/runs/:id, /api/traces/:id) on demand. Keeps replay and the events table small.
+   */
   private eventInput(span: Span, summary: string) {
-    return { agentId: span.agentId, taskId: span.taskId, runId: span.runId, traceId: span.traceId, summary, data: { ...span } };
+    const { input: _input, output: _output, ...slim } = span;
+    return { agentId: span.agentId, taskId: span.taskId, runId: span.runId, traceId: span.traceId, summary, data: slim };
   }
 }
 

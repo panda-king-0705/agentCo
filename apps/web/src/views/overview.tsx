@@ -247,7 +247,7 @@ export function Overview() {
         <Kpi label="Spend today" value={money(company.spentTodayUsd)} sub={`${pct(burn)} of daily`} href={href("/costs")} />
         <Kpi label="Spend this month" value={money(company.spentMonthUsd)} sub={`of ${money(s.monthlyBudgetUsd)}`} href={href("/costs")} />
         <Kpi label="Run success rate" value={m?.runSuccessRate == null ? "—" : pct(m.runSuccessRate)} sub={m ? `${m.runs24h} runs, avg ${duration(m.avgRunMs)}` : undefined} />
-        <Kpi label="Routing savings" value={m ? money(m.routingSavingsUsd) : "—"} sub="vs all-frontier" href={href("/costs")} />
+        <Kpi label="Routing savings" value={m ? money(m.routingSavingsUsd) : "—"} sub="this month, vs all-frontier" href={href("/costs")} />
       </div>
 
       <Panel title="Live floor" className="mt" actions={<span className="muted small">Agents by department, updated as events arrive</span>}>

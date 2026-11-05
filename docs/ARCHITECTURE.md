@@ -305,7 +305,11 @@ cross-agent tree):
 - Inputs/outputs are redacted (port of the reference `redact.ts`:
   `redact()` for prose, `redactMachine()` for tool args / llm I/O) and
   truncated to 2000 chars before persistence.
-- Events table is append-only; SSE replays from `Last-Event-ID`.
+- Events table is append-only; SSE replays from `Last-Event-ID` asynchronously, in pages up to the
+  head, waiting for `drain` (a `resync` event asks the console to refetch when the backlog cannot be
+  replayed exactly; a `Last-Event-ID` ahead of the head — fresh DB after a restart — is treated as a
+  new client). Streams are capped at `SSE_MAX_CLIENTS` (503 beyond). span.* events omit the
+  input/output previews.
 
 ## Context governance (ported)
 
@@ -370,7 +374,7 @@ GET    /api/memory                        MemoryItem[] global (?q=&kind=)
 GET    /api/metrics/overview              MetricsOverview
 GET    /api/metrics/timeseries            TimeseriesPoint[] (?metric=cost|runs|tokens&hours=24)
 GET    /api/events                        CompanyEvent[] (?since=<seq>&limit=)
-GET    /api/events/stream                 SSE: `id: <seq>`, `event: <type>`, `data: <CompanyEvent json>`; heartbeat comment every 15 s
+GET    /api/events/stream                 SSE: `id: <seq>`, `event: <type>`, `data: <CompanyEvent json>`; heartbeat comment every 15 s; `event: resync` = refetch state
 GET    /*                                 console (apps/web/dist), SPA fallback to index.html
 ```
 

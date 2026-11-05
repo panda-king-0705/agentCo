@@ -24,8 +24,8 @@ export interface HttpApp {
 
 export function createHttpApp(platform: Platform, options: { heartbeatMs?: number } = {}): HttpApp {
   const router = buildRouter(platform);
-  const sse = new SseBroadcaster(platform.bus, options.heartbeatMs);
   const { config } = platform;
+  const sse = new SseBroadcaster(platform.bus, options.heartbeatMs, { maxClients: config.sseMaxClients });
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error) => fail(res, error));

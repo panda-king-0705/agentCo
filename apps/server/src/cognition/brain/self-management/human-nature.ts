@@ -6,8 +6,13 @@
  *
  * - negativity bias: a failure moves valence 1.5× a success;
  * - habituation: an outcome in the direction valence already leans counts less;
- * - fatigue: arousal rises with open work and consecutive runs, decays when idle;
- * - recognition: acceptance by the manager or the Board moves valence 2× self-acceptance.
+ * - fatigue: arousal rises with open work and consecutive runs (real run streaks, from the
+ *   platform's run history), decays when idle;
+ * - recognition: acceptance by the manager or the Board moves valence 2× self-acceptance — the
+ *   worker counts its own acceptance at its Report (1×) and the manager's Feedback (or the Board's
+ *   go-ahead) tops it up through `recognition()`;
+ * - decay: valence relaxes toward 0 on every Report and over idle time, so a past streak of
+ *   success (or failure) does not modulate Motivation forever.
  */
 import type { AffectState, Task } from "../../../../../../packages/shared/src/index.ts";
 import { clamp, round } from "../../coerce.ts";
@@ -27,6 +32,29 @@ export interface Workload {
   openItems: number;
   /** Runs in a row without idle time. */
   consecutiveRuns: number;
+  /** Idle time before the current run (ms; 0 or absent when unknown). */
+  idleMs?: number;
+}
+
+/** Valence decay toward 0: one Report's worth, plus the idle time before the run (half-life). */
+export function decayValence(valence: number, idleMs = 0): number {
+  const idle = Math.max(0, idleMs) / H.valenceHalfLifeMs;
+  return valence * (1 - H.valenceDecayPerRun) * Math.pow(0.5, idle);
+}
+
+/**
+ * Recognition: a manager's Feedback accepted the worker's subtask (or the Board accepted the
+ * CEO's objective). The worker already counted its own acceptance (1×) when it reported; this
+ * tops it up to recognitionMultiplier× (habituation applies). Arousal is untouched.
+ */
+export function recognition(affect: AffectState, by: "manager" | "board"): AffectState {
+  let delta = H.successValence * (H.recognitionMultiplier - 1);
+  if (affect.valence > 0) delta *= 1 - H.habituation * Math.min(1, affect.valence);
+  return {
+    valence: round(clamp(affect.valence + delta, -1, 1), 3),
+    arousal: affect.arousal,
+    frustration: round(clamp(affect.frustration - H.frustrationDecayOnSuccess * (by === "board" ? 1 : 0.5), 0, 1), 3),
+  };
 }
 
 /** Finished subprocesses (reports' tasks) → events. Blocked counts as escalated. */
@@ -58,7 +86,7 @@ function applyOne(a: AffectState, e: ProcessEvent): AffectState {
 }
 
 export function updateAffect(affect: AffectState, events: ProcessEvent[], workload: Workload): AffectState {
-  let a = { ...affect };
+  let a = { ...affect, valence: decayValence(affect.valence, workload.idleMs) };
   for (const e of events) a = applyOne(a, e);
   const target = H.arousalBase + H.arousalPerOpenItem * workload.openItems + H.arousalPerRun * workload.consecutiveRuns;
   const arousal = workload.openItems === 0 ? a.arousal - H.arousalIdleDecay * (a.arousal - H.arousalBase) : (a.arousal + target) / 2;

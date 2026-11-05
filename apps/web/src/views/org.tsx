@@ -1,5 +1,5 @@
 // Org chart: Board → CEO → C-suite → managers → workers. Collapsible; hire / chat / pause / destroy.
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { href, navigate } from "../router";
 import { seed, useApi, useLive } from "../live";
@@ -100,7 +100,8 @@ const OrgCard = memo(function OrgCard({ agent, collapsed, hasKids, kidCount, onT
         <Avatar agent={agent} size={30} />
         <div className="grow">
           <a className="oc-name ellipsis" href={href(`/agents/${agent.id}`)}>{agent.name}</a>
-          <div className="oc-title ellipsis" title={agent.title}>{agent.title}</div>
+          {/* Titles wrap instead of being cut off (the CEO's especially). */}
+          <div className="oc-title">{agent.title}</div>
         </div>
         {hasKids ? (
           <button type="button" className="oc-toggle" aria-expanded={!collapsed} aria-label={`${collapsed ? "Expand" : "Collapse"} ${agent.name}'s reports`} onClick={onToggle}>
@@ -118,11 +119,32 @@ const OrgCard = memo(function OrgCard({ agent, collapsed, hasKids, kidCount, onT
         <StatusBadge status={agent.status} />
       </div>
       <div className="oc-act" title={agent.activity ?? undefined}>{agent.activity ?? <span className="muted">Nothing in progress</span>}</div>
-      <div className="oc-actions">
-        <IconButton icon="chat" label={`Chat with ${agent.name}`} onClick={() => actions.chat(agent)} />
-        <IconButton icon={paused ? "play" : "pause"} label={paused ? `Resume ${agent.name}` : `Pause ${agent.name}`} onClick={() => actions.togglePause(agent)} />
-        <IconButton icon="trash" tone="danger" label={`Destroy ${agent.name}`} onClick={() => actions.askDestroy(agent)} />
+      <CardActions agent={agent} actions={actions} paused={paused} />
+    </div>
+  );
+});
+
+function CardActions({ agent, actions, paused }: { agent: Agent; actions: ReturnType<typeof useAgentActions>; paused: boolean }) {
+  return (
+    <div className="oc-actions">
+      <IconButton icon="chat" label={`Chat with ${agent.name}`} onClick={() => actions.chat(agent)} />
+      <IconButton icon={paused ? "play" : "pause"} label={paused ? `Resume ${agent.name}` : `Pause ${agent.name}`} onClick={() => actions.togglePause(agent)} />
+      <IconButton icon="trash" tone="danger" label={`Destroy ${agent.name}`} onClick={() => actions.askDestroy(agent)} />
+    </div>
+  );
+}
+
+/** Overview card: name, full title (wrapped, never cut), status; actions appear on hover / focus (always on touch). */
+const CompactCard = memo(function CompactCard({ agent, actions, lead }: { agent: Agent; actions: ReturnType<typeof useAgentActions>; lead?: boolean }) {
+  const color = useLive((s) => s.departments[agent.departmentId]?.color) ?? "var(--muted)";
+  return (
+    <div className={`org-card compact st-${agent.status} tier-${agent.tier}${lead ? " lead" : ""}`} style={{ ["--dc" as string]: color }} data-agent={agent.id} title={agent.activity ?? undefined}>
+      <div className="occ-head">
+        <StatusBadge status={agent.status} compact />
+        <a className="oc-name" href={href(`/agents/${agent.id}`)}>{agent.name}</a>
       </div>
+      <div className="oc-title">{agent.title}</div>
+      <CardActions agent={agent} actions={actions} paused={agent.status === "paused"} />
     </div>
   );
 });
@@ -130,10 +152,9 @@ const OrgCard = memo(function OrgCard({ agent, collapsed, hasKids, kidCount, onT
 function Branch({ node, collapsed, toggle, actions }: { node: TreeNode; collapsed: Set<string>; toggle: (id: string) => void; actions: ReturnType<typeof useAgentActions> }) {
   const isCollapsed = collapsed.has(node.agent.id);
   const allLeaves = node.children.length > 0 && node.children.every((c) => c.children.length === 0);
-  const count = (n: TreeNode): number => n.children.reduce((s, c) => s + 1 + count(c), 0);
   return (
     <li className="org-node">
-      <OrgCard agent={node.agent} collapsed={isCollapsed} hasKids={node.children.length > 0} kidCount={count(node)} onToggle={() => toggle(node.agent.id)} actions={actions} />
+      <OrgCard agent={node.agent} collapsed={isCollapsed} hasKids={node.children.length > 0} kidCount={countDescendants(node)} onToggle={() => toggle(node.agent.id)} actions={actions} />
       {node.children.length && !isCollapsed ? (
         <ul className={`org-kids${allLeaves ? " stacked" : ""}`}>
           {node.children.map((c) => (
@@ -145,19 +166,228 @@ function Branch({ node, collapsed, toggle, actions }: { node: TreeNode; collapse
   );
 }
 
+const countDescendants = (n: TreeNode): number => n.children.reduce((s, c) => s + 1 + countDescendants(c), 0);
+
+function BoardCard() {
+  return (
+    <div className="org-card board-card">
+      <div className="oc-main">
+        <Avatar id="human" size={30} />
+        <div className="grow">
+          <div className="oc-name">Board</div>
+          <div className="oc-title">Human founder</div>
+        </div>
+      </div>
+      <div className="oc-act muted">Approves hires, budgets and answers questions</div>
+    </div>
+  );
+}
+
+// ───────────── overview: the whole company fitted to the width ─────────────
+
+/** Above this headcount the org chart opens in the overview (departments as columns). */
+const OVERVIEW_AT = 20;
+type Mode = "overview" | "tree";
+const MODE_KEY = "agentco.org.mode";
+function readMode(): Mode | null {
+  try {
+    const v = localStorage.getItem(MODE_KEY);
+    return v === "overview" || v === "tree" ? v : null;
+  } catch {
+    return null;
+  }
+}
+function writeMode(m: Mode) {
+  try {
+    localStorage.setItem(MODE_KEY, m);
+  } catch {
+    /* per-viewer convenience only */
+  }
+}
+
+function SubTree({ nodes, actions }: { nodes: TreeNode[]; actions: ReturnType<typeof useAgentActions> }) {
+  return (
+    <ul className="oo-list">
+      {nodes.map((n) => (
+        <li key={n.agent.id}>
+          <CompactCard agent={n.agent} actions={actions} />
+          {n.children.length ? <SubTree nodes={n.children} actions={actions} /> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function OrgOverview({ tree, actions }: { tree: TreeNode[]; actions: ReturnType<typeof useAgentActions> }) {
+  const departments = useLive((s) => s.departments);
+  // The main root is the CEO (the biggest tree); any other root reports to the Board directly.
+  const [main, ...others] = [...tree].sort((a, b) => countDescendants(b) - countDescendants(a));
+  if (!main) return <div className="empty">No agents yet.</div>;
+  const isColumn = (n: TreeNode) => n.children.length > 0 || n.agent.tier === "executive";
+  const staff = main.children.filter((n) => !isColumn(n));
+  // Columns follow the department order of the legend (ties: bigger organisation first).
+  const deptOrder = new Map(Object.keys(departments).map((id, i) => [id, i]));
+  const columns = [...main.children.filter(isColumn), ...others].sort(
+    (a, b) => (deptOrder.get(a.agent.departmentId) ?? 999) - (deptOrder.get(b.agent.departmentId) ?? 999) || countDescendants(b) - countDescendants(a),
+  );
+  return (
+    <div className="org-overview" data-testid="org-overview">
+      <div className="oo-top">
+        <div className="oo-board"><BoardCard /></div>
+        <Icon name="chevronRight" size={16} className="oo-arrow" />
+        <div className="oo-ceo">
+          <OrgCard agent={main.agent} collapsed={false} hasKids={false} kidCount={0} onToggle={() => undefined} actions={actions} />
+        </div>
+        {staff.length ? (
+          <div className="oo-staff" aria-label={`Reporting to ${main.agent.name} directly`}>
+            <div className="oo-staff-label muted tiny">Office of the {main.agent.title.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 4) || "CEO"}</div>
+            <div className="oo-staff-cards">
+              {staff.map((n) => <CompactCard key={n.agent.id} agent={n.agent} actions={actions} />)}
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <div className="oo-cols" style={{ ["--cols" as string]: String(Math.max(1, columns.length)) }}>
+        {columns.map((n) => {
+          const dept = departments[n.agent.departmentId];
+          return (
+            <section key={n.agent.id} className="oo-col" style={{ ["--dc" as string]: dept?.color ?? "var(--muted)" }} aria-label={`${dept?.name ?? "Team"}: ${n.agent.name}'s organisation, ${countDescendants(n) + 1} agents`}>
+              <header className="oo-col-head">
+                <span className="oo-col-name">{dept?.name ?? "Team"}</span>
+                <span className="num muted">{countDescendants(n) + 1}</span>
+              </header>
+              <CompactCard agent={n.agent} actions={actions} lead />
+              {n.children.length ? <SubTree nodes={n.children} actions={actions} /> : null}
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ───────────── tree: the detailed hierarchy, zoomable, with a visible scroll affordance ─────────────
+
+const ZOOMS = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.15, 1.3];
+
+function OrgTree({ tree, collapsed, toggle, actions, zoom, setZoom, fit, setFit }: {
+  tree: TreeNode[];
+  collapsed: Set<string>;
+  toggle: (id: string) => void;
+  actions: ReturnType<typeof useAgentActions>;
+  zoom: number | null;
+  setZoom: (z: number | null) => void;
+  fit: number;
+  setFit: (z: number) => void;
+}) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLUListElement>(null);
+  const [edges, setEdges] = useState({ left: false, right: false, hidden: 0 });
+  const z = zoom ?? fit;
+  const zRef = useRef(z);
+  zRef.current = z;
+
+  const measure = useCallback(() => {
+    const el = scroller.current;
+    const ul = root.current;
+    if (!el || !ul) return;
+    const box = el.getBoundingClientRect();
+    let hidden = 0;
+    for (const card of ul.querySelectorAll<HTMLElement>(".org-card[data-agent]")) {
+      const r = card.getBoundingClientRect();
+      if (r.right > box.right + 2 || r.left < box.left - 2) hidden++;
+    }
+    const left = el.scrollLeft > 2;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setEdges((p) => (p.left === left && p.right === right && p.hidden === hidden ? p : { left, right, hidden }));
+  }, []);
+
+  // Fit: the zoom at which the whole chart is as wide as the viewport (bounded; beyond it, scroll).
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    const ul = root.current;
+    if (!el || !ul) return;
+    const compute = () => {
+      // The Board's subtree is a centred flex item: its on-screen width / zoom = the chart's natural width.
+      const content = ul.firstElementChild as HTMLElement | null;
+      if (!content) return;
+      const natural = content.getBoundingClientRect().width / (zRef.current || 1) + 24;
+      const f = Math.max(ZOOMS[0]!, Math.min(1, (el.clientWidth - 8) / Math.max(1, natural)));
+      setFit(Math.floor(f * 100) / 100);
+      requestAnimationFrame(measure);
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tree, collapsed, measure, setFit]);
+
+  useEffect(() => {
+    // Centre on the CEO when the chart is wider than the viewport.
+    const el = scroller.current;
+    if (el) el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2);
+    measure();
+  }, [z, measure]);
+
+  const scrollBy = (dir: -1 | 1) => scroller.current?.scrollBy({ left: dir * Math.round((scroller.current?.clientWidth ?? 600) * 0.7), behavior: "smooth" });
+  return (
+    <div className={`org-scroll-wrap${edges.left ? " can-left" : ""}${edges.right ? " can-right" : ""}`}>
+      <div className="org-scroll" ref={scroller} onScroll={measure} tabIndex={0} aria-label="Org chart (scrolls sideways when wider than the screen)">
+        <ul className="org-root" ref={root} style={{ zoom: z }}>
+          <li className="org-node board">
+            <BoardCard />
+            <ul className="org-kids">
+              {tree.map((n) => (
+                <Branch key={n.agent.id} node={n} collapsed={collapsed} toggle={toggle} actions={actions} />
+              ))}
+            </ul>
+          </li>
+        </ul>
+      </div>
+      {edges.left ? <button type="button" className="org-edge left" aria-label="Scroll the org chart left" onClick={() => scrollBy(-1)}><Icon name="chevronLeft" size={18} /></button> : null}
+      {edges.right ? <button type="button" className="org-edge right" aria-label="Scroll the org chart right" onClick={() => scrollBy(1)}><Icon name="chevronRight" size={18} /></button> : null}
+      {edges.hidden > 0 ? (
+        <div className="org-offscreen small" role="status">
+          {edges.hidden} agent{edges.hidden === 1 ? "" : "s"} off-screen — scroll sideways or{" "}
+          <button type="button" className="linklike" onClick={() => setZoom(null)}>fit to width</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ZoomControls({ zoom, fit, setZoom }: { zoom: number | null; fit: number; setZoom: (z: number | null) => void }) {
+  const z = zoom ?? fit;
+  const step = (dir: -1 | 1) => {
+    const next = dir > 0 ? ZOOMS.find((v) => v > z + 0.001) : [...ZOOMS].reverse().find((v) => v < z - 0.001);
+    if (next !== undefined) setZoom(next);
+  };
+  return (
+    <div className="org-zoom" role="group" aria-label="Zoom the org chart">
+      <IconButton icon="minus" label="Zoom out" onClick={() => step(-1)} disabled={z <= ZOOMS[0]! + 0.001} />
+      <span className="num small zoom-val" aria-live="polite">{Math.round(z * 100)}%</span>
+      <IconButton icon="plus" label="Zoom in" onClick={() => step(1)} disabled={z >= ZOOMS.at(-1)! - 0.001} />
+      <Button size="sm" icon="fit" onClick={() => setZoom(null)} aria-pressed={zoom === null}>Fit</Button>
+    </div>
+  );
+}
+
 export function OrgView() {
   const agents = useLive((s) => s.agents);
   const departments = useLive((s) => s.departments);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [hiring, setHiring] = useState(false);
+  const [modeChoice, setModeChoice] = useState<Mode | null>(readMode);
+  const [zoom, setZoom] = useState<number | null>(null);
+  const [fit, setFit] = useState(1);
   const actions = useAgentActions();
-  const scroller = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = scroller.current;
-    if (el) el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2);
-  }, [Object.keys(agents).length > 0]);
   const list = useMemo(() => liveAgents(agents), [agents]);
   const tree = useMemo(() => buildTree(list), [list]);
+  const mode: Mode = modeChoice ?? (list.length > OVERVIEW_AT ? "overview" : "tree");
+  const chooseMode = (m: Mode) => {
+    setModeChoice(m);
+    writeMode(m);
+  };
   const toggle = (id: string) =>
     setCollapsed((p) => {
       const n = new Set(p);
@@ -169,10 +399,19 @@ export function OrgView() {
   return (
     <>
       <PageHead title="Org chart" sub={`${list.length} agents across ${Object.keys(departments).length} departments`}>
-        <Button size="sm" onClick={() => setCollapsed(new Set(list.filter((a) => a.tier === "manager" || (a.tier === "executive" && a.managerId)).filter((a) => list.some((x) => x.managerId === a.id)).map((a) => a.id)))}>
-          Collapse teams
-        </Button>
-        <Button size="sm" onClick={() => setCollapsed(new Set())} disabled={!collapsed.size}>Expand all</Button>
+        <div className="row org-mode" role="group" aria-label="Org chart layout">
+          <button type="button" className="chip" aria-pressed={mode === "overview"} onClick={() => chooseMode("overview")}>Overview</button>
+          <button type="button" className="chip" aria-pressed={mode === "tree"} onClick={() => chooseMode("tree")}>Tree</button>
+        </div>
+        {mode === "tree" ? (
+          <>
+            <ZoomControls zoom={zoom} fit={fit} setZoom={setZoom} />
+            <Button size="sm" onClick={() => setCollapsed(new Set(list.filter((a) => a.tier === "manager" || (a.tier === "executive" && a.managerId)).filter((a) => list.some((x) => x.managerId === a.id)).map((a) => a.id)))}>
+              Collapse teams
+            </Button>
+            <Button size="sm" onClick={() => setCollapsed(new Set())} disabled={!collapsed.size}>Expand all</Button>
+          </>
+        ) : null}
         <Button variant="primary" icon="plus" onClick={() => setHiring(true)}>Hire agent</Button>
       </PageHead>
       <div className="legend row wrap small">
@@ -181,27 +420,7 @@ export function OrgView() {
         ))}
         <span className="muted">{managers.length} team leads</span>
       </div>
-      <div className="org-scroll" ref={scroller}>
-        <ul className="org-root">
-          <li className="org-node board">
-            <div className="org-card board-card">
-              <div className="oc-main">
-                <Avatar id="human" size={30} />
-                <div className="grow">
-                  <div className="oc-name">Board</div>
-                  <div className="oc-title">Human founder</div>
-                </div>
-              </div>
-              <div className="oc-act muted">Approves hires, budgets and answers questions</div>
-            </div>
-            <ul className="org-kids">
-              {tree.map((n) => (
-                <Branch key={n.agent.id} node={n} collapsed={collapsed} toggle={toggle} actions={actions} />
-              ))}
-            </ul>
-          </li>
-        </ul>
-      </div>
+      {mode === "overview" ? <OrgOverview tree={tree} actions={actions} /> : <OrgTree tree={tree} collapsed={collapsed} toggle={toggle} actions={actions} zoom={zoom} setZoom={setZoom} fit={fit} setFit={setFit} />}
       {actions.dialogs}
       {hiring ? <HireModal onClose={() => setHiring(false)} /> : null}
     </>

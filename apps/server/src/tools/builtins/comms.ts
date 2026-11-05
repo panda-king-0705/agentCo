@@ -50,9 +50,10 @@ export const escalate: ToolDefinition = {
   tiers: ALL_TIERS,
   run(args, ctx) {
     const { org, conversations, tasks } = ctx.services;
-    const manager = ctx.agent.managerId ? org.getAgent(ctx.agent.managerId) : null;
-    // The CEO (or an agent whose manager is gone) asks the Board.
-    if (!manager || manager.status === "terminated") return askBoard(ctx, String(args.question), String(args.reason));
+    // Up the chain to the next ACTIVE ancestor (a terminated manager is skipped); the CEO — or an
+    // agent with no active ancestor left — asks the Board.
+    const manager = org.managerChain(ctx.agent.id).find((m) => m.status !== "terminated") ?? null;
+    if (!manager) return askBoard(ctx, String(args.question), String(args.reason));
     const reason = String(args.reason);
     const question = String(args.question);
     const task = ctx.taskId ? tasks.get(ctx.taskId) : null;

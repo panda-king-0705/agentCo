@@ -22,7 +22,7 @@ import { agentFacts } from "../prompt.ts";
 import { oneLine, truncate } from "../text.ts";
 import { canEscalate, escalationSettled, readEscalation } from "./escalation.ts";
 import { writeReport } from "./global-memory.ts";
-import { CANDIDATE_NAMES, Q2_OOD, Q3_FALLBACK, Q4_CONTROL, type CandidateName } from "./interpretation.ts";
+import { CANDIDATE_NAMES, Q2_OOD, Q3_FALLBACK, Q4_CONTROL, Q8_HUMAN_NATURE, type CandidateName } from "./interpretation.ts";
 import { assessConfidence, fallbackTarget, shouldEarlyStop, type ConfidenceAssessment, type FallbackTarget } from "./metacognition/confidence.ts";
 import { cognitiveControl, type ControlOutput, type Subprocess } from "./metacognition/cognitive-control.ts";
 import { oodMonitoring, reverseThinking, updateCalibration, type OodReport } from "./metacognition/monitoring.ts";
@@ -40,11 +40,11 @@ import { feedback, integrateResults, solving, type FeedbackResult, type Solution
 import { analysis, literatureReview, problemDefinition, requestText, type ProblemDefinition, type Understanding } from "./metacognition/target-understanding.ts";
 import { block, llmText, mustPropagate, phase, toolContext, YieldSignal, type BrainRun } from "./runtime.ts";
 import { feedbackUpdate } from "./self-management/emotion.ts";
-import { eventsFromSubtasks, type ProcessEvent } from "./self-management/human-nature.ts";
+import { eventsFromSubtasks, recognition, type ProcessEvent } from "./self-management/human-nature.ts";
 import { computeDrives, selfManagementPass } from "./self-management/identity.ts";
 import { isAligned, okrProgress, proposeFromOkrs } from "./self-management/okr.ts";
 import { generateNarrative, narrativeDue } from "./self-management/self-narrative.ts";
-import { checkpointState, interruptCheck, selectSubprocess, type Checkpoint } from "./todo-list.ts";
+import { checkpointState, interruptCheck, resumeWorkingMemory, selectSubprocess, type Checkpoint } from "./todo-list.ts";
 
 export interface BrainOptions {
   maxRevisions?: number;
@@ -239,7 +239,7 @@ export class BrainEngine implements CognitiveEngine {
       task = this.patch(run, patch); // the returned row, not the stale input snapshot
       const cp = selection.checkpoint;
       if (cp) {
-        run.wm = { ...cp.wm };
+        run.wm = resumeWorkingMemory(cp, "answer");
         run.ctx.span.setAttributes({ "agentco.resumed_at": cp.block });
       }
       if (a) {
@@ -252,8 +252,10 @@ export class BrainEngine implements CognitiveEngine {
     }
     let plan = readPlan(task);
     if (selection.entry === "resume" && selection.checkpoint) {
-      run.wm = { ...selection.checkpoint.wm };
-      run.ctx.span.setAttributes({ "agentco.resumed_at": selection.checkpoint.block });
+      // Resume AT the checkpointed block: working memory keeps what the earlier blocks produced
+      // (understanding, competence, confidence, the chosen plan), so no earlier model call is redone.
+      run.wm = resumeWorkingMemory(selection.checkpoint, "yield");
+      run.ctx.span.setAttributes({ "agentco.resumed_at": selection.checkpoint.block, "agentco.resumed_wm": Object.keys(run.wm).sort().join(",") });
     }
 
     if (selection.entry === "recovery") {
@@ -284,7 +286,7 @@ export class BrainEngine implements CognitiveEngine {
           return { outcome: "failed", output: "", error: `My manager could not answer the escalation on T-${task.number}: ${truncate(why, 300)}`, taskState: { checkpoint: null } };
         }
         const answer = good.map((c) => c.result ?? "").filter(Boolean).join("\n").trim() || "Proceed with your best judgment.";
-        run.wm = { ...cp.wm, escalationAnswer: answer };
+        run.wm = { ...resumeWorkingMemory(cp, "answer"), escalationAnswer: answer };
         if (run.escalation) run.escalation.answered = true; // a manager answered: no re-escalation of this task
         run.ctx.span.setAttributes({ "agentco.resumed_at": cp.block, "agentco.escalation.answered": good.length });
         this.patch(run, { checkpoint: null });
@@ -340,10 +342,20 @@ export class BrainEngine implements CognitiveEngine {
     };
   }
 
-  /** Target Understanding → Self-ability → OOD → Confidence ⇄ Fallback (evaluation). Cached in wm for resume. */
+  /**
+   * Target Understanding → Self-ability → OOD → Confidence ⇄ Fallback (evaluation). Every result is
+   * kept in working memory, so a run resumed at a later block (checkpoint) skips these blocks — and
+   * their interrupt checks — instead of redoing their model calls.
+   */
   private async understand(run: BrainRun): Promise<Understood> {
     const task = run.task!;
-    interruptCheck(run, "metacognition.target_understanding.problem_definition");
+    const cached = this.restoredUnderstanding(run);
+    if (cached) {
+      run.ctx.span.setAttributes({ "agentco.confidence": cached.confidence.calibrated, "agentco.resumed.understanding": true });
+      return cached;
+    }
+    const tuCached = !!(run.wm.problem && run.wm.literature && run.wm.understanding);
+    if (!tuCached) interruptCheck(run, "metacognition.target_understanding.problem_definition");
     const tu = await phase(run, "target_understanding", async () => {
       const problem = (run.wm.problem as ProblemDefinition | undefined) ?? (await problemDefinition(run));
       run.wm.problem = problem;
@@ -381,10 +393,31 @@ export class BrainEngine implements CognitiveEngine {
         confidence = await assessConfidence(run, problem, understanding, competence, ood);
       }
       run.wm.problem = problem;
+      run.wm.literature = literature;
       run.wm.understanding = understanding;
+      run.wm.competence = competence;
+      run.wm.ood = ood;
+      run.wm.confidence = confidence;
+      run.wm.routingTier = run.routingAgent.modelTier;
       run.ctx.span.setAttributes({ "agentco.confidence": confidence.calibrated, "agentco.fallbacks": [...used].join(",") || "none" });
       return { problem, literature, understanding, competence, ood, confidence };
     });
+  }
+
+  /** Understanding + competence + confidence restored from a checkpoint (resume at Cognitive Control or later). */
+  private restoredUnderstanding(run: BrainRun): Understood | null {
+    const wm = run.wm;
+    if (!wm.problem || !wm.literature || !wm.understanding || !wm.competence || !wm.ood || !wm.confidence) return null;
+    const tier = wm.routingTier;
+    if (tier === "economy" || tier === "standard" || tier === "frontier") run.routingAgent = { ...run.routingAgent, modelTier: tier };
+    return {
+      problem: wm.problem as ProblemDefinition,
+      literature: wm.literature as string[],
+      understanding: wm.understanding as Understanding,
+      competence: wm.competence as Competence,
+      ood: wm.ood as OodReport,
+      confidence: wm.confidence as ConfidenceAssessment,
+    };
   }
 
   /** A full Metacognition pass (fresh, resumed, re-planned after a human answer or recovery). */
@@ -418,12 +451,19 @@ export class BrainEngine implements CognitiveEngine {
     const maxRevisions = run.drives.conservation ? 0 : run.maxRevisions;
 
     for (let attempt = 0; attempt < maxRevisions + CANDIDATE_NAMES.length + 1; attempt++) {
-      interruptCheck(run, "metacognition.cognitive_control.decomposition");
-      const planned = await this.planPhase(run, u, feedbackIssues, rejected);
+      // Resumed at Solving: the chosen plan is in working memory — no re-planning.
+      const restored = attempt === 0 ? (run.wm.planned as { control: ControlOutput; chosen: CandidateName } | undefined) : undefined;
+      if (!restored) interruptCheck(run, "metacognition.cognitive_control.decomposition");
+      const planned = restored ?? (await this.planPhase(run, u, feedbackIssues, rejected));
+      run.wm.planned = { control: planned.control, chosen: planned.chosen };
+      if (restored) run.ctx.span.setAttributes({ "agentco.resumed.plan": planned.chosen });
       const persisted = this.persist(run, u, planned.control, planned.chosen, revision, rejected, feedbackIssues, prior);
       this.patch(run, { plan: persisted, checkpoint: null });
 
       interruptCheck(run, "metacognition.solving_evaluation.solving");
+      // From here on the run is not interrupted: Solving (and its Feedback) finish first.
+      run.solvingStarted = true;
+      delete run.wm.planned;
       const solution = await phase(run, "solving", () =>
         solving(run, {
           mode: planned.control.mode,
@@ -478,11 +518,15 @@ export class BrainEngine implements CognitiveEngine {
         const next = nextCandidate(planned.chosen, rejected);
         if (!next) break;
         feedbackIssues = fb.issues;
+        this.patch(run, { plan: { ...persisted, revision, rejected, feedback: feedbackIssues.slice(-8) } });
         continue;
       }
       // revise → Reflection / Replanning → back into Cognitive Control with the feedback.
       revision++;
+      this.patch(run, { plan: { ...persisted, revision, rejected, feedback: fb.issues.slice(-8) } });
       feedbackIssues = await reflectionReplanning(run, fb.issues, fb.summary);
+      // The verdict is persisted before re-planning: a later checkpoint keeps the revise budget.
+      this.patch(run, { plan: { ...persisted, revision, rejected, feedback: feedbackIssues.slice(-8) } });
     }
     return this.report(run, {
       outcome: "failed",
@@ -602,6 +646,7 @@ export class BrainEngine implements CognitiveEngine {
       }),
     );
     if (fb.decision === "accept") {
+      await this.recognizeWorkers(run, children);
       const output = integrateResults(task.title, fb.summary, children, run.agent.name);
       return this.report(run, { outcome: "completed", output, score: fb.score, summary: fb.summary, predicted: plan.confidence, events, estimateUsd: plan.estimateUsd, plan: { ...plan, feedback: [] } });
     }
@@ -620,12 +665,44 @@ export class BrainEngine implements CognitiveEngine {
         plan,
       });
     }
+    // The Feedback verdict is persisted to the plan BEFORE re-planning, so a yield inside the new
+    // pass resumes with the revision count, the rejected candidates and the issues (BRAIN_MAX_REVISIONS holds).
     if (fb.decision === "rollback") {
+      const next: PersistedPlan = { ...plan, feedback: fb.issues.slice(-8), rejected: [...plan.rejected, plan.chosen] };
+      this.patch(run, { plan: next, checkpoint: null });
       await rollbackRecovery(run, `rollback of candidate ${plan.chosen}: ${fb.issues.join("; ")}`, { cancelOpen: true });
-      return this.fullPass(run, plan, { feedback: fb.issues, rejected: [...plan.rejected, plan.chosen], revision: plan.revision });
+      return this.fullPass(run, next, { feedback: next.feedback, rejected: next.rejected, revision: next.revision });
     }
+    let next: PersistedPlan = { ...plan, revision: plan.revision + 1, feedback: fb.issues.slice(-8) };
+    this.patch(run, { plan: next, checkpoint: null });
     const issues = await reflectionReplanning(run, fb.issues, fb.summary);
-    return this.fullPass(run, plan, { feedback: issues, rejected: plan.rejected, revision: plan.revision + 1 });
+    next = { ...next, feedback: issues.slice(-8) };
+    this.patch(run, { plan: next });
+    return this.fullPass(run, next, { feedback: next.feedback, rejected: next.rejected, revision: next.revision });
+  }
+
+  /**
+   * Human Nature › recognition: the manager's Feedback accepted these subtasks, which moves each
+   * WORKER's valence (recognizedBy "manager"). Each worker is updated once per acceptance.
+   */
+  private async recognizeWorkers(run: BrainRun, children: Task[]): Promise<void> {
+    const workers = [...new Set(children.filter((c) => c.status === "done" && c.state.kind !== "escalation" && c.assigneeId && c.assigneeId !== run.agent.id).map((c) => c.assigneeId as string))];
+    if (workers.length === 0) return;
+    await block(run, "self_management.human_nature", `Recognising ${workers.length} report(s) for accepted work`, (span) => {
+      const done: string[] = [];
+      for (const id of workers) {
+        const worker = run.platform.org.getAgent(id);
+        if (!worker || worker.status === "terminated") continue;
+        try {
+          run.platform.agents.updateCognitiveState(id, { affect: recognition(worker.affect, "manager") });
+          done.push(id);
+        } catch (err) {
+          if (mustPropagate(err, run.ctx.signal)) throw err;
+        }
+      }
+      span.setAttributes({ "agentco.recognized": done.join(","), "agentco.recognized_by": "manager" });
+      return done;
+    });
   }
 
   /**
@@ -737,7 +814,9 @@ export class BrainEngine implements CognitiveEngine {
             ? [{ outcome: "failed", source: "own", recognizedBy: "self" }]
             : [];
       const openItems = run.platform.tasks.children(task.id).filter((c) => !["done", "failed", "cancelled"].includes(c.status)).length;
-      const affect = await feedbackUpdate(run, [...r.events, ...own], { openItems, consecutiveRuns: 1 });
+      // Fatigue: the real run streak (runs without idle time) and the idle time before this run.
+      const streak = run.platform.metrics.runStreak?.(run.agent.id, Q8_HUMAN_NATURE.fatigueIdleGapMs, Q8_HUMAN_NATURE.fatigueMaxRuns) ?? { consecutiveRuns: 1, idleMsBefore: 0 };
+      const affect = await feedbackUpdate(run, [...r.events, ...own], { openItems, consecutiveRuns: streak.consecutiveRuns, idleMs: streak.idleMsBefore });
       await oodMonitoring(run, null);
       const learning = await onlineLearning(run, { outcome: r.outcome, summary: `${task.title}: ${r.summary}`, resultCount: r.events.length });
       let calibration: CalibrationStats | undefined;

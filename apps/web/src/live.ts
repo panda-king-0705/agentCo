@@ -138,6 +138,7 @@ export function applyEvent(ev: CompanyEvent): void {
       break;
     case "span.started":
     case "span.ended":
+      // Slim payload (no input/output previews): merged over what we have; detail is fetched on demand.
       if (isObj(d) && typeof d.id === "string") patch.spans = { ...state.spans, [d.id]: { ...(state.spans[d.id] ?? {}), ...d } as Span };
       break;
     case "message.created":
@@ -191,6 +192,9 @@ function openSse() {
   source = es;
   for (const t of EVENT_TYPES) es.addEventListener(t, handleFrame as (e: Event) => void);
   es.onmessage = handleFrame;
+  // The server could not replay exactly (gap in its log, or our Last-Event-ID is from another
+  // database after a restart): refetch the state instead of trusting the stream position.
+  es.addEventListener("resync", () => void resync());
   es.onopen = () => {
     failures = 0;
     stopPolling();
@@ -206,6 +210,33 @@ function openSse() {
       startPolling();
     } else set({ connection: "reconnecting" });
   };
+}
+
+let resyncing = false;
+/** Refetches company, org, tasks, approvals and recent events, replacing the cached state. */
+async function resync() {
+  if (resyncing) return;
+  resyncing = true;
+  try {
+    const [company, org, tasks, approvals, events] = await Promise.all([api.company(), api.org(), api.tasks(), api.approvals(), api.events({ limit: 120 }, { quiet: true })]);
+    const byIdOf = <T extends { id: string }>(list: T[]) => byId(list);
+    set({
+      company,
+      departments: byIdOf(org.departments),
+      agents: byIdOf(org.agents),
+      tasks: byIdOf(tasks),
+      approvals: byIdOf(approvals),
+      runs: {},
+      spans: {},
+      events: [...events].sort((a, b) => b.seq - a.seq).slice(0, 400),
+      // The stream position restarts from what this server has (it may be behind ours after a restart).
+      lastSeq: events.reduce((n, e) => Math.max(n, e.seq), 0),
+    });
+  } catch {
+    /* the next resync / catch-up will retry */
+  } finally {
+    resyncing = false;
+  }
 }
 
 async function catchUp() {

@@ -125,6 +125,42 @@ export const Q8_HUMAN_NATURE = {
   arousalPerRun: 0.05,
   arousalIdleDecay: 0.2,
   arousalBase: 0.2,
+  /** Fatigue: runs separated by less idle time than this count as consecutive (tuning). */
+  fatigueIdleGapMs: 10 * 60_000,
+  /** Fatigue: at most this many consecutive runs are counted (tuning). */
+  fatigueMaxRuns: 12,
+  /** Valence decays toward 0 by this share on every Report (tuning) … */
+  valenceDecayPerRun: 0.15,
+  /** … and halves over this much idle time before the run (tuning), so the curiosity boost fades. */
+  valenceHalfLifeMs: 24 * 3_600_000,
+} as const;
+
+// ── Motivation › Purpose → OKR weighting (tuning): purpose scales the vision/OKR alignment
+// multiplier — 1 + visionWeight·vision·(purposeBase + purpose); purpose 0.5 = the plain 1 + 0.5·vision.
+export const PURPOSE_WEIGHTING = {
+  visionWeight: 0.5,
+  purposeBase: 0.5,
+} as const;
+export function alignmentMultiplier(vision: number, purpose: number): number {
+  const v = Math.min(1, Math.max(0, vision));
+  const p = Math.min(1, Math.max(0, purpose));
+  return 1 + PURPOSE_WEIGHTING.visionWeight * v * (PURPOSE_WEIGHTING.purposeBase + p);
+}
+
+// ── Motivation › Maslow › Belonging (tuning): low when the manager is missing/terminated, or when a
+// leader (tier manager or executive) has direct reports and none of them is reachable (active).
+// Response: check in with / escalate to the next ACTIVE ancestor (the Board when there is none, e.g.
+// the CEO); unreachable reports are noted as a Self-ability gap (no delegation this run).
+export const BELONGING = {
+  leaderTiers: ["manager", "executive"] as readonly string[],
+  unreachableReportsGap: "direct reports unreachable (paused or terminated): do the work directly or escalate",
+} as const;
+
+// ── TODO List (Interruptible): yield budget (tuning). A task may be interrupted at most this many
+// times; after that it finishes its pass before the agent turns to the more urgent work, so a stream
+// of messages can never starve an objective. Solving is never interrupted once it has started.
+export const TODO_YIELD = {
+  maxPerTask: 3,
 } as const;
 
 // ── Q9 — Eight Characters and Five Elements in role assignment: tie-breaker only.

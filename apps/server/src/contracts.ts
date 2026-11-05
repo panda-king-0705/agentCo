@@ -312,9 +312,19 @@ export interface BlockProfile {
   errorRate: number | null; // share of llm spans with status error
 }
 
+/** The agent's recent run rhythm (Human Nature › fatigue, valence decay). */
+export interface RunStreak {
+  /** Runs in a row ending with the current one, each starting within `idleGapMs` of the previous one's end (≥ 1). */
+  consecutiveRuns: number;
+  /** Idle time between the previous run's end and the current run's start (ms; 0 when there is none). */
+  idleMsBefore: number;
+}
+
 export interface MetricsView {
   /** Profile of this agent's llm spans whose agentco.stage = block, over the last `days` (default 14). */
   blockProfile(agentId: string, block: string, days?: number): BlockProfile;
+  /** Optional (engines fall back to a streak of 1): the agent's current run streak from the runs table. */
+  runStreak?(agentId: string, idleGapMs: number, maxRuns?: number): RunStreak;
 }
 
 export interface PlatformServices {

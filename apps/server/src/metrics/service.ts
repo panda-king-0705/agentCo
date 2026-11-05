@@ -3,7 +3,7 @@
  * plus the dashboard aggregates behind GET /api/metrics/overview and /timeseries.
  */
 import type { AgentStatus, MetricsOverview, ModelTier, TaskStatus, TimeseriesPoint } from "../../../../packages/shared/src/index.ts";
-import type { BlockProfile, MetricsView } from "../contracts.ts";
+import type { BlockProfile, MetricsView, RunStreak } from "../contracts.ts";
 import type { Repositories } from "../db/index.ts";
 import { all, one } from "../db/sql.ts";
 import { badRequest } from "../http/errors.ts";
@@ -59,6 +59,32 @@ export class MetricsService implements MetricsView {
     };
   }
 
+  /**
+   * Run streak for Human Nature's fatigue: walks the agent's newest runs (the current one first) and
+   * counts those separated by at most `idleGapMs` of idle time (previous end → next start).
+   */
+  runStreak(agentId: string, idleGapMs: number, maxRuns = 12): RunStreak {
+    const rows = all(
+      this.repos.db,
+      "SELECT started_at, completed_at, created_at FROM runs WHERE agent_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+      agentId,
+      Math.max(1, maxRuns) + 1,
+    );
+    const time = (v: unknown): number | null => (typeof v === "string" && Number.isFinite(Date.parse(v)) ? Date.parse(v) : null);
+    if (rows.length === 0) return { consecutiveRuns: 1, idleMsBefore: 0 };
+    const startOf = (r: Record<string, unknown>) => time(r.started_at) ?? time(r.created_at) ?? this.now().getTime();
+    let consecutiveRuns = 1;
+    let idleMsBefore = 0;
+    for (let i = 1; i < rows.length && consecutiveRuns < maxRuns; i++) {
+      const prevEnd = time(rows[i]!.completed_at) ?? startOf(rows[i]!);
+      const gap = Math.max(0, startOf(rows[i - 1]!) - prevEnd);
+      if (i === 1) idleMsBefore = gap;
+      if (gap > idleGapMs) break;
+      consecutiveRuns++;
+    }
+    return { consecutiveRuns, idleMsBefore };
+  }
+
   overview(): MetricsOverview {
     const repos = this.repos;
     const at = this.now();
@@ -79,7 +105,8 @@ export class MetricsService implements MetricsView {
     const succeeded = finished.filter((r) => r.status === "completed").length;
     const durations = finished.map((r) => Date.parse(String(r.completed_at)) - Date.parse(String(r.started_at))).filter((d) => Number.isFinite(d) && d >= 0);
     const tokens = repos.spend.totals(dayAgo);
-    const savings = one(repos.db, "SELECT COALESCE(SUM(frontier_cost_usd - cost_usd), 0) AS s FROM spend");
+    // Same window as spentMonthUsd / spendByTier, which the console compares it with.
+    const savings = one(repos.db, "SELECT COALESCE(SUM(frontier_cost_usd - cost_usd), 0) AS s FROM spend WHERE at >= ?", month);
     return {
       agentsByStatus,
       tasksByStatus,
