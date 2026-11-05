@@ -3,7 +3,9 @@
  *
  *  - nothing starts while the company is paused (kill switch);
  *  - at most `maxConcurrentRuns` runs in total, one run per agent;
- *  - agents that are paused, terminated or out of budget are skipped (tasks);
+ *  - agents that are paused, terminated, busy or out of budget are skipped (tasks) —
+ *    excluded in SQL and paged past, so no backlog of an ineligible agent can starve
+ *    the others (pages of READY_PAGE until the free slots are filled);
  *  - queued chat messages (humans waiting for an answer) go first, then `todo`
  *    tasks by priority = value / cost (oldest first on ties).
  */
@@ -20,6 +22,8 @@ export interface RunLauncher {
   isBusy(agentId: string): boolean;
   startTaskRun(task: Task): unknown | null;
   startMessageRun(message: Message): unknown | null;
+  /** Agents with an active run (excluded from the ready query); optional for simple launchers. */
+  busyAgentIds?(): Iterable<string>;
 }
 
 export interface SchedulerDeps {
@@ -35,6 +39,8 @@ export interface SchedulerDeps {
 const WAKE_EVENTS = new Set(["task.created", "task.updated", "message.created", "run.completed", "company.updated", "agent.updated", "approval.decided"]);
 /** An agent with less budget than this left is treated as out of budget. */
 export const MIN_RUN_BUDGET_USD = 0.0005;
+/** Ready tasks fetched per query while filling free slots. */
+export const READY_PAGE = 200;
 
 export class Scheduler {
   private readonly deps: SchedulerDeps;
@@ -115,17 +121,32 @@ export class Scheduler {
       }
     }
 
-    // 2) ready tasks by priority
-    for (const task of repos.tasks.ready()) {
-      if (free <= 0) break;
-      const assignee = task.assigneeId ? org.getAgent(task.assigneeId) : null;
-      if (!assignee || assignee.status === "terminated" || assignee.status === "paused") continue;
-      if (runs.isBusy(assignee.id)) continue;
-      if (org.budgetRemainingUsd(assignee.id) < MIN_RUN_BUDGET_USD) continue;
-      if (runs.startTaskRun(task)) {
-        free -= 1;
-        started += 1;
+    // 2) ready tasks by priority, paging past agents that cannot run now
+    const excluded = new Set<string>(runs.busyAgentIds?.() ?? []);
+    let after: Task | null = null;
+    while (free > 0) {
+      const page = repos.tasks.ready({ limit: READY_PAGE, excludeAssignees: excluded, after });
+      for (const task of page) {
+        if (free <= 0) break;
+        const assigneeId = task.assigneeId as string;
+        if (excluded.has(assigneeId)) continue;
+        const assignee = org.getAgent(assigneeId);
+        if (!assignee || assignee.status === "terminated" || assignee.status === "paused" || runs.isBusy(assignee.id)) {
+          excluded.add(assigneeId);
+          continue;
+        }
+        if (org.budgetRemainingUsd(assignee.id) < MIN_RUN_BUDGET_USD) {
+          excluded.add(assigneeId);
+          continue;
+        }
+        if (runs.startTaskRun(task)) {
+          free -= 1;
+          started += 1;
+          excluded.add(assigneeId); // one run per agent
+        }
       }
+      if (page.length < READY_PAGE) break;
+      after = page[page.length - 1]!;
     }
     return started;
   }

@@ -9,6 +9,7 @@ import type { SpanAttributes } from "../../../../../packages/shared/src/index.ts
 import { isAbortError, isBudgetError } from "../../models/router.ts";
 import { obj, type Json } from "../coerce.ts";
 import { jsonContract, systemPrompt, type AgentFacts } from "../prompt.ts";
+import type { EscalationState } from "./escalation.ts";
 import type { Drives } from "./self-management/identity.ts";
 
 /** Local working memory for one task pass; the serialisable part persists in task.state. */
@@ -61,6 +62,8 @@ export interface BrainRun {
   parent: SpanHandle | null;
   /** The block currently executing (for call records). */
   currentBlock: BrainBlockId | null;
+  /** Escalation budget of the task (escalation.ts); absent on message runs. */
+  escalation?: EscalationState;
 }
 
 export function blockSpanName(id: BrainBlockId): string {

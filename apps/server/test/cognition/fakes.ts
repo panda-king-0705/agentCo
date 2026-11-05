@@ -409,11 +409,14 @@ export class FakePlatform implements PlatformServices {
       this.taskMap.set(id, task);
       return task;
     },
+    // Like the real TaskService: the stored row is replaced and a fresh copy returned, so an
+    // engine holding the run's input snapshot does NOT see the patch unless it uses the result.
     patchState: (taskId, patch) => {
       const t = this.taskMap.get(taskId);
       if (!t) throw new Error(`no task ${taskId}`);
-      t.state = { ...t.state, ...patch };
-      return t;
+      const next: Task = { ...t, state: { ...t.state, ...patch } };
+      this.taskMap.set(taskId, next);
+      return { ...next, state: { ...next.state } };
     },
     interruptFor: () => this.interruptReason,
     cancel: (taskId, reason) => {

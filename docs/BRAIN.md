@@ -141,6 +141,20 @@ chat reply (intent chat) or a new objective on the own TODO list (intent work);
 checkpointed block with the answer in local working memory; `recovery` →
 Rollback/Failure Recovery first (inspect existing subtasks, never duplicate).
 
+**Answers and the escalation budget** (`brain/escalation.ts`). Escalating —
+Early Stop, a Feedback `escalate`, or an `escalate`/`ask_human` call inside the
+Solving tool loop (which ends the loop; the engine reuses that escalation) —
+checkpoints the run (`escalated to manager` / `asked the Board`) and counts it
+in `task.state.escalation {count, answered}`. The answer comes back into local
+working memory (`task.state.answers`, `wm.escalationAnswer` / `wm.boardAnswer`)
+and into the planning and Solving prompts; the engine always reasons over the
+task row `patchState` returns, never the run's input snapshot. Once a manager
+or the Board has answered, the task cannot be escalated again (at most 2
+escalations per task in any case): Early Stop proceeds with the guidance, the
+tools are withdrawn from Solving, and Feedback settles on accept-partial
+(score ≥ 0.4) or **fail** when no revision, rollback or escalation is left —
+never an endless `revise` across wake-ups.
+
 Model calls per full pass: problem definition (economy), analysis (standard),
 confidence (economy), cognitive control (agent tier), reverse thinking
 (economy, conditional), solving (agent tier, 0..6 tool steps), feedback

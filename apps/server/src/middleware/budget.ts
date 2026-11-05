@@ -6,6 +6,13 @@
  *   department monthly (Department.monthlyBudgetUsd, 0 = no cap),
  *   company daily and monthly (CompanySettings).
  * recordSpend writes the `spend` row and rolls cost up into the run and task.
+ *
+ * Reservation ledger: a call in flight has not written its spend row yet, so
+ * concurrent calls could each pass the check and overrun a hard cap together.
+ * assertCanSpend(agentId, estimate, reservationId) therefore counts every
+ * outstanding reservation and, when it passes, reserves the estimate; the
+ * reservation is released by recordSpend (entry.reservationId) or release()
+ * when the call fails.
  */
 import type { CompanySettings } from "../../../../packages/shared/src/index.ts";
 import type { BudgetExceededErrorShape, BudgetGate, SpendEntry } from "../contracts.ts";
@@ -55,33 +62,66 @@ export interface BudgetDeps {
   now: () => Date;
 }
 
+interface Reservation {
+  agentId: string;
+  departmentId: string | null;
+  amountUsd: number;
+}
+
 export class BudgetService implements BudgetGate {
   private readonly deps: BudgetDeps;
+  private readonly reservations = new Map<string, Reservation>();
 
   constructor(deps: BudgetDeps) {
     this.deps = deps;
   }
 
-  /** Throws BudgetExceededError when spent + estimate would pass any cap. */
-  assertCanSpend(agentId: string, estimateUsd: number): void {
-    const estimate = Math.max(0, estimateUsd);
+  /**
+   * Throws BudgetExceededError when spent + outstanding reservations + estimate would pass
+   * any cap; with a reservationId the estimate is then reserved (see the module comment).
+   */
+  assertCanSpend(agentId: string, estimateUsd: number, reservationId?: string): void {
+    const estimate = Number.isFinite(estimateUsd) ? Math.max(0, estimateUsd) : 0;
     const settings = this.deps.settings();
     const now = this.deps.now();
-    const check = (scope: BudgetScope, period: BudgetPeriod, limit: number, spent: number, ids: { agentId?: string; departmentId?: string } = {}) => {
-      if (spent + estimate > limit) throw new BudgetExceededError({ scope, period, limitUsd: limit, spentUsd: spent, ...ids });
+    const check = (scope: BudgetScope, period: BudgetPeriod, limit: number, spent: number, reserved: number, ids: { agentId?: string; departmentId?: string } = {}) => {
+      if (spent + reserved + estimate > limit) throw new BudgetExceededError({ scope, period, limitUsd: limit, spentUsd: spent + reserved, ...ids });
     };
-    check("company", "daily", settings.dailyBudgetUsd, this.companySpent(dayStart(now)));
-    check("company", "monthly", settings.monthlyBudgetUsd, this.companySpent(monthStart(now)));
+    const companyReserved = this.reserved(() => true);
+    check("company", "daily", settings.dailyBudgetUsd, this.companySpent(dayStart(now)), companyReserved);
+    check("company", "monthly", settings.monthlyBudgetUsd, this.companySpent(monthStart(now)), companyReserved);
     const agent = this.deps.repos.agents.get(agentId);
-    if (!agent) return;
-    if (agent.monthlyBudgetUsd > 0) check("agent", "monthly", agent.monthlyBudgetUsd, this.agentSpent(agentId, monthStart(now)), { agentId });
-    const department = this.deps.repos.departments.get(agent.departmentId);
-    if (department && department.monthlyBudgetUsd > 0) {
-      check("department", "monthly", department.monthlyBudgetUsd, this.departmentSpent(department.id, monthStart(now)), { departmentId: department.id });
+    if (agent) {
+      if (agent.monthlyBudgetUsd > 0) {
+        check("agent", "monthly", agent.monthlyBudgetUsd, this.agentSpent(agentId, monthStart(now)), this.reserved((r) => r.agentId === agentId), { agentId });
+      }
+      const department = this.deps.repos.departments.get(agent.departmentId);
+      if (department && department.monthlyBudgetUsd > 0) {
+        check("department", "monthly", department.monthlyBudgetUsd, this.departmentSpent(department.id, monthStart(now)), this.reserved((r) => r.departmentId === department.id), {
+          departmentId: department.id,
+        });
+      }
     }
+    if (reservationId) this.reservations.set(reservationId, { agentId, departmentId: agent?.departmentId ?? null, amountUsd: estimate });
   }
 
-  /** Writes the spend row, adds usage/cost to the run and cost to the task; emits budget.alert at 80 %. */
+  /** Drops a reservation (failed or aborted call). Idempotent. */
+  release(reservationId: string): void {
+    this.reservations.delete(reservationId);
+  }
+
+  /** USD reserved by calls in flight (all of them, or one agent's). */
+  reservedUsd(agentId?: string): number {
+    return this.reserved((r) => agentId === undefined || r.agentId === agentId);
+  }
+
+  private reserved(match: (r: Reservation) => boolean): number {
+    let total = 0;
+    for (const r of this.reservations.values()) if (match(r)) total += r.amountUsd;
+    return total;
+  }
+
+  /** Writes the spend row, adds usage/cost to the run and cost to the task, releases the call's reservation; emits budget.alert at 80 %. */
   recordSpend(entry: SpendEntry): void {
     const { repos } = this.deps;
     const at = this.deps.now().toISOString();
@@ -93,9 +133,12 @@ export class BudgetService implements BudgetGate {
         inputTokens: entry.inputTokens, outputTokens: entry.outputTokens, cachedInputTokens: entry.cachedInputTokens,
         costUsd: entry.costUsd, frontierCostUsd: entry.frontierCostUsd, departmentId: agent?.departmentId ?? null, at,
       });
-      repos.runs.addUsage(entry.runId, { ...entry });
+      const { reservationId: _r, ...usage } = entry;
+      repos.runs.addUsage(entry.runId, usage);
       if (entry.taskId) repos.tasks.addCost(entry.taskId, entry.costUsd);
     });
+    // The actual cost is on the books now (same tick, so the cap never sees neither).
+    if (entry.reservationId) this.release(entry.reservationId);
     this.maybeAlert();
   }
 
@@ -115,14 +158,17 @@ export class BudgetService implements BudgetGate {
   remainingFor(agentId: string): number {
     const now = this.deps.now();
     const settings = this.deps.settings();
+    const companyReserved = this.reserved(() => true);
     const caps = [
-      settings.dailyBudgetUsd - this.companySpent(dayStart(now)),
-      settings.monthlyBudgetUsd - this.companySpent(monthStart(now)),
+      settings.dailyBudgetUsd - this.companySpent(dayStart(now)) - companyReserved,
+      settings.monthlyBudgetUsd - this.companySpent(monthStart(now)) - companyReserved,
     ];
     const agent = this.deps.repos.agents.get(agentId);
-    if (agent && agent.monthlyBudgetUsd > 0) caps.push(agent.monthlyBudgetUsd - this.agentSpent(agentId, monthStart(now)));
+    if (agent && agent.monthlyBudgetUsd > 0) caps.push(agent.monthlyBudgetUsd - this.agentSpent(agentId, monthStart(now)) - this.reserved((r) => r.agentId === agentId));
     const department = agent ? this.deps.repos.departments.get(agent.departmentId) : null;
-    if (department && department.monthlyBudgetUsd > 0) caps.push(department.monthlyBudgetUsd - this.departmentSpent(department.id, monthStart(now)));
+    if (department && department.monthlyBudgetUsd > 0) {
+      caps.push(department.monthlyBudgetUsd - this.departmentSpent(department.id, monthStart(now)) - this.reserved((r) => r.departmentId === department.id));
+    }
     return Math.max(0, Math.min(...caps));
   }
 

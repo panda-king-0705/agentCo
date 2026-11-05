@@ -93,9 +93,15 @@ export class TracerImpl implements Tracer {
     this.finish(span, options);
   }
 
-  /** @internal persists attribute changes */
+  /** @internal persists attribute changes (never on a span that has already ended, e.g. via endById) */
   persistAttributes(span: Span): void {
+    if (!this.isRunning(span.id)) return;
     this.deps.spans.update(span.id, { attributes: span.attributes });
+  }
+
+  /** @internal true while the persisted row is still `running` */
+  isRunning(spanId: string): boolean {
+    return this.deps.spans.get(spanId)?.status === "running";
   }
 
   /** @internal finalises a span row and emits span.ended */
@@ -159,9 +165,15 @@ class SpanHandleImpl implements SpanHandle {
     if (!this.ended) this.tracer.persistAttributes(this.span);
   }
 
+  /**
+   * Idempotent (SpanHandle contract): a second end() is ignored, and so is an end() after the
+   * row was closed by someone else (RunService closing a finished run's open spans via endById
+   * while an aborted engine still holds the handle) — the first status wins, one span.ended event.
+   */
   end(options: EndSpanOptions = {}): void {
     if (this.ended) return;
     this.ended = true;
+    if (!this.tracer.isRunning(this.span.id)) return;
     this.tracer.finish(this.span, options);
   }
 

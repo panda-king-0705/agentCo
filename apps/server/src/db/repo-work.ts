@@ -51,12 +51,30 @@ export class TaskRepo {
     return all(this.db, "SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY number", parentId).map(toTask);
   }
 
-  /** Ready work in scheduling order: priority desc, then oldest first. */
-  ready(limit = 200): Task[] {
-    return all(
-      this.db,
-      `SELECT * FROM tasks WHERE status = 'todo' AND assignee_id IS NOT NULL ORDER BY priority DESC, created_at ASC, number ASC LIMIT ${limit}`,
-    ).map(toTask);
+  /**
+   * Ready work in scheduling order (priority desc, then oldest first), one page at a time.
+   * Tasks whose assignee cannot run — paused or terminated (joined), or listed in
+   * `excludeAssignees` (busy, out of budget, already started this pass) — never take a slot
+   * in the page, so a large backlog of an ineligible agent cannot starve everyone else.
+   * `after` continues from the last task of the previous page (keyset pagination).
+   */
+  ready(options: { limit?: number; excludeAssignees?: Iterable<string>; after?: Pick<Task, "priority" | "createdAt" | "number"> | null } = {}): Task[] {
+    const limit = Math.min(Math.max(Math.floor(options.limit ?? 200), 1), 5000);
+    const excluded = [...new Set(options.excludeAssignees ?? [])];
+    const params: (string | number)[] = [];
+    let sql = `SELECT t.* FROM tasks t JOIN agents a ON a.id = t.assignee_id
+       WHERE t.status = 'todo' AND a.status NOT IN ('paused', 'terminated')`;
+    if (excluded.length > 0) {
+      sql += ` AND t.assignee_id NOT IN (${excluded.map(() => "?").join(", ")})`;
+      params.push(...excluded);
+    }
+    const after = options.after;
+    if (after) {
+      sql += " AND (t.priority < ? OR (t.priority = ? AND (t.created_at > ? OR (t.created_at = ? AND t.number > ?))))";
+      params.push(after.priority, after.priority, after.createdAt, after.createdAt, after.number);
+    }
+    sql += ` ORDER BY t.priority DESC, t.created_at ASC, t.number ASC LIMIT ${limit}`;
+    return all(this.db, sql, ...params).map(toTask);
   }
 
   openForAssignee(assigneeId: string): Task[] {

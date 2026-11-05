@@ -2,12 +2,16 @@
  * ModelRouter: tier → profile resolution, stage routing, one traced and
  * budget-checked call per chat(), fallback once on provider error.
  *
- * chat(): budget.assertCanSpend(estimate) → `llm` span (child of
+ * chat(): budget.assertCanSpend(estimate, reservationId) → `llm` span (child of
  * ctx.parentSpanId) → provider.complete → cost from the profile's prices
  * (cached input priced separately) → budget.recordSpend (incl. what the call
  * would have cost on the frontier primary) → span end. A provider error ends
  * the span with status error and retries once on the tier's fallback profile
  * (new span). BudgetExceededError and aborts are never swallowed.
+ *
+ * The estimate stays reserved in the budget ledger while the call is in flight,
+ * so concurrent calls cannot overrun a hard cap together; recordSpend releases
+ * it, and so does any failure (release() in a finally).
  */
 import type { Agent, ModelProfile, ModelTier } from "../../../../packages/shared/src/index.ts";
 import type {
@@ -38,10 +42,16 @@ export function isBudgetError(err: unknown): boolean {
   return !!err && typeof err === "object" && (err as { name?: unknown }).name === "BudgetExceededError";
 }
 
+/**
+ * True when `err` means "the caller cancelled". With a signal, only the signal decides: a
+ * provider-side AbortError/TimeoutError while the run's signal is still live is a provider
+ * failure (e.g. the per-request timeout), which the router retries on the fallback profile.
+ * Without a signal, the error name decides (a TimeoutError is not an abort).
+ */
 export function isAbortError(err: unknown, signal?: AbortSignal): boolean {
-  if (signal?.aborted) return true;
+  if (signal) return signal.aborted;
   const name = err && typeof err === "object" ? (err as { name?: unknown }).name : undefined;
-  return name === "AbortError" || name === "TimeoutError";
+  return name === "AbortError" || name === "RunAbortedError";
 }
 
 export function renderPrompt(messages: ChatMessage[]): string {
@@ -72,6 +82,7 @@ class ModelRouterImpl implements ModelRouter {
   private readonly config: ModelConfig;
   private readonly providers: Record<string, ModelProvider>;
   private readonly overrideCache = new Map<string, ModelProfile | null>();
+  private reservationSeq = 0;
 
   constructor(deps: ModelRouterDeps & { config: ModelConfig } & ModelRouterExtras) {
     this.deps = deps;
@@ -127,7 +138,8 @@ class ModelRouterImpl implements ModelRouter {
     try {
       return await this.attempt(first, request, ctx, null);
     } catch (err) {
-      if (isBudgetError(err) || isAbortError(err, ctx.signal)) throw err;
+      // Only the caller's own signal is an abort; a provider timeout goes to the fallback profile.
+      if (isBudgetError(err) || ctx.signal.aborted) throw err;
       const fallback = this.fallbackFor(first, request.tier);
       if (!fallback) throw err;
       return this.attempt(fallback, request, ctx, first.id);
@@ -139,8 +151,24 @@ class ModelRouterImpl implements ModelRouter {
     const maxOutputTokens = request.maxOutputTokens ?? this.config.defaultMaxOutputTokens;
     const estimate =
       (Math.ceil(promptChars(request) / 4) * profile.inputPerMTokUsd + maxOutputTokens * profile.outputPerMTokUsd) / 1_000_000;
-    this.deps.budget.assertCanSpend(ctx.agentId, estimate);
+    const reservationId = `rsv_${ctx.runId}_${++this.reservationSeq}`;
+    this.deps.budget.assertCanSpend(ctx.agentId, estimate, reservationId);
+    try {
+      return await this.call(profile, request, ctx, fallbackFrom, maxOutputTokens, estimate, reservationId);
+    } finally {
+      this.deps.budget.release?.(reservationId);
+    }
+  }
 
+  private async call(
+    profile: ModelProfile,
+    request: ChatRequest,
+    ctx: ChatCallContext,
+    fallbackFrom: string | null,
+    maxOutputTokens: number,
+    estimate: number,
+    reservationId: string,
+  ): Promise<ChatResponse> {
     const span: SpanHandle = this.deps.tracer.startSpan({
       traceId: ctx.traceId,
       parentSpanId: ctx.parentSpanId,
@@ -203,6 +231,7 @@ class ModelRouterImpl implements ModelRouter {
         cachedInputTokens: usage.cachedInputTokens,
         costUsd: cost,
         frontierCostUsd: frontierCost,
+        reservationId,
       });
     } catch (err) {
       span.end({ status: "error", error: `recordSpend failed: ${(err as Error).message}`, model: profile.model, costUsd: cost });

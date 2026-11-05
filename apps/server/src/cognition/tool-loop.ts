@@ -2,6 +2,11 @@
  * Bounded tool loop shared by ReflexEngine and the brain's Solving block.
  * Terminal tools (complete_task, report_blocker) are handled here and traced
  * as `tool` spans; everything else goes through platform.tools.execute.
+ *
+ * escalate / ask_human also end the loop once they succeed — the agent now waits
+ * for an answer and must not carry on (or complete the task) without it:
+ *   escalation subtask for the manager (task_created) → status "waiting", escalationTaskId;
+ *   Board question (approval_requested)               → status "blocked", approvalId.
  */
 import type { Agent, BrainBlockId, ModelTier } from "../../../../packages/shared/src/index.ts";
 import type { ChatMessage, ChatResponse, EngineContext, SpanHandle, ToolCall, ToolEffect, ToolSpec } from "../contracts.ts";
@@ -40,10 +45,20 @@ export interface ToolLoopOptions {
   onResponse?: (response: ChatResponse, latencyMs: number) => void;
 }
 
+export const ESCALATION_TOOLS: ReadonlySet<string> = new Set(["escalate", "ask_human"]);
+
 export interface ToolLoopResult {
-  status: "completed" | "blocked" | "exhausted";
+  /**
+   * completed: complete_task / plain answer · blocked: report_blocker (reason) or a Board
+   * question (approvalId) · waiting: an escalation subtask (escalationTaskId) · exhausted.
+   */
+  status: "completed" | "blocked" | "waiting" | "exhausted";
   result: string;
   reason: string;
+  /** The escalation subtask an `escalate` call created (status waiting). */
+  escalationTaskId?: string;
+  /** The approval an `ask_human` / CEO `escalate` call opened (status blocked). */
+  approvalId?: string;
   steps: number;
   toolCalls: number;
   effects: ToolEffect[];
@@ -107,6 +122,14 @@ function terminalSpan(parent: SpanHandle, call: ToolCall, output: string, ok: bo
     attributes: { "gen_ai.tool.name": call.name, "gen_ai.tool.call.id": call.id, "agentco.terminal": true },
   });
   span.end(ok ? { status: "ok", output } : { status: "error", error: output });
+}
+
+function describeEscalation(call: ToolCall): string {
+  const a = call.arguments;
+  const pick = (k: string) => (typeof a[k] === "string" ? (a[k] as string).trim() : "");
+  const reason = pick("reason");
+  const question = pick("question");
+  return truncate([reason, question && question !== reason ? `Question: ${question}` : ""].filter(Boolean).join(" — ") || `${call.name} called`, 600);
 }
 
 export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
@@ -196,6 +219,23 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
         name: call.name,
         content: truncate(`${result.ok ? "" : "Error: "}${result.content}`, TOOL_RESULT_CHARS),
       });
+      if (result.ok && ESCALATION_TOOLS.has(call.name)) {
+        const reason = describeEscalation(call);
+        const subtask = result.effects.find((e): e is Extract<ToolEffect, { kind: "task_created" }> => e.kind === "task_created");
+        const approval = result.effects.find((e): e is Extract<ToolEffect, { kind: "approval_requested" }> => e.kind === "approval_requested");
+        if (subtask) {
+          out.status = "waiting";
+          out.reason = reason;
+          out.escalationTaskId = subtask.taskId;
+          return out;
+        }
+        if (approval) {
+          out.status = "blocked";
+          out.reason = reason;
+          out.approvalId = approval.approvalId;
+          return out;
+        }
+      }
     }
   }
   return out;

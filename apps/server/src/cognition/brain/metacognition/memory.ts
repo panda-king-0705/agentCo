@@ -23,6 +23,10 @@ export async function localWorkingMemory(run: BrainRun): Promise<string[]> {
       const ans = obj(a);
       lines.push(`Board/manager answer: ${oneLine(str(ans.note, str(ans.status, "")), 200)}`);
     }
+    const esc = run.wm.escalationAnswer;
+    if (typeof esc === "string" && esc.trim()) lines.push(`Manager answer (this run): ${oneLine(esc, 300)}`);
+    const board = obj(run.wm.boardAnswer);
+    if (board.status) lines.push(`Board answer (this run, ${str(board.status, "decided")}): ${oneLine(str(board.note, "(no note)"), 300)}`);
     for (const issue of arr(plan.feedback).slice(0, 4)) lines.push(`Open feedback: ${oneLine(str(issue, ""), 160)}`);
     return lines;
   });

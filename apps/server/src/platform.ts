@@ -96,10 +96,16 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const workspaces = new Workspaces(config.dataDir);
 
   const tools = new ToolExecutorImpl(config, { onCall: (runId) => repos.runs.incrementToolCalls(runId) });
-  const org = new OrgService({ repos, bus, company, budget, workspaces, now, castBaZi: computeBaZi, knownTools: () => tools.names() });
+  const org = new OrgService({
+    repos, bus, company, budget, workspaces, now, castBaZi: computeBaZi,
+    knownTools: () => tools.names(),
+    // late-bound: modelsInfo is built below
+    knownProfiles: () => modelsInfo().profiles.map((p) => p.id),
+  });
   const conversations = new ConversationService(repos, bus, redactor, now);
   const memory = new MemoryServiceImpl(repos, bus, redactor, now);
   const tasks = new TaskService({ repos, bus, tracer, org, conversations, now, redactor });
+  org.attachTaskReassigner((taskId, assigneeId, reason) => tasks.reassign(taskId, assigneeId, reason));
   const approvals = new ApprovalService({ repos, bus, org, tasks, company, now, redactor });
   tools.bind({ config, org, tasks, approvals, conversations, memory, workspaces, company, tracer });
 

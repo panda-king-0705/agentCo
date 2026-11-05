@@ -109,7 +109,7 @@ test("brain: task → delegates to direct reports (Role Arrangement) → waiting
   assert.equal(plan.mode, "delegate");
   assert.ok(["high_cost", "low_cost", "low_effort"].includes(String(plan.chosen)));
   assert.equal((plan.subprocesses as unknown[]).length, children.length);
-  assert.ok((task.state.plan as Record<string, unknown>).problem, "plan persisted via patchState before solving");
+  assert.ok((p.tasks.get(task.id)!.state.plan as Record<string, unknown>).problem, "plan persisted via patchState before solving");
   // Trace: phases + blocks + delegation spans; every stage span is a block or a phase.
   const names = new Set(p.tracer.spans.map((s) => s.name));
   for (const n of ["brain.target_understanding", "brain.confidence", "brain.planning", "brain.solving"]) assert.ok(names.has(n), n);
@@ -423,11 +423,19 @@ test("brain: human_answer resumes with the answer in local working memory; Board
   assert.equal(blocked.outcome, "blocked");
   apply(task, blocked);
   const approval = { ...p.approvals[0]!, status: "approved" as const, note: "Go ahead, focus on the US market first." };
+  const before = p.tracer.byKind("llm").length;
   const r = await brain().run(p.context(ceo, taskInput(task, "human_answer", { answeredApproval: approval })));
   assert.equal(r.outcome, "waiting");
-  assert.equal((task.state.answers as unknown[]).length, 1);
-  const lit = p.tracer.byKind("llm").filter((s) => s.attributes["agentco.stage"] === "metacognition.target_understanding.analysis").at(-1)!;
-  assert.ok(lit.input!.includes("focus on the US market"), "answer recalled from local working memory");
+  assert.equal((p.tasks.get(task.id)!.state.answers as unknown[]).length, 1, "answer stored in local working memory (task.state)");
+  // Resumed at the checkpointed Confidence block: Target Understanding is not redone…
+  const todo = p.tracer.spans.filter((s) => s.attributes["agentco.brain.block"] === "todo_list").at(-1)!;
+  assert.equal(todo.attributes["agentco.todo.checkpoint"], "metacognition.confidence");
+  const resumedCalls = p.tracer.byKind("llm").slice(before);
+  assert.ok(!resumedCalls.some((s) => s.attributes["agentco.stage"] === "metacognition.target_understanding.problem_definition"), "problem definition not redone");
+  // …and the Board's answer reaches the planning prompt of the run it triggered.
+  const control = resumedCalls.find((s) => s.attributes["agentco.stage"] === "metacognition.cognitive_control")!;
+  assert.ok(control.input!.includes("focus on the US market"), "answer in the cognitive-control prompt");
+  assert.deepEqual((r.taskState as Record<string, unknown>).escalation, { count: 1, answered: true });
 });
 
 test("brain: abort propagates; budget errors propagate", async () => {
@@ -446,15 +454,17 @@ test("company end-to-end on the mock: Board → CEO → C-suite → workers → 
   const engines = createEngines({ reflexMaxSteps: 8, brainMaxRevisions: 2, runTimeoutMs: 300_000 });
   const chat = await engines.brain.run(p.context(ceo, messageInput(LAUNCH), { traceId: "trc_launch" }));
   assert.match(chat.output, /^Opened T-/);
-  const root = [...p.taskMap.values()].find((t) => t.parentTaskId === null)!;
-  const pending = new Map<string, "task" | "subtasks_completed">([[root.id, "task"]]);
+  const first = [...p.taskMap.values()].find((t) => t.parentTaskId === null)!;
+  const pending = new Map<string, "task" | "subtasks_completed">([[first.id, "task"]]);
   for (let guard = 0; guard < 200 && pending.size > 0; guard++) {
     const [id, trigger] = [...pending.entries()][0]!;
     pending.delete(id);
-    const task = p.taskMap.get(id)!;
+    let task = p.taskMap.get(id)!;
     const agent = p.agentMap.get(task.assigneeId!)!;
     task.status = "in_progress";
-    const r = await engines[agent.cognition].run(p.context(agent, taskInput(task, trigger, { subtasks: p.tasks.children(task.id) })));
+    const r = await engines[agent.cognition].run(p.context(agent, taskInput({ ...task, state: { ...task.state } }, trigger, { subtasks: p.tasks.children(task.id) })));
+    // Like RunService: apply the result to the current row (patchState may have replaced it).
+    task = p.taskMap.get(id)!;
     apply(task, r);
     if (r.outcome === "completed") {
       task.status = "done";
@@ -477,6 +487,7 @@ test("company end-to-end on the mock: Board → CEO → C-suite → workers → 
       }
     }
   }
+  const root = p.taskMap.get(first.id)!;
   assert.equal(root.status, "done", `root ended ${root.status}: ${root.error ?? ""}`);
   const all = [...p.taskMap.values()];
   const children = all.filter((t) => t.parentTaskId === root.id);

@@ -35,6 +35,13 @@ export interface AppConfig {
   schedulerTickMs: number;
   /** Directory with the built console; defaults to apps/web/dist. */
   webDistDir: string;
+  /**
+   * Extra browser origins allowed to call state-changing endpoints (ALLOWED_ORIGINS, comma
+   * separated, e.g. "https://agentco.example"); same host:port and the Vite dev origins always are.
+   */
+  allowedOrigins: string[];
+  /** Extra Host names accepted besides loopback names and HOST (ALLOWED_HOSTS, comma separated). */
+  allowedHosts: string[];
   /** Secret literals (API keys, auth token) the redactor always masks. */
   secretLiterals: string[];
   /** Env keys that were explicitly set; those override persisted company settings at boot. */
@@ -91,11 +98,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     webFetchEnabled: reader.bool("WEB_FETCH_ENABLED", false),
     schedulerTickMs: reader.int("SCHEDULER_TICK_MS", 750, 10, 60_000),
     webDistDir: resolve(reader.str("WEB_DIST_DIR", defaultWebDist())),
+    allowedOrigins: list(reader.str("ALLOWED_ORIGINS", ""))
+      .map((o) => o.replace(/\/+$/, "").toLowerCase())
+      .filter((o) => {
+        if (/^https?:\/\/[^/\s]+$/.test(o)) return true;
+        errors.push(`ALLOWED_ORIGINS entry "${o}" must be an origin like https://host[:port]`);
+        return false;
+      }),
+    allowedHosts: list(reader.str("ALLOWED_HOSTS", "")).map((h) => h.toLowerCase()),
     secretLiterals: collectSecrets(env),
     explicitKeys: new Set(Object.keys(env).filter((k) => (env[k] ?? "").trim() !== "")),
   };
   if (errors.length > 0) throw new ConfigError("Invalid configuration:\n  - " + errors.join("\n  - "));
   return config;
+}
+
+function list(value: string): string[] {
+  return value
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
 function defaultWebDist(): string {

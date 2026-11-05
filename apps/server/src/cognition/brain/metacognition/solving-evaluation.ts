@@ -4,14 +4,18 @@
  * Solving: delegated subprocesses (delegate_task, one delegation span each,
  * never duplicating an existing subtask) → outcome waiting; else a bounded
  * tool loop (≤ 6 steps) with recalled memory in context → solution.
+ * An escalate / ask_human call in that loop ends Solving → kind "escalated"
+ * (the engine waits for the answer instead of carrying on without it).
  * Feedback: evaluate against the success criteria and the three Monitoring
- * gates (truthful / efficient / good) → accept | revise | rollback | escalate.
+ * gates (truthful / efficient / good) → accept | revise | rollback | escalate,
+ * or fail once nothing is left to try (no revision, rollback or escalation).
  */
 import type { ModelTier, Task } from "../../../../../../packages/shared/src/index.ts";
 import type { ToolEffect } from "../../../contracts.ts";
 import { oneOf, str, strArr, unit } from "../../coerce.ts";
 import { oneLine, truncate } from "../../text.ts";
-import { runToolLoop } from "../../tool-loop.ts";
+import { ESCALATION_TOOLS, runToolLoop } from "../../tool-loop.ts";
+import { canEscalate } from "../escalation.ts";
 import { Q4_CONTROL, Q6_EXECUTION, q6SubprocessCount, type CandidateName } from "../interpretation.ts";
 import { block, llmJson, recordCall, toolContext, type BrainRun } from "../runtime.ts";
 import type { Subprocess } from "./cognitive-control.ts";
@@ -25,10 +29,22 @@ export function shiftTier(tier: ModelTier, shift: -1 | 0 | 1): ModelTier {
 }
 
 export interface Solution {
-  kind: "waiting" | "solution" | "failed";
+  kind: "waiting" | "solution" | "failed" | "escalated";
   text: string;
   delegated: Subprocess[];
   effects: ToolEffect[];
+  /** kind "escalated": the escalation subtask (manager) or approval (Board) the loop opened. */
+  escalation?: { subtaskId: string | null; approvalId: string | null; reason: string };
+}
+
+/** Answers from the manager / the Board this run carries in local working memory. */
+export function guidanceLines(run: BrainRun): string[] {
+  const lines: string[] = [];
+  const esc = run.wm.escalationAnswer;
+  if (typeof esc === "string" && esc.trim()) lines.push(`Answer from your manager: ${truncate(esc, 600)}`);
+  const board = run.wm.boardAnswer as { status?: unknown; note?: unknown } | undefined;
+  if (board && typeof board === "object") lines.push(`Answer from the Board (${String(board.status ?? "decided")}): ${truncate(typeof board.note === "string" && board.note ? board.note : "(no note)", 600)}`);
+  return lines;
 }
 
 function normTitle(t: string): string {
@@ -78,7 +94,11 @@ export async function solving(
         if (delegated.length > 0) return { kind: "waiting" as const, text: `Delegated ${delegated.length} subprocess(es).`, delegated, effects };
         // Nothing could be delegated: fall through to solving it directly.
       }
-      const tools = run.platform.tools.specsFor(run.agent).filter((t) => t.name !== "delegate_task" && t.name !== "hire_agent");
+      const mayEscalate = canEscalate(run);
+      const tools = run.platform.tools
+        .specsFor(run.agent)
+        .filter((t) => t.name !== "delegate_task" && t.name !== "hire_agent" && (mayEscalate || !ESCALATION_TOOLS.has(t.name)));
+      const guidance = guidanceLines(run);
       const tier = shiftTier(run.platform.models.tierForStage("metacognition.solving_evaluation.solving", run.routingAgent), exec.tierShift);
       const steps = Math.min(run.drives.maxSolveSteps, exec.directSteps);
       const system = [
@@ -86,6 +106,7 @@ export async function solving(
         run.charter,
         `Solve: ${plan.problem}\nSuccess criteria: ${plan.successCriteria.join("; ")}\nApproach (${plan.candidate.replace("_", " ")}): ${exec.verify ? "be thorough and verify your claims" : "be efficient"}.`,
         plan.memory.length ? `What you know:\n${plan.memory.slice(0, 10).join("\n")}` : "",
+        guidance.length ? `Guidance you asked for (follow it):\n${guidance.join("\n")}` : "",
         "Use your tools if useful (save substantial documents under shared/<your-department>/), then call complete_task with the full result.",
         `[[context:${JSON.stringify({
           mode: "task",
@@ -114,6 +135,15 @@ export async function solving(
       });
       span.setAttributes({ "agentco.solve.steps": loop.steps, "agentco.solve.status": loop.status, "agentco.solve.tier": tier, "agentco.candidate": plan.candidate });
       if (loop.status === "completed") return { kind: "solution" as const, text: loop.result, delegated: [], effects: loop.effects };
+      if (loop.status === "waiting" || (loop.status === "blocked" && loop.approvalId)) {
+        return {
+          kind: "escalated" as const,
+          text: loop.reason,
+          delegated: [],
+          effects: loop.effects,
+          escalation: { subtaskId: loop.escalationTaskId ?? null, approvalId: loop.approvalId ?? null, reason: loop.reason },
+        };
+      }
       return { kind: "failed" as const, text: loop.status === "blocked" ? `Blocked: ${loop.reason}` : `No result after ${loop.steps} steps`, delegated: [], effects: loop.effects };
     },
   );
@@ -121,7 +151,8 @@ export async function solving(
 
 // ── Feedback
 
-export type Decision = "accept" | "revise" | "rollback" | "escalate";
+/** The model may say accept | revise | rollback | escalate; the rule may also settle on fail. */
+export type Decision = "accept" | "revise" | "rollback" | "escalate" | "fail";
 
 export interface FeedbackResult {
   score: number;
@@ -153,7 +184,8 @@ export function decide(o: {
   if (o.revisionsLeft > 0) return "revise";
   if (o.rollbackAvailable && o.score < 0.4) return "rollback";
   if (o.score >= 0.4) return "accept"; // accept partial once revisions are exhausted (issues are reported)
-  return o.canEscalate ? "escalate" : "revise";
+  // Nothing left to try: escalate if still allowed, else settle (a "revise" here would loop across wake-ups).
+  return o.canEscalate ? "escalate" : "fail";
 }
 
 export function summarizeResults(subtasks: Task[]): { title: string; status: string; result: string | null }[] {
@@ -193,7 +225,7 @@ export async function feedback(
     const nonEmpty = results.length ? results.some((r) => (r.result ?? "").trim()) : !!(o.solution ?? "").trim();
     const score = unit(json.score, nonEmpty ? 0.5 : 0.1);
     const truthfulScore = unit(json.truthful, score);
-    const modelDecision = oneOf(json.decision, ["accept", "revise", "rollback", "escalate"] as const, score >= 0.6 ? "accept" : "revise");
+    const modelDecision: Decision = oneOf(json.decision, ["accept", "revise", "rollback", "escalate"] as const, score >= 0.6 ? "accept" : "revise");
     const threshold = acceptThreshold(o.controlLevel, run.drives.strictSelfEvaluation);
     const goodFromModel = typeof json.good === "boolean" ? json.good : modelDecision === "accept";
     const teg = await truthfulEfficientGood(run, {

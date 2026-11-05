@@ -19,6 +19,7 @@ import type { EventBus } from "../events/bus.ts";
 import { summaries, taskRef } from "../events/summary.ts";
 import { badRequest, conflict, notFound } from "../http/errors.ts";
 import type { Redactor } from "../middleware/redact.ts";
+import { redactDeep } from "../middleware/redact-deep.ts";
 import type { TracerImpl } from "../middleware/tracer.ts";
 import type { OrgService } from "../org/service.ts";
 import type { ConversationService } from "../runs/conversations.ts";
@@ -59,6 +60,10 @@ export interface SubtaskInput {
 }
 
 export type TerminalListener = (task: Task) => void;
+export type ReassignListener = (task: Task, previousAssigneeId: string | null) => void;
+
+/** Run-scoped working memory of the previous assignee; never handed to a new one. */
+const RUN_SCOPED_STATE = ["checkpoint", "recovery", "lastTrigger", "lastAttemptCounted", "emptyWaits"] as const;
 
 export interface TaskDeps {
   repos: Repositories;
@@ -74,6 +79,7 @@ export interface TaskDeps {
 export class TaskService implements TaskView {
   private readonly deps: TaskDeps;
   private readonly terminalListeners: TerminalListener[] = [];
+  private readonly reassignListeners: ReassignListener[] = [];
 
   constructor(deps: TaskDeps) {
     this.deps = deps;
@@ -82,6 +88,11 @@ export class TaskService implements TaskView {
   /** Subscribe to tasks reaching done/failed/cancelled. */
   onTerminal(listener: TerminalListener): void {
     this.terminalListeners.push(listener);
+  }
+
+  /** Subscribe to open tasks handed to another assignee (RunService aborts runs still on them). */
+  onReassign(listener: ReassignListener): void {
+    this.reassignListeners.push(listener);
   }
 
   get(id: string): Task | null {
@@ -141,9 +152,10 @@ export class TaskService implements TaskView {
 
   // ───────────── TaskView ─────────────
 
+  /** Merge into task.state; engine-written values are deep-redacted (high-precision tier) before they are stored. */
   patchState(taskId: string, patch: Record<string, unknown>): Task {
     const task = this.require(taskId);
-    this.deps.repos.tasks.update(taskId, { state: { ...task.state, ...patch }, updatedAt: this.iso() });
+    this.deps.repos.tasks.update(taskId, { state: this.merge(task, patch), updatedAt: this.iso() });
     return this.require(taskId);
   }
 
@@ -166,17 +178,17 @@ export class TaskService implements TaskView {
   begin(taskId: string, trigger: RunTrigger): Task {
     const task = this.require(taskId);
     const counts = trigger === "task" || trigger === "recovery" || trigger === "heartbeat";
-    const { nextTrigger: _t, recovery: _r, answeredApprovalId: _a, ...state } = task.state;
+    const { nextTrigger: _t, recovery: _r, answeredApprovalId: answered, ...state } = task.state;
     return this.transition(task, "in_progress", {
       attempts: task.attempts + (counts ? 1 : 0),
       startedAt: task.startedAt ?? this.iso(),
-      state: { ...state, lastTrigger: trigger, lastAttemptCounted: counts },
+      state: { ...state, lastTrigger: trigger, lastAttemptCounted: counts, ...(typeof answered === "string" ? { lastAnsweredApprovalId: answered } : {}) },
     });
   }
 
   complete(taskId: string, result: string, state?: Record<string, unknown>): Task {
     const task = this.require(taskId);
-    return this.transition(task, "done", { result, error: null, completedAt: this.iso(), state: merge(task, state) });
+    return this.transition(task, "done", { result, error: null, completedAt: this.iso(), state: this.merge(task, state) });
   }
 
   /** in_progress → waiting; straight back to todo if every child already finished. */
@@ -186,16 +198,16 @@ export class TaskService implements TaskView {
     if (children.length === 0) {
       const emptyWaits = Number(task.state.emptyWaits ?? 0) + 1;
       if (emptyWaits >= 2) return this.fail(taskId, "engine reported waiting twice without delegating any subtask", state);
-      return this.transition(task, "todo", { state: { ...merge(task, state), emptyWaits, nextTrigger: "subtasks_completed" } });
+      return this.transition(task, "todo", { state: { ...this.merge(task, state), emptyWaits, nextTrigger: "subtasks_completed" } });
     }
-    const waiting = this.transition(task, "waiting", { state: merge(task, state) });
+    const waiting = this.transition(task, "waiting", { state: this.merge(task, state) });
     return children.every((c) => TERMINAL.has(c.status)) ? this.wake(waiting) : waiting;
   }
 
   /** in_progress → blocked on an approval; unblocks immediately if it was already decided. */
   block(taskId: string, approvalId: string, state?: Record<string, unknown>): Task {
     const task = this.require(taskId);
-    const blocked = this.transition(task, "blocked", { state: { ...merge(task, state), blockedOnApprovalId: approvalId } });
+    const blocked = this.transition(task, "blocked", { state: { ...this.merge(task, state), blockedOnApprovalId: approvalId } });
     const approval = this.deps.repos.approvals.get(approvalId);
     return approval && approval.status !== "pending" ? this.answer(blocked, approval) : blocked;
   }
@@ -210,7 +222,7 @@ export class TaskService implements TaskView {
     const task = this.require(taskId);
     if (task.status !== "in_progress") return task;
     const refund = task.state.lastAttemptCounted === true ? 1 : 0;
-    return this.transition(task, "todo", { attempts: Math.max(0, task.attempts - refund), state: merge(task, state) });
+    return this.transition(task, "todo", { attempts: Math.max(0, task.attempts - refund), state: this.merge(task, state) });
   }
 
   /**
@@ -228,9 +240,9 @@ export class TaskService implements TaskView {
   fail(taskId: string, error: string, state?: Record<string, unknown>): Task {
     const task = this.require(taskId);
     if (task.attempts < task.maxAttempts) {
-      return this.transition(task, "todo", { error, state: { ...merge(task, state), nextTrigger: "task" } });
+      return this.transition(task, "todo", { error, state: { ...this.merge(task, state), nextTrigger: "task" } });
     }
-    const failed = this.transition(task, "failed", { error, completedAt: this.iso(), state: merge(task, state) });
+    const failed = this.transition(task, "failed", { error, completedAt: this.iso(), state: this.merge(task, state) });
     this.escalateFailure(failed);
     return failed;
   }
@@ -252,6 +264,41 @@ export class TaskService implements TaskView {
     if (!["failed", "cancelled", "blocked"].includes(task.status)) throw conflict(`${taskRef(task)} is ${task.status}; only failed, cancelled or blocked tasks can be retried`);
     const { blockedOnApprovalId: _b, ...state } = task.state;
     return this.transition(task, "todo", { attempts: 0, error: null, completedAt: null, state: { ...state, nextTrigger: "task" } });
+  }
+
+  /**
+   * Hands an open task to another (active) assignee — destroy re-assigns the terminated agent's
+   * work to its manager. in_progress → todo with the attempt refunded (a continuation trigger is
+   * kept); waiting / blocked / todo keep their status so their wake-ups still fire. The previous
+   * assignee's run-scoped state (checkpoint, recovery, …) is dropped; plan/answers stay as context.
+   */
+  reassign(taskId: string, assigneeId: string, reason: string): Task {
+    const task = this.require(taskId);
+    if (TERMINAL.has(task.status)) throw conflict(`${taskRef(task)} is ${task.status}; only open tasks can be re-assigned`);
+    const assignee = this.activeAssignee(assigneeId);
+    const state: Record<string, unknown> = { ...task.state };
+    for (const key of RUN_SCOPED_STATE) delete state[key];
+    state.reassigned = { from: task.assigneeId, to: assignee.id, reason: this.clean(reason), at: this.iso() };
+    const patch: Partial<Task> = { assigneeId: assignee.id, departmentId: assignee.departmentId };
+    let to: TaskStatus = task.status;
+    if (task.status === "in_progress") {
+      to = "todo";
+      const refund = task.state.lastAttemptCounted === true ? 1 : 0;
+      patch.attempts = Math.max(0, task.attempts - refund);
+      const last = task.state.lastTrigger;
+      state.nextTrigger = last === "subtasks_completed" || last === "human_answer" ? last : "task";
+      // a human_answer continuation needs its approval again
+      if (last === "human_answer" && typeof task.state.lastAnsweredApprovalId === "string") state.answeredApprovalId = task.state.lastAnsweredApprovalId;
+    }
+    const updated = this.transition(task, to, { ...patch, state });
+    for (const listener of this.reassignListeners) {
+      try {
+        listener(updated, task.assigneeId);
+      } catch {
+        // listeners (run aborts) must not break re-assignment
+      }
+    }
+    return updated;
   }
 
   /** Wakes every task blocked on the decided approval (trigger human_answer). */
@@ -388,6 +435,12 @@ export class TaskService implements TaskView {
     this.deps.conversations.sendAgentMessage(assignee, manager, content, { taskId: task.id, traceId: task.traceId });
   }
 
+  /** task.state ⊕ an engine-provided patch, the patch deep-redacted (secrets never reach the tasks table). */
+  private merge(task: Task, state?: Record<string, unknown>): Record<string, unknown> {
+    if (!state) return task.state;
+    return { ...task.state, ...(this.deps.redactor ? redactDeep(state, this.deps.redactor) : state) };
+  }
+
   private clean(text: string): string {
     return this.deps.redactor ? this.deps.redactor.redact(text) : text;
   }
@@ -397,9 +450,6 @@ export class TaskService implements TaskView {
   }
 }
 
-function merge(task: Task, state?: Record<string, unknown>): Record<string, unknown> {
-  return state ? { ...task.state, ...state } : task.state;
-}
 
 function requireText(value: unknown, field: string, max: number): string {
   if (typeof value !== "string" || !value.trim()) throw badRequest(`${field} must be a non-empty string`);

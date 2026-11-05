@@ -8,20 +8,30 @@
  * next tier up (economy → standard → frontier), then fails. Completion writes
  * one episodic memory.
  *
- * report_blocker: the engine escalates up the chain via the `escalate` tool. An
- * escalation subtask for the manager (task_created effect) → outcome "waiting";
- * the normal wake-up (subtasks_completed) re-runs the task with the manager's
- * answer in the prompt. An approval effect (only when there is no manager) →
- * "blocked" (re-run on human_answer); otherwise → "failed" with the reason.
+ * escalate / ask_human called by the model end the loop (tool-loop.ts): an
+ * escalation subtask → outcome "waiting" (re-run on subtasks_completed with the
+ * manager's answer in the prompt); a Board question → "blocked" with its approvalId.
+ *
+ * report_blocker: the engine escalates up the chain via the `escalate` tool — unless an
+ * escalation for this task is still open (reused, never a second one). An escalation
+ * subtask → "waiting"; an approval (only when there is no manager) → "blocked";
+ * otherwise → "failed" with the reason.
+ *
+ * Escalation is bounded per task: once an escalation has been answered (or
+ * MAX_ESCALATIONS_PER_TASK were made) the escalate/ask_human tools are withdrawn
+ * and a blocker fails the task instead of asking again.
  */
 import type { ModelTier, Task } from "../../../../packages/shared/src/index.ts";
 import type { CognitiveEngine, EngineContext, EngineResult, ToolSpec } from "../contracts.ts";
 import { agentFacts, systemPrompt, workerCharter } from "./prompt.ts";
 import { isAbortError, isBudgetError } from "../models/router.ts";
-import { runToolLoop, type ToolLoopResult } from "./tool-loop.ts";
+import { ESCALATION_TOOLS, runToolLoop, type ToolLoopResult } from "./tool-loop.ts";
 import { oneLine, truncate } from "./text.ts";
 
 const NEXT_TIER: Record<ModelTier, ModelTier | null> = { economy: "standard", standard: "frontier", frontier: null };
+/** Escalations one agent may open for one task (an answered one ends escalation for the task). */
+export const MAX_ESCALATIONS_PER_TASK = 2;
+const TERMINAL = new Set(["done", "failed", "cancelled"]);
 
 export interface ReflexOptions {
   maxSteps?: number;
@@ -46,7 +56,12 @@ export class ReflexEngine implements CognitiveEngine {
     const lessons = platform.memory.search({ query, agentId: agent.id, kinds: ["procedural"], limit: 3 });
     const inbox = platform.memory.inbox(agent.id, 5);
     if (inbox.length) platform.memory.markRead(inbox.map((m) => m.id));
-    const tools: ToolSpec[] = platform.tools.specsFor(agent);
+    // Escalation budget for this task: the agent's escalation subtasks so far.
+    const escalations = task && input.trigger !== "message" ? input.subtasks.filter((c) => c.state.kind === "escalation" && (c.state.escalatedBy ?? agent.id) === agent.id) : [];
+    const openEscalation = escalations.find((c) => !TERMINAL.has(c.status)) ?? null;
+    const escalationAnswered = escalations.some((c) => c.status === "done");
+    const mayEscalate = !escalationAnswered && escalations.length < MAX_ESCALATIONS_PER_TASK;
+    const tools: ToolSpec[] = platform.tools.specsFor(agent).filter((t) => mayEscalate || !ESCALATION_TOOLS.has(t.name));
 
     const parts: string[] = [workerCharter(agent, facts)];
     if (task) {
@@ -130,10 +145,23 @@ export class ReflexEngine implements CognitiveEngine {
       return { outcome: "failed", output: "", error };
     }
 
+    if (loop.status === "waiting") {
+      this.remember(ctx, task, "escalated", loop.reason);
+      return { outcome: "waiting", output: `Escalated to my manager: ${loop.reason}` };
+    }
+
+    if (loop.status === "blocked" && loop.approvalId) {
+      this.remember(ctx, task, "blocked", loop.reason);
+      return { outcome: "blocked", output: `Asked the Board: ${loop.reason}`, approvalId: loop.approvalId };
+    }
+
     if (loop.status === "blocked") {
       let approvalId: string | undefined;
       let escalated = false;
-      if (task && agent.tools.includes("escalate")) {
+      if (task && openEscalation) {
+        // Reuse the escalation already waiting for an answer; never open a second one.
+        escalated = true;
+      } else if (task && mayEscalate && agent.tools.includes("escalate")) {
         const r = await platform.tools.execute(
           { id: `blocker_${ctx.run.id}`, name: "escalate", arguments: { reason: loop.reason, question: `Blocked on T-${task.number} "${task.title}": ${loop.reason}` } },
           { agent, runId: ctx.run.id, traceId: ctx.run.traceId, parentSpanId: ctx.span.spanId, taskId: task.id, conversationId: null, signal: ctx.signal },

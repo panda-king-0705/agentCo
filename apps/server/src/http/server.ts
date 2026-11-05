@@ -1,18 +1,19 @@
 /**
- * node:http server: CORS for the Vite dev origin, bearer auth off loopback, JSON bodies,
- * the API router, the SSE stream and the static console.
+ * node:http server: Host/Origin/Content-Type guard (DNS rebinding + CSRF, see guard.ts),
+ * CORS for the Vite dev origin, bearer auth off loopback, JSON bodies, the API router,
+ * the SSE stream and the static console.
  */
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Platform } from "../platform.ts";
 import { AppError, badRequest, notFound, unauthorized } from "./errors.ts";
+import { DEV_ORIGINS, guardRequest, type GuardConfig } from "./guard.ts";
 import { buildRouter } from "./routes.ts";
 import { HttpReply } from "./router.ts";
 import { SseBroadcaster } from "./sse.ts";
 import { serveStatic } from "./static.ts";
 
 const MAX_BODY_BYTES = 1_000_000;
-const ALLOWED_ORIGINS = new Set(["http://localhost:5173", "http://127.0.0.1:5173"]);
 
 export interface HttpApp {
   server: Server;
@@ -33,7 +34,8 @@ export function createHttpApp(platform: Platform, options: { heartbeatMs?: numbe
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? "GET";
     const url = new URL(req.url ?? "/", "http://localhost");
-    cors(req, res);
+    guardRequest(method, req.headers, config);
+    cors(req, res, config);
     if (method === "OPTIONS") {
       res.writeHead(204, { "access-control-max-age": "600" });
       res.end();
@@ -74,9 +76,9 @@ export function createHttpApp(platform: Platform, options: { heartbeatMs?: numbe
   };
 }
 
-function cors(req: IncomingMessage, res: ServerResponse): void {
+function cors(req: IncomingMessage, res: ServerResponse, config: GuardConfig): void {
   const origin = req.headers.origin;
-  if (typeof origin === "string" && ALLOWED_ORIGINS.has(origin)) {
+  if (typeof origin === "string" && (DEV_ORIGINS.includes(origin) || config.allowedOrigins.includes(origin.toLowerCase()))) {
     res.setHeader("access-control-allow-origin", origin);
     res.setHeader("vary", "Origin");
     res.setHeader("access-control-allow-methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");

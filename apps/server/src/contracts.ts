@@ -403,13 +403,22 @@ export interface SpendEntry {
   costUsd: number;
   /** What the same token counts would have cost on the frontier primary profile. */
   frontierCostUsd: number;
+  /** The reservation assertCanSpend took for this call; recordSpend releases it. */
+  reservationId?: string;
 }
 
 /** Implemented by core (middleware/budget.ts); consumed by the model router. */
 export interface BudgetGate {
-  /** Throws an Error with name "BudgetExceededError" (see BudgetExceededErrorShape). */
-  assertCanSpend(agentId: string, estimateUsd: number): void;
+  /**
+   * Throws an Error with name "BudgetExceededError" (see BudgetExceededErrorShape) when
+   * spent + outstanding reservations + estimate would pass a cap. With `reservationId`
+   * the estimate is reserved until recordSpend (entry.reservationId) or release(), so
+   * calls in flight count against the caps.
+   */
+  assertCanSpend(agentId: string, estimateUsd: number, reservationId?: string): void;
   recordSpend(entry: SpendEntry): void;
+  /** Drops a reservation (the call failed or was aborted). Idempotent. */
+  release?(reservationId: string): void;
 }
 
 /** Fixed factory signatures (see docs/ARCHITECTURE.md → ownership). */

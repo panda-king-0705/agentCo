@@ -116,7 +116,7 @@ export class ApprovalService {
     if (approval.status !== "pending") throw conflict(`approval ${id} was already ${approval.status}`);
     let payload = approval.payload;
     if (input.decision === "approved") payload = { ...payload, ...this.applyEffect(approval) };
-    this.deps.repos.approvals.update(id, { status: input.decision, decidedBy: "human", note: input.note?.trim() || null, decidedAt: this.deps.now().toISOString(), payload });
+    this.deps.repos.approvals.update(id, { status: input.decision, decidedBy: "human", note: input.note?.trim() ? this.clean(input.note.trim()) : null, decidedAt: this.deps.now().toISOString(), payload });
     const decided = this.require(id);
     this.deps.bus.emit("approval.decided", { agentId: decided.requestedBy, taskId: decided.taskId, traceId: decided.traceId, summary: summaries.approvalDecided(decided), data: decided });
     this.deps.tasks.answerApproval(decided);

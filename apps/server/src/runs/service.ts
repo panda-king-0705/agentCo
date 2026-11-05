@@ -73,6 +73,10 @@ export class RunService implements RunControl {
     deps.tasks.onTerminal((task) => {
       if (task.status === "cancelled") this.abortTask(task.id, "interrupt");
     });
+    // A task handed to someone else (destroy) must not keep running under its old assignee.
+    deps.tasks.onReassign((task) => {
+      this.abortTask(task.id, "destroy");
+    });
   }
 
   /** Called after every run settles (the scheduler uses it to start the next piece of work). */
@@ -84,6 +88,10 @@ export class RunService implements RunControl {
 
   isBusy(agentId: string): boolean {
     return this.byAgent.has(agentId);
+  }
+
+  busyAgentIds(): string[] {
+    return [...this.byAgent.keys()];
   }
 
   activeCount(): number {
@@ -174,17 +182,23 @@ export class RunService implements RunControl {
       input: `${began.title}\n\n${began.description}`,
       attributes: this.runAttributes(agent, trigger),
     });
-    const run = this.insertRun(runId, agent, began.traceId, span, trigger, { taskId: began.id, conversationId: null });
-    const input: EngineInput = {
-      trigger: trigger as Exclude<RunTrigger, "message">,
-      task: began,
-      subtasks: tasks.children(began.id),
-      ...(trigger === "recovery" ? { recoveryNotice: RECOVERY_NOTICE(recovery?.runId ?? "unknown") } : {}),
-      ...(answered ? { answeredApproval: answered } : {}),
-    };
-    bus.emit("run.started", { agentId: agent.id, taskId: began.id, runId, traceId: began.traceId, summary: summaries.runStarted(run, agent), data: run });
-    org.setActivity(agent.id, "thinking", `Starting ${taskRef(began)}`, null);
-    return this.launch(agent, run, span, input, { messageId: null, objectiveSpanId: null });
+    let run: Run | null = null;
+    try {
+      run = this.insertRun(runId, agent, began.traceId, span, trigger, { taskId: began.id, conversationId: null });
+      const input: EngineInput = {
+        trigger: trigger as Exclude<RunTrigger, "message">,
+        task: began,
+        subtasks: tasks.children(began.id),
+        ...(trigger === "recovery" ? { recoveryNotice: RECOVERY_NOTICE(recovery?.runId ?? "unknown") } : {}),
+        ...(answered ? { answeredApproval: answered } : {}),
+      };
+      bus.emit("run.started", { agentId: agent.id, taskId: began.id, runId, traceId: began.traceId, summary: summaries.runStarted(run, agent), data: run });
+      org.setActivity(agent.id, "thinking", `Starting ${taskRef(began)}`, null);
+      return this.launch(agent, run, span, input, { messageId: null, objectiveSpanId: null });
+    } catch (error) {
+      this.abandonStart({ runId, run, span, objective: null, agent, error, taskId: began.id, conversationId: null });
+      return null;
+    }
   }
 
   /** Starts a chat run for an unanswered human message, or returns null (agent busy/paused, company paused). */
@@ -220,14 +234,65 @@ export class RunService implements RunControl {
       input: stored.content,
       attributes: this.runAttributes(agent, "message"),
     });
-    const run = this.insertRun(runId, agent, traceId, span, "message", { taskId: null, conversationId: conversation.id });
-    conversations.attachRun(stored.id, runId, traceId);
-    const window = this.deps.platform().models.resolve(agent.modelTier, agent.modelOverride).contextWindow;
-    const history = governor.govern(conversation, repos.conversations.historyThrough(conversation.id, stored.id), window, span);
-    const input: EngineInput = { trigger: "message", history, message: { ...stored, runId, traceId } };
-    bus.emit("run.started", { agentId: agent.id, runId, traceId, summary: summaries.runStarted(run, agent), data: run });
-    org.setActivity(agent.id, "thinking", `Reading a message in ${conversation.title}`, null);
-    return this.launch(agent, run, span, input, { messageId: stored.id, objectiveSpanId: objective.spanId });
+    let run: Run | null = null;
+    try {
+      run = this.insertRun(runId, agent, traceId, span, "message", { taskId: null, conversationId: conversation.id });
+      conversations.attachRun(stored.id, runId, traceId);
+      const window = this.deps.platform().models.resolve(agent.modelTier, agent.modelOverride).contextWindow;
+      const history = governor.govern(conversation, repos.conversations.historyThrough(conversation.id, stored.id), window, span);
+      const input: EngineInput = { trigger: "message", history, message: { ...stored, runId, traceId } };
+      bus.emit("run.started", { agentId: agent.id, runId, traceId, summary: summaries.runStarted(run, agent), data: run });
+      org.setActivity(agent.id, "thinking", `Reading a message in ${conversation.title}`, null);
+      return this.launch(agent, run, span, input, { messageId: stored.id, objectiveSpanId: objective.spanId });
+    } catch (error) {
+      this.abandonStart({ runId, run, span, objective, agent, error, taskId: null, conversationId: conversation.id });
+      return null;
+    }
+  }
+
+  /**
+   * Something threw while a run was being started (after its span and maybe its row exist):
+   * fail it cleanly — run row failed, spans closed, the agent freed, and the work answered:
+   * a chat gets an error reply (the message stays answered, no retry loop), a task a failed attempt.
+   */
+  private abandonStart(o: { runId: string; run: Run | null; span: SpanHandle; objective: SpanHandle | null; agent: Agent; error: unknown; taskId: string | null; conversationId: string | null }): void {
+    const { repos, tracer, org, bus, conversations, tasks } = this.deps;
+    const message = this.deps.redactor.redact(`could not start the run: ${errorText(o.error)}`);
+    console.error(`[runs] ${message}`);
+    const active = this.active.get(o.runId);
+    if (active?.timer) clearTimeout(active.timer);
+    this.active.delete(o.runId);
+    if (this.byAgent.get(o.agent.id) === o.runId) this.byAgent.delete(o.agent.id);
+    const step = (fn: () => void): void => {
+      try {
+        fn();
+      } catch (stepError) {
+        console.error("[runs] cleanup step failed:", stepError instanceof Error ? stepError.message : stepError);
+      }
+    };
+    step(() => {
+      for (const open of repos.spans.runningForRun(o.runId)) if (open.id !== o.span.spanId) tracer.endById(open.id, { status: "cancelled", error: message });
+    });
+    step(() => o.span.end({ status: "error", error: message }));
+    step(() => o.objective?.end({ status: "error", error: message }));
+    if (o.run) {
+      step(() => repos.runs.update(o.runId, { status: "failed", error: message, failingSpanId: o.span.spanId, completedAt: this.deps.now().toISOString() }));
+    }
+    step(() => repos.agents.update(o.agent.id, { currentRunId: null, currentTaskId: null, brainBlock: null }));
+    step(() => org.setActivity(o.agent.id, "error", null, null));
+    if (o.conversationId) step(() => conversations.postAs(o.conversationId as string, o.agent.id, `I hit an error: ${message}`, o.run ? { runId: o.runId, traceId: o.run.traceId } : {}));
+    if (o.taskId) {
+      step(() => {
+        const task = tasks.get(o.taskId as string);
+        if (task?.status === "in_progress") tasks.fail(task.id, message);
+      });
+    }
+    if (o.run) {
+      step(() => {
+        const finished = repos.runs.get(o.runId);
+        bus.emit("run.completed", { agentId: o.agent.id, taskId: o.taskId, runId: o.runId, traceId: o.run!.traceId, summary: `${o.agent.name}'s run failed to start`, data: finished });
+      });
+    }
   }
 
   // ───────────── crash recovery ─────────────
@@ -274,7 +339,7 @@ export class RunService implements RunControl {
     this.deps.repos.agents.update(agent.id, { currentRunId: run.id, currentTaskId: run.taskId });
     active.timer = setTimeout(() => this.abort(active, "timeout"), this.deps.runTimeoutMs);
     active.timer.unref();
-    const ctx: EngineContext = { agent, run, input, platform: this.deps.platform(), span, signal: controller.signal };
+    const ctx: EngineContext = { agent, run, input, platform: runScoped(this.deps.platform(), controller.signal), span, signal: controller.signal };
     active.promise = this.execute(active, agent, ctx);
     return run;
   }
@@ -576,6 +641,50 @@ export class RunService implements RunControl {
       "agentco.tier": agent.modelTier,
     };
   }
+}
+
+/**
+ * The PlatformServices one run's engine sees. Once the run is aborted its result is already
+ * applied (or deliberately dropped) by RunService, but the engine may still be unwinding:
+ * from then on its status/activity and cognitive-state writes and its task-state patches are
+ * ignored, and it cannot open new objectives (models.chat and tools.execute already refuse).
+ */
+export function runScoped(platform: PlatformServices, signal: AbortSignal): PlatformServices {
+  const { agents, tasks } = platform;
+  const abortError = (): Error => (signal.reason instanceof Error ? signal.reason : new RunAbortedError("interrupt"));
+  return {
+    ...platform,
+    agents: {
+      setActivity(agentId, status, activity, block) {
+        if (signal.aborted) return;
+        agents.setActivity(agentId, status, activity, block);
+      },
+      updateCognitiveState(agentId, patch) {
+        if (signal.aborted) throw abortError();
+        return agents.updateCognitiveState(agentId, patch);
+      },
+    },
+    tasks: {
+      get: (id) => tasks.get(id),
+      children: (id) => tasks.children(id),
+      interruptFor: (agentId, priority) => tasks.interruptFor(agentId, priority),
+      createObjective(input) {
+        if (signal.aborted) throw abortError();
+        return tasks.createObjective(input);
+      },
+      patchState(taskId, patch) {
+        if (signal.aborted) {
+          const current = tasks.get(taskId);
+          if (current) return current;
+        }
+        return tasks.patchState(taskId, patch);
+      },
+      cancel(taskId, reason) {
+        if (signal.aborted) return;
+        tasks.cancel(taskId, reason);
+      },
+    },
+  };
 }
 
 /** Trigger of the next run: recovery notice > explicit nextTrigger > plain task. */

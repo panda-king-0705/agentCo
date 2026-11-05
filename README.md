@@ -53,7 +53,7 @@ invalid one stops the boot with a message naming the variable.
 
 | group | variables |
 |---|---|
-| server | `PORT` (3000), `HOST` (127.0.0.1), `APP_AUTH_TOKEN`, `DATA_DIR` (./data) |
+| server | `PORT` (3000), `HOST` (127.0.0.1), `APP_AUTH_TOKEN`, `ALLOWED_ORIGINS`, `ALLOWED_HOSTS`, `DATA_DIR` (./data) |
 | company | `COMPANY_NAME`, `ORG_TEMPLATE` (startup \| enterprise), `DAILY_BUDGET_USD`, `MONTHLY_BUDGET_USD`, `MAX_CONCURRENT_RUNS`, `MAX_HEADCOUNT`, `HIRING_REQUIRES_APPROVAL`, `HEARTBEAT_MINUTES` |
 | runtime | `RUN_TIMEOUT_MS`, `REFLEX_MAX_STEPS`, `BRAIN_MAX_REVISIONS`, `CONTEXT_TRIGGER_PCT`, `CONTEXT_CARRY_TURNS`, `SCHEDULER_TICK_MS`, `WEB_FETCH_ENABLED`, `WEB_DIST_DIR` |
 | models | `MODEL_FRONTIER` / `_STANDARD` / `_ECONOMY` (`provider:model`), `*_FALLBACK`, provider keys (`OPENAI_API_KEY`, `ARK_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`), `MODEL_PRICES_JSON`, `STAGE_ROUTING`, `MOCK_LATENCY_MS` |
@@ -61,7 +61,9 @@ invalid one stops the boot with a message naming the variable.
 Explicitly set company variables override the persisted company settings at every boot; everything else is
 changed from the console (`PATCH /api/company`). **Off loopback** (`HOST` not 127.0.0.1/::1) the API requires
 `Authorization: Bearer $APP_AUTH_TOKEN` (24+ characters; SSE also accepts `?token=`). CORS is open only for the
-Vite dev origin `http://localhost:5173`.
+Vite dev origin `http://localhost:5173` (plus `ALLOWED_ORIGINS`). State-changing requests must be
+`Content-Type: application/json` from an allowed Origin, and the Host header must name this server — see
+[SECURITY.md](SECURITY.md).
 
 ## Architecture in one page
 

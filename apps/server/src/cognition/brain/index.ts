@@ -15,11 +15,12 @@
  * Blocks are grouped under §3 phase spans (brain.target_understanding,
  * brain.confidence, brain.planning, brain.solving, brain.evaluation, brain.report).
  */
-import type { Agent, Approval, CalibrationStats, Okr, Task } from "../../../../../packages/shared/src/index.ts";
+import type { Approval, CalibrationStats, Okr, Task } from "../../../../../packages/shared/src/index.ts";
 import type { CognitiveEngine, CognitiveStatePatch, EngineContext, EngineResult, SpanHandle } from "../../contracts.ts";
 import { arr, num, obj, str, strArr } from "../coerce.ts";
 import { agentFacts } from "../prompt.ts";
 import { oneLine, truncate } from "../text.ts";
+import { canEscalate, escalationSettled, readEscalation } from "./escalation.ts";
 import { writeReport } from "./global-memory.ts";
 import { CANDIDATE_NAMES, Q2_OOD, Q3_FALLBACK, Q4_CONTROL, type CandidateName } from "./interpretation.ts";
 import { assessConfidence, fallbackTarget, shouldEarlyStop, type ConfidenceAssessment, type FallbackTarget } from "./metacognition/confidence.ts";
@@ -35,7 +36,7 @@ import {
   rollbackRecovery,
 } from "./metacognition/project-management.ts";
 import { selfAbility, type Competence } from "./metacognition/self-ability.ts";
-import { feedback, integrateResults, solving, type FeedbackResult } from "./metacognition/solving-evaluation.ts";
+import { feedback, integrateResults, solving, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
 import { analysis, literatureReview, problemDefinition, requestText, type ProblemDefinition, type Understanding } from "./metacognition/target-understanding.ts";
 import { block, llmText, mustPropagate, phase, toolContext, YieldSignal, type BrainRun } from "./runtime.ts";
 import { feedbackUpdate } from "./self-management/emotion.ts";
@@ -109,6 +110,18 @@ interface Understood {
 
 /** Checkpoint reason marking a run that is waiting on its manager's answer. */
 const ESCALATION_CHECKPOINT = "escalated to manager";
+/** Checkpoint reason marking a run blocked on the Board's answer (resumed on human_answer). */
+const BOARD_CHECKPOINT = "asked the Board";
+
+/** Every task result carries the escalation budget so the next run (and the reviewer) sees it. */
+function withEscalationState(run: BrainRun, result: EngineResult): EngineResult {
+  if (!run.escalation) return result;
+  return { ...result, taskState: { ...(result.taskState ?? {}), escalation: { ...run.escalation } } };
+}
+
+function solutionEscalation(solution: Solution): { approvalId: string | null; subtaskId: string | null } {
+  return { approvalId: solution.escalation?.approvalId ?? null, subtaskId: solution.escalation?.subtaskId ?? null };
+}
 
 export class BrainEngine implements CognitiveEngine {
   readonly kind = "brain" as const;
@@ -141,18 +154,19 @@ export class BrainEngine implements CognitiveEngine {
       runTimeoutMs: this.runTimeoutMs,
       parent: null,
       currentBlock: null,
+      ...(input.trigger === "message" ? {} : { escalation: readEscalation(input.task, input.subtasks, ctx.agent.id) }),
     };
     try {
       if (input.trigger === "message") return await this.onMessage(run);
-      return await this.onTask(run);
+      return withEscalationState(run, await this.onTask(run));
     } catch (err) {
       if (err instanceof YieldSignal) {
         ctx.span.setAttributes({ "agentco.yielded_before": err.nextBlock, "agentco.yield_reason": truncate(err.reason, 200) });
-        return {
+        return withEscalationState(run, {
           outcome: "yielded",
           output: `Paused T-${task?.number ?? "?"} at ${err.nextBlock} for more urgent work (${oneLine(err.reason, 120)}); will resume from here.`,
           taskState: checkpointState(run, err),
-        };
+        });
       }
       throw err;
     } finally {
@@ -210,18 +224,33 @@ export class BrainEngine implements CognitiveEngine {
   private async onTask(run: BrainRun): Promise<EngineResult> {
     const input = run.ctx.input;
     if (input.trigger === "message") throw new Error("unreachable");
-    const task = input.task;
+    let task = input.task;
     const selection = await selectSubprocess(run);
     await phase(run, "self_management", () => selfManagementPass(run));
 
     if (selection.entry === "heartbeat") return this.heartbeat(run);
 
-    let plan = readPlan(task);
-    if (selection.entry === "human_answer" && input.answeredApproval) {
-      const a: Approval = input.answeredApproval;
-      const answers = [...arr(task.state.answers), { approvalId: a.id, status: a.status, note: a.note }].slice(-5);
-      run.platform.tasks.patchState(task.id, { answers });
+    // human_answer: resume at the checkpointed block with the Board's answer in local working memory.
+    let boardGuidance: string | null = null;
+    if (selection.entry === "human_answer") {
+      const a: Approval | undefined = input.answeredApproval;
+      const patch: Record<string, unknown> = { checkpoint: null };
+      if (a) patch.answers = [...arr(task.state.answers), { approvalId: a.id, kind: a.kind, status: a.status, note: a.note }].slice(-5);
+      task = this.patch(run, patch); // the returned row, not the stale input snapshot
+      const cp = selection.checkpoint;
+      if (cp) {
+        run.wm = { ...cp.wm };
+        run.ctx.span.setAttributes({ "agentco.resumed_at": cp.block });
+      }
+      if (a) {
+        run.wm.boardAnswer = { approvalId: a.id, kind: a.kind, status: a.status, note: a.note };
+        // The Board answered this task's question: no asking again (escalation.ts).
+        if (a.kind === "question" && run.escalation) run.escalation.answered = true;
+        boardGuidance = `Answer from the Board (${a.status}): ${truncate(a.note ?? "(no note)", 400)}`;
+        run.ctx.span.setAttributes({ "agentco.board_answer": a.status });
+      }
     }
+    let plan = readPlan(task);
     if (selection.entry === "resume" && selection.checkpoint) {
       run.wm = { ...selection.checkpoint.wm };
       run.ctx.span.setAttributes({ "agentco.resumed_at": selection.checkpoint.block });
@@ -251,13 +280,14 @@ export class BrainEngine implements CognitiveEngine {
         const good = answered.filter((c) => c.status === "done");
         if (good.length === 0) {
           const why = answered.map((c) => c.error ?? c.result ?? c.status).join("; ");
-          run.platform.tasks.patchState(task.id, { checkpoint: null });
+          this.patch(run, { checkpoint: null });
           return { outcome: "failed", output: "", error: `My manager could not answer the escalation on T-${task.number}: ${truncate(why, 300)}`, taskState: { checkpoint: null } };
         }
         const answer = good.map((c) => c.result ?? "").filter(Boolean).join("\n").trim() || "Proceed with your best judgment.";
         run.wm = { ...cp.wm, escalationAnswer: answer };
+        if (run.escalation) run.escalation.answered = true; // a manager answered: no re-escalation of this task
         run.ctx.span.setAttributes({ "agentco.resumed_at": cp.block, "agentco.escalation.answered": good.length });
-        run.platform.tasks.patchState(task.id, { checkpoint: null });
+        this.patch(run, { checkpoint: null });
         const other = children.filter((c) => c.state.kind !== "escalation");
         if (other.length > 0 && plan.subprocesses.length > 0) {
           // Escalated while evaluating subtask results: re-evaluate them with the guidance in hand.
@@ -275,11 +305,18 @@ export class BrainEngine implements CognitiveEngine {
     }
 
     return this.fullPass(run, selection.entry === "fresh" ? null : plan, {
-      feedback: plan?.feedback ?? [],
+      feedback: [...(plan?.feedback ?? []), ...(boardGuidance ? [boardGuidance] : [])].slice(-8),
       rejected: plan?.rejected ?? [],
       revision: plan?.revision ?? 0,
       boardApproved: selection.entry === "human_answer" && input.answeredApproval?.status === "approved",
     });
+  }
+
+  /** patchState that keeps run.task current (the engine must never reason over a stale snapshot). */
+  private patch(run: BrainRun, patch: Record<string, unknown>): Task {
+    const updated = run.platform.tasks.patchState(run.task!.id, patch);
+    run.task = updated;
+    return updated;
   }
 
   private planFromTask(task: Task): PersistedPlan {
@@ -361,10 +398,15 @@ export class BrainEngine implements CognitiveEngine {
 
     // Early Stop? (the Board's explicit go-ahead overrides a low-confidence stop once).
     const stop = shouldEarlyStop(u.confidence.calibrated, run.drives);
-    // A manager's answer to this very escalation settles it even through the frustration gate (no re-escalation loop).
-    if (stop.stop && !(state.managerAnswered || (state.boardApproved && !run.drives.frustrationGate))) {
-      return this.escalateOutcome(run, `Early stop on T-${task.number}: ${stop.reason}. Risks: ${u.confidence.risks.join("; ") || "unclear"}`, u.confidence.calibrated);
+    // A manager's or the Board's answer to this task settles it even through the frustration gate,
+    // and so does a spent escalation budget: proceed with the guidance (no re-escalation loop).
+    const answered = state.managerAnswered || run.escalation?.answered === true;
+    if (stop.stop && !(answered || (state.boardApproved && !run.drives.frustrationGate))) {
+      if (!escalationSettled(run)) {
+        return this.escalateOutcome(run, `Early stop on T-${task.number}: ${stop.reason}. Risks: ${u.confidence.risks.join("; ") || "unclear"}`, u.confidence.calibrated);
+      }
     }
+    if (stop.stop) run.ctx.span.setAttributes({ "agentco.early_stop.settled": true });
 
     const existingTitles = run.platform.tasks
       .children(task.id)
@@ -379,7 +421,7 @@ export class BrainEngine implements CognitiveEngine {
       interruptCheck(run, "metacognition.cognitive_control.decomposition");
       const planned = await this.planPhase(run, u, feedbackIssues, rejected);
       const persisted = this.persist(run, u, planned.control, planned.chosen, revision, rejected, feedbackIssues, prior);
-      run.platform.tasks.patchState(task.id, { plan: persisted, checkpoint: null });
+      this.patch(run, { plan: persisted, checkpoint: null });
 
       interruptCheck(run, "metacognition.solving_evaluation.solving");
       const solution = await phase(run, "solving", () =>
@@ -403,6 +445,10 @@ export class BrainEngine implements CognitiveEngine {
           taskState: { plan: saved, checkpoint: null },
         };
       }
+      if (solution.kind === "escalated") {
+        // escalate / ask_human inside the Solving loop: wait for the answer, never carry on without it.
+        return this.escalateOutcome(run, `While solving T-${task.number}: ${solution.text}`, u.confidence.calibrated, [], solutionEscalation(solution), "metacognition.solving_evaluation.solving");
+      }
 
       const fb = await phase(run, "evaluation", () =>
         feedback(run, {
@@ -415,13 +461,17 @@ export class BrainEngine implements CognitiveEngine {
           actualCostUsd: run.costUsd,
           revisionsLeft: Math.max(0, maxRevisions - revision),
           rollbackAvailable: rejected.length < CANDIDATE_NAMES.length - 1,
-          canEscalate: this.canEscalate(run.agent),
+          canEscalate: canEscalate(run),
         }),
       );
       if (fb.decision === "accept") {
         return this.report(run, { outcome: "completed", output: solution.text, score: fb.score, summary: fb.summary, predicted: u.confidence.calibrated, events: [], estimateUsd: persisted.estimateUsd, plan: { ...persisted, feedback: [] } });
       }
       if (fb.decision === "escalate") return this.escalateOutcome(run, `Result for T-${task.number} not acceptable: ${fb.issues.join("; ") || fb.summary}`, u.confidence.calibrated);
+      if (fb.decision === "fail") {
+        feedbackIssues = fb.issues.length ? fb.issues : [fb.summary];
+        break;
+      }
       if (fb.decision === "rollback") {
         await rollbackRecovery(run, `rollback of candidate ${planned.chosen}`);
         rejected = [...rejected, planned.chosen];
@@ -548,7 +598,7 @@ export class BrainEngine implements CognitiveEngine {
         actualCostUsd: children.reduce((n, c) => n + (c.actualCostUsd ?? 0), 0) + plan.costSoFarUsd + run.costUsd,
         revisionsLeft: Math.max(0, maxRevisions - plan.revision),
         rollbackAvailable: plan.rejected.length < CANDIDATE_NAMES.length - 1,
-        canEscalate: this.canEscalate(run.agent),
+        canEscalate: canEscalate(run),
       }),
     );
     if (fb.decision === "accept") {
@@ -556,6 +606,20 @@ export class BrainEngine implements CognitiveEngine {
       return this.report(run, { outcome: "completed", output, score: fb.score, summary: fb.summary, predicted: plan.confidence, events, estimateUsd: plan.estimateUsd, plan: { ...plan, feedback: [] } });
     }
     if (fb.decision === "escalate") return this.escalateOutcome(run, `Subtasks of T-${task.number} fell short: ${fb.issues.join("; ") || fb.summary}`, plan.confidence, events);
+    if (fb.decision === "fail") {
+      // No revision, rollback or escalation left: settle instead of re-planning on every wake-up.
+      return this.report(run, {
+        outcome: "failed",
+        output: "",
+        error: `No acceptable result for T-${task.number}: ${truncate(fb.issues.join("; ") || fb.summary, 400)}`,
+        score: fb.score,
+        summary: fb.summary,
+        predicted: plan.confidence,
+        events,
+        estimateUsd: plan.estimateUsd,
+        plan,
+      });
+    }
     if (fb.decision === "rollback") {
       await rollbackRecovery(run, `rollback of candidate ${plan.chosen}: ${fb.issues.join("; ")}`, { cancelOpen: true });
       return this.fullPass(run, plan, { feedback: fb.issues, rejected: [...plan.rejected, plan.chosen], revision: plan.revision });
@@ -564,23 +628,30 @@ export class BrainEngine implements CognitiveEngine {
     return this.fullPass(run, plan, { feedback: issues, rejected: plan.rejected, revision: plan.revision + 1 });
   }
 
-  private canEscalate(agent: Agent): boolean {
-    return agent.tools.includes("escalate") || agent.tools.includes("ask_human");
-  }
-
   /**
    * Early stop / escalate decision. A manager's escalate tool creates an escalation subtask for
    * ITS manager: outcome "waiting" with a checkpoint, resumed by subtasks_completed. The CEO
    * (no manager) asks the Board: outcome "blocked" on the question approval.
    */
-  private async escalateOutcome(run: BrainRun, reason: string, predicted: number, events: ProcessEvent[] = []): Promise<EngineResult> {
+  private async escalateOutcome(
+    run: BrainRun,
+    reason: string,
+    predicted: number,
+    events: ProcessEvent[] = [],
+    opened: { approvalId: string | null; subtaskId: string | null } | null = null,
+    resumeBlock: Checkpoint["block"] = "metacognition.confidence",
+  ): Promise<EngineResult> {
     const task = run.task!;
-    const esc = await block(run, "metacognition.confidence", "Early stop: escalating", async (span) => {
-      span.setAttributes({ "agentco.early_stop": true, "agentco.early_stop.reason": truncate(reason, 300) });
-      return this.escalate(run, reason, span);
-    });
+    // `opened`: the Solving loop already escalated (reuse it, never open a second one).
+    const esc =
+      opened ??
+      (await block(run, "metacognition.confidence", "Early stop: escalating", async (span) => {
+        span.setAttributes({ "agentco.early_stop": true, "agentco.early_stop.reason": truncate(reason, 300) });
+        return this.escalate(run, reason, span);
+      }));
+    if ((esc.approvalId || esc.subtaskId) && run.escalation) run.escalation.count += 1;
     const approvalId = esc.approvalId;
-    const plan = readPlan(task);
+    const plan = readPlan(run.task!);
     const result = await this.report(run, {
       outcome: "blocked",
       output: `I need guidance on T-${task.number} "${task.title}": ${reason}`,
@@ -591,8 +662,9 @@ export class BrainEngine implements CognitiveEngine {
       estimateUsd: plan?.estimateUsd ?? task.estCostUsd,
       plan,
     });
+    const at = run.platform.now().toISOString();
     if (esc.subtaskId) {
-      const checkpoint: Checkpoint = { block: "metacognition.confidence", reason: ESCALATION_CHECKPOINT, at: run.platform.now().toISOString(), wm: run.wm };
+      const checkpoint: Checkpoint = { block: resumeBlock, reason: ESCALATION_CHECKPOINT, at, wm: run.wm };
       return {
         outcome: "waiting",
         output: `Escalated T-${task.number} to my manager and waiting for the answer: ${reason}`,
@@ -600,7 +672,9 @@ export class BrainEngine implements CognitiveEngine {
       };
     }
     if (!approvalId) return { outcome: "failed", output: "", error: `Escalated without an approval or subtask to wait on: ${reason}`, taskState: result.taskState };
-    return { ...result, approvalId };
+    // Blocked on the Board: checkpoint so the human_answer run resumes here (docs/BRAIN.md §3).
+    const checkpoint: Checkpoint = { block: resumeBlock, reason: BOARD_CHECKPOINT, at, wm: run.wm };
+    return { ...result, approvalId, taskState: { ...result.taskState, checkpoint } };
   }
 
   private async escalate(run: BrainRun, reason: string, span: SpanHandle): Promise<{ approvalId: string | null; subtaskId: string | null }> {

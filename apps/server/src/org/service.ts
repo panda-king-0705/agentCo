@@ -39,7 +39,16 @@ export interface OrgDeps {
   castBaZi: (birthIso: string) => BaZiChart | null;
   /** Names of every registered tool (for validating agent.tools). */
   knownTools: () => string[];
+  /** Ids of the configured model profiles (for validating modelOverride); absent = not checked. */
+  knownProfiles?: () => string[];
 }
+
+/** Hands an open task to a new assignee (TaskService.reassign): refund, clean state, keep it schedulable. */
+export type TaskReassigner = (taskId: string, assigneeId: string, reason: string) => Task;
+
+const MODEL_TIERS: readonly string[] = ["frontier", "standard", "economy"];
+const AGENT_TIERS: readonly string[] = ["executive", "manager", "worker"];
+const COGNITIONS: readonly string[] = ["brain", "reflex"];
 
 const OPEN = new Set<Task["status"]>(["todo", "in_progress", "waiting", "blocked"]);
 const STATUS_THROTTLE_MS = 250;
@@ -47,6 +56,7 @@ const STATUS_THROTTLE_MS = 250;
 export class OrgService implements OrgView, AgentStateWriter {
   private readonly deps: OrgDeps;
   private runControl: RunControl | null = null;
+  private reassignTask: TaskReassigner | null = null;
   private readonly lastStatusEmit = new Map<string, { at: number; key: string }>();
 
   constructor(deps: OrgDeps) {
@@ -56,6 +66,11 @@ export class OrgService implements OrgView, AgentStateWriter {
   /** Late-bound: RunService is created after OrgService. */
   attachRunControl(control: RunControl): void {
     this.runControl = control;
+  }
+
+  /** Late-bound: TaskService is created after OrgService; destroy routes re-assignment through it. */
+  attachTaskReassigner(reassign: TaskReassigner): void {
+    this.reassignTask = reassign;
   }
 
   // ───────────── queries (OrgView) ─────────────
@@ -167,6 +182,9 @@ export class OrgService implements OrgView, AgentStateWriter {
    */
   createAgent(input: CreateAgentInput, createdBy: string, options: { ignoreHeadcount?: boolean } = {}): Agent {
     const role = this.resolveRole(input.roleId);
+    this.validateModelFields(input);
+    if (input.tier !== undefined && !AGENT_TIERS.includes(input.tier)) throw badRequest(`unknown tier: ${String(input.tier)}`);
+    if (input.cognition !== undefined && !COGNITIONS.includes(input.cognition)) throw badRequest(`unknown cognition: ${String(input.cognition)}`);
     if (!options.ignoreHeadcount && this.deps.repos.agents.countActive() >= this.deps.company.settings().maxHeadcount) {
       throw conflict(`headcount limit (${this.deps.company.settings().maxHeadcount}) reached; raise maxHeadcount first`);
     }
@@ -185,6 +203,7 @@ export class OrgService implements OrgView, AgentStateWriter {
   updateAgent(id: string, input: UpdateAgentInput): Agent {
     const agent = this.requireAgent(id);
     if (agent.status === "terminated") throw conflict("a terminated agent cannot be edited");
+    this.validateModelFields(input);
     const patch: Partial<Agent> = { updatedAt: this.deps.now().toISOString() };
     if (input.name !== undefined) patch.name = nonEmpty(input.name, "name");
     if (input.title !== undefined) patch.title = nonEmpty(input.title, "title");
@@ -218,21 +237,33 @@ export class OrgService implements OrgView, AgentStateWriter {
   }
 
   /**
-   * Destroy = terminate (spec policy): abort the active run, re-assign open
-   * tasks and direct reports to the manager, mark terminated (rows kept for
-   * audit) and archive the workspace. The CEO cannot be destroyed while it
-   * has reports (409).
+   * Destroy = terminate (docs/ARCHITECTURE.md → Lifecycle): abort the active run, re-assign
+   * open tasks (through TaskService: attempt refunded, run-scoped state cleaned) and direct
+   * reports to the manager, mark terminated (rows kept for audit) and archive the workspace.
+   * With no active manager to inherit (the CEO reports to the Board) it is refused with 409
+   * while it still has direct reports or open tasks — never orphan work.
    */
   destroyAgent(id: string): DestroyAgentResult {
     const agent = this.requireAgent(id);
     if (agent.status === "terminated") throw conflict(`${agent.name} is already terminated`);
     const reports = this.directReports(id);
-    if (agent.managerId === null && reports.length > 0) {
+    const heir = agent.managerId ? this.getAgent(agent.managerId) : null;
+    const inheritor = heir && heir.status !== "terminated" ? heir : null;
+    if (!inheritor && reports.length > 0) {
       throw conflict(`${agent.name} reports to the Board and still has ${reports.length} direct reports; re-assign them first`);
+    }
+    const open = this.deps.repos.tasks.openForAssignee(id);
+    if (!inheritor && open.length > 0) {
+      throw conflict(
+        `${agent.name} has ${open.length} open task(s) (${open
+          .slice(0, 5)
+          .map((t) => `T-${t.number}`)
+          .join(", ")}${open.length > 5 ? ", …" : ""}) and no manager to inherit them; cancel or re-assign them first`,
+      );
     }
     this.deps.repos.agents.update(id, { status: "terminated", activity: null, brainBlock: null });
     const cancelledRuns = this.runControl?.abortAgent(id, "destroy") ?? 0;
-    const { reassignedTasks, reassignedReports } = this.deps.repos.tx(() => this.reassignAll(agent, reports));
+    const { reassignedTasks, reassignedReports } = this.deps.repos.tx(() => this.reassignAll(agent, inheritor, reports));
     const terminated = this.terminateRow(agent);
     this.deps.workspaces.archive(id);
     this.deps.bus.emit("agent.terminated", { agentId: id, summary: summaries.agentTerminated(terminated), data: terminated });
@@ -269,22 +300,21 @@ export class OrgService implements OrgView, AgentStateWriter {
 
   // ───────────── helpers ─────────────
 
-  private reassignAll(agent: Agent, reports: Agent[]): { reassignedTasks: number; reassignedReports: number } {
-    const { repos, bus, now } = this.deps;
+  private reassignAll(agent: Agent, inheritor: Agent | null, reports: Agent[]): { reassignedTasks: number; reassignedReports: number } {
+    const { repos, now } = this.deps;
     const at = now().toISOString();
     const tasks = repos.tasks.openForAssignee(agent.id);
-    for (const task of tasks) {
-      const status = task.status === "in_progress" ? "todo" : task.status;
-      repos.tasks.update(task.id, { assigneeId: agent.managerId, status, updatedAt: at });
-      const updated = repos.tasks.get(task.id) as Task;
-      bus.emit("task.updated", { agentId: agent.managerId, taskId: task.id, traceId: task.traceId, summary: `${summaries.taskUpdated(updated)} (re-assigned from ${agent.name})`, data: updated });
+    if (tasks.length > 0) {
+      if (!inheritor) throw conflict(`${agent.name} has open tasks and no manager to inherit them`);
+      if (!this.reassignTask) throw new Error("OrgService: no task re-assigner attached");
+      for (const task of tasks) this.reassignTask(task.id, inheritor.id, `re-assigned from ${agent.name} (terminated)`);
     }
     for (const report of reports) {
-      repos.agents.update(report.id, { managerId: agent.managerId, updatedAt: at });
+      repos.agents.update(report.id, { managerId: inheritor?.id ?? null, updatedAt: at });
       this.emitUpdated(report.id);
     }
     for (const department of repos.departments.list().filter((d) => d.headAgentId === agent.id)) {
-      repos.departments.update(department.id, { headAgentId: agent.managerId });
+      repos.departments.update(department.id, { headAgentId: inheritor?.id ?? null });
     }
     return { reassignedTasks: tasks.length, reassignedReports: reports.length };
   }
@@ -343,8 +373,24 @@ export class OrgService implements OrgView, AgentStateWriter {
       return null;
     }
     const manager = this.requireActiveManager(managerId);
-    if (manager.id === agent.id || this.managerChain(manager.id).some((m) => m.id === agent.id)) throw conflict("that manager change would create a reporting cycle");
+    if (manager.id === agent.id || this.managerChain(manager.id).some((m) => m.id === agent.id)) throw badRequest("that manager change would create a reporting cycle");
     return manager.id;
+  }
+
+  /** modelTier, modelOverride and monthlyBudgetUsd of a create/update input (400 on anything unknown or not a budget). */
+  private validateModelFields(input: { modelTier?: unknown; modelOverride?: unknown; monthlyBudgetUsd?: unknown }): void {
+    if (input.modelTier !== undefined && (typeof input.modelTier !== "string" || !MODEL_TIERS.includes(input.modelTier))) {
+      throw badRequest(`unknown modelTier: ${String(input.modelTier)} (expected ${MODEL_TIERS.join(", ")})`);
+    }
+    if (input.modelOverride !== undefined && input.modelOverride !== null) {
+      if (typeof input.modelOverride !== "string" || !input.modelOverride.trim()) throw badRequest("modelOverride must be a model profile id or null");
+      const known = this.deps.knownProfiles?.();
+      if (known && !known.includes(input.modelOverride)) throw badRequest(`unknown modelOverride profile: ${input.modelOverride} (known: ${known.join(", ") || "none"})`);
+    }
+    if (input.monthlyBudgetUsd !== undefined) {
+      const budget = input.monthlyBudgetUsd;
+      if (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0) throw badRequest("monthlyBudgetUsd must be a finite number ≥ 0 (0 = no per-agent cap)");
+    }
   }
 
   private validateTools(tools: string[] | undefined): string[] | undefined {
