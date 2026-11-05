@@ -294,6 +294,8 @@ export class FakePlatform implements PlatformServices {
   failTool = new Map<string, number>();
   inboxMessages: Message[] = [];
   private taskNumber = 100;
+  /** Escalation subtask ids created by the fake escalate tool. */
+  readonly escalations: string[] = [];
 
   constructor(options: FakePlatformOptions = {}) {
     this.config = options.config ?? loadModelConfig({ MOCK_LATENCY_MS: "0", ...(options.env ?? {}) }, { log: () => {} });
@@ -414,7 +416,19 @@ export class FakePlatform implements PlatformServices {
       return t;
     },
     interruptFor: () => this.interruptReason,
+    cancel: (taskId, reason) => {
+      const t = this.taskMap.get(taskId);
+      if (!t) throw new Error(`no task ${taskId}`);
+      if (["done", "failed", "cancelled"].includes(t.status)) return t;
+      for (const c of [...this.taskMap.values()].filter((x) => x.parentTaskId === taskId)) this.tasks.cancel(c.id, reason);
+      t.status = "cancelled";
+      t.error = reason;
+      this.cancelled.push({ taskId, reason });
+      return t;
+    },
   };
+  /** Tasks cancelled through TaskView.cancel (in order). */
+  readonly cancelled: { taskId: string; reason: string }[] = [];
 
   // ── AgentStateWriter
   readonly agents: AgentStateWriter = {
@@ -573,7 +587,32 @@ export class FakePlatform implements PlatformServices {
         const manager = ctx.agent.managerId ? this.agentMap.get(ctx.agent.managerId) : null;
         if (call.name === "escalate" && manager) {
           this.sent.push({ from: ctx.agent.id, to: manager.id, content: String(a.question ?? a.reason ?? "") });
-          return { ok: true, content: `Escalated to ${manager.name}`, effects: [{ kind: "message_sent", messageId: nextId("msg"), conversationId: "cnv_x" }] };
+          const effects: ToolResult["effects"] = [{ kind: "message_sent", messageId: nextId("msg"), conversationId: "cnv_x" }];
+          const parent = ctx.taskId ? this.taskMap.get(ctx.taskId) : undefined;
+          if (parent) {
+            // Mirrors the real tool: an escalation SUBTASK of the caller's task, assigned to the manager.
+            const id = nextId("tsk");
+            this.taskMap.set(
+              id,
+              makeTask({
+                id,
+                number: ++this.taskNumber,
+                traceId: ctx.traceId,
+                parentTaskId: parent.id,
+                rootTaskId: parent.rootTaskId,
+                title: `Escalation from ${ctx.agent.name}: ${String(a.question ?? a.reason ?? "").slice(0, 200)}`,
+                description: String(a.reason ?? ""),
+                assigneeId: manager.id,
+                createdBy: ctx.agent.id,
+                status: "todo",
+                value: 900,
+                state: { kind: "escalation", escalatedBy: ctx.agent.id },
+              }),
+            );
+            this.escalations.push(id);
+            effects.push({ kind: "task_created", taskId: id, assigneeId: manager.id });
+          }
+          return { ok: true, content: `Escalated to ${manager.name}`, effects };
         }
         this.approvals.push(approval);
         return { ok: true, content: `Asked the Board (${approval.id})`, effects: [{ kind: "approval_requested", approvalId: approval.id }] };

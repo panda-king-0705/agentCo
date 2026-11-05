@@ -199,14 +199,73 @@ test("brain: low calibrated confidence → early stop → blocked with the Board
   assert.equal(p.patches.at(-1)!.patch.affect!.frustration > 0, true, "escalation is a process event for Human Nature");
 });
 
-test("brain: high frustration forces the early stop; a manager escalates to its manager and asks the Board", async () => {
+test("brain: high frustration forces the early stop; a manager escalates up the chain and waits (outcome waiting)", async () => {
   const { p, cmo, ceo } = company();
   cmo.affect = { valence: -0.4, arousal: 0.5, frustration: 0.8 };
   const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.");
   const r = await brain().run(p.context(cmo, taskInput(task)));
-  assert.equal(r.outcome, "blocked");
-  assert.ok(r.approvalId);
-  assert.equal(p.sent[0]!.to, ceo.id, "escalated to the manager first");
+  assert.equal(r.outcome, "waiting");
+  assert.equal(r.approvalId, undefined, "no Board approval for a manager");
+  assert.equal(p.sent[0]!.to, ceo.id, "escalated to the manager");
+  assert.equal(p.approvals.length, 0);
+  const [esc] = p.tasks.children(task.id);
+  assert.equal(esc!.assigneeId, ceo.id);
+  assert.equal(esc!.state.kind, "escalation");
+  assert.equal(esc!.state.escalatedBy, cmo.id);
+  const cp = r.taskState?.checkpoint as { block: string; reason: string } | null;
+  assert.ok(cp && cp.block === "metacognition.confidence", "checkpointed at the Confidence block");
+});
+
+test("brain: escalation answered (subtasks_completed) resumes at the checkpoint with the answer in working memory", async () => {
+  const { p, cmo } = company();
+  cmo.affect = { valence: -0.4, arousal: 0.5, frustration: 0.8 };
+  const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.");
+  const first = await brain().run(p.context(cmo, taskInput(task)));
+  assert.equal(first.outcome, "waiting");
+  p.tasks.patchState(task.id, first.taskState as Record<string, unknown>);
+  const esc = p.tasks.children(task.id)[0]!;
+  esc.status = "done";
+  esc.result = "Go ahead: target SMB teams first and keep the budget under $2k.";
+  const fresh = p.tasks.get(task.id)!;
+  const r = await brain().run(p.context(cmo, taskInput(fresh, "subtasks_completed", { subtasks: p.tasks.children(task.id) })));
+  assert.equal(p.escalations.length, 1, "does not escalate the same question again");
+  assert.notEqual(r.outcome, "failed");
+  assert.equal(p.tasks.get(task.id)!.state.checkpoint, null, "checkpoint consumed");
+  const resumed = p.tracer.spans.find((s) => s.attributes["agentco.escalation.answered"] === 1);
+  assert.ok(resumed, "resume recorded on the run span");
+  assert.equal(resumed!.attributes["agentco.resumed_at"], "metacognition.confidence");
+});
+
+test("brain: a failed escalation fails the task with the reason instead of looping", async () => {
+  const { p, cmo } = company();
+  cmo.affect = { valence: -0.4, arousal: 0.5, frustration: 0.8 };
+  const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.");
+  const first = await brain().run(p.context(cmo, taskInput(task)));
+  p.tasks.patchState(task.id, first.taskState as Record<string, unknown>);
+  const esc = p.tasks.children(task.id)[0]!;
+  esc.status = "failed";
+  esc.error = "No capacity";
+  const r = await brain().run(p.context(cmo, taskInput(p.tasks.get(task.id)!, "subtasks_completed", { subtasks: p.tasks.children(task.id) })));
+  assert.equal(r.outcome, "failed");
+  assert.match(r.error ?? "", /No capacity/);
+  assert.equal(p.escalations.length, 1);
+});
+
+test("brain: rollback cancels still-open subtasks through platform.tasks.cancel before re-planning", async () => {
+  const { p, ceo, cmo } = company();
+  const task = rootTask(p, ceo.id);
+  const open = p.addTask(makeTask({ id: "tsk_o", number: 8, parentTaskId: task.id, rootTaskId: task.id, title: "Marketing input: launch", assigneeId: cmo.id, status: "in_progress" }));
+  const grand = p.addTask(makeTask({ id: "tsk_g", number: 9, parentTaskId: open.id, rootTaskId: task.id, title: "Draft", assigneeId: cmo.id, status: "todo" }));
+  const { rollbackRecovery } = await import("../../src/cognition/brain/metacognition/project-management.ts");
+  const run = { ctx: p.context(ceo, taskInput(task)), platform: p, agent: ceo, task, wm: {}, visited: [], costUsd: 0, calls: [], insights: [], currentBlock: null, parent: null } as never;
+  const kept = await rollbackRecovery(run, "recovery check");
+  assert.equal(kept.open.length, 1, "plain inspection never cancels");
+  assert.equal(p.cancelled.length, 0);
+  const r = await rollbackRecovery(run, "rollback of candidate low_cost: too thin", { cancelOpen: true });
+  assert.equal(r.open.length, 0);
+  assert.deepEqual(p.cancelled.map((c) => c.taskId), [grand.id, open.id]);
+  assert.equal(p.tasks.get(open.id)!.status, "cancelled");
+  assert.match(p.cancelled[1]!.reason, /Superseded/);
 });
 
 test("brain: conservation mode (safety need low) picks the cheapest candidate and allows no revisions", async () => {

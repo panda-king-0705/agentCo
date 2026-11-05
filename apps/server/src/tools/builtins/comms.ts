@@ -1,5 +1,7 @@
 /** send_message, escalate, ask_human. */
 import { oneLine } from "../../events/bus.ts";
+import { newId } from "../../db/ids.ts";
+import type { ToolEffect } from "../../contracts.ts";
 import { ALL_TIERS, fail, LEADS, ok, type ToolDefinition, type ToolRunContext } from "../types.ts";
 
 export const sendMessage: ToolDefinition = {
@@ -49,11 +51,53 @@ export const escalate: ToolDefinition = {
   run(args, ctx) {
     const { org, conversations, tasks } = ctx.services;
     const manager = ctx.agent.managerId ? org.getAgent(ctx.agent.managerId) : null;
+    // The CEO (or an agent whose manager is gone) asks the Board.
     if (!manager || manager.status === "terminated") return askBoard(ctx, String(args.question), String(args.reason));
+    const reason = String(args.reason);
+    const question = String(args.question);
     const task = ctx.taskId ? tasks.get(ctx.taskId) : null;
-    const content = `Escalation${task ? ` on T-${task.number} "${task.title}"` : ""}: ${String(args.reason)}\nQuestion: ${String(args.question)}`;
+    const content = `Escalation${task ? ` on T-${task.number} "${task.title}"` : ""}: ${reason}\nQuestion: ${question}`;
+    const effects: ToolEffect[] = [];
+    let created: { id: string; number: number } | null = null;
+    if (task) {
+      // Up the chain like a real company: a subtask of the caller's task, assigned to the manager.
+      const taskId = newId("tsk");
+      const delegation = ctx.span.child({
+        kind: "delegation",
+        name: `escalate → ${manager.name}`,
+        input: content,
+        attributes: { "agentco.delegate.to": manager.id, "agentco.delegate.to_name": manager.name, "agentco.delegate.from": ctx.agent.id, "agentco.task.id": taskId, "agentco.escalation": true },
+      });
+      try {
+        const sub = tasks.createSubtask({
+          id: taskId,
+          parent: task,
+          traceId: ctx.traceId,
+          assigneeId: manager.id,
+          createdBy: ctx.agent.id,
+          title: `Escalation from ${ctx.agent.name}: ${question}`.slice(0, 300),
+          description: `${ctx.agent.name} (${ctx.agent.title}) is stuck on T-${task.number} "${task.title}".\n\nWhy: ${reason}\n\nQuestion: ${question}\n\nAnswer it (or fix the blocker); your result is handed back to ${ctx.agent.name} as the answer.`,
+          value: 900,
+          estCostUsd: 0.05,
+          state: { kind: "escalation", escalatedBy: ctx.agent.id, delegationSpanId: delegation.spanId },
+        });
+        delegation.end({ status: "ok", output: `T-${sub.number} escalated to ${manager.name}` });
+        created = { id: sub.id, number: sub.number };
+        effects.push({ kind: "task_created", taskId: sub.id, assigneeId: manager.id });
+      } catch (error) {
+        delegation.end({ status: "error", error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    }
     const message = conversations.sendAgentMessage(ctx.agent, manager, content, { runId: ctx.runId, taskId: ctx.taskId, traceId: ctx.traceId });
-    return ok(`Escalated to ${manager.name} (${manager.title}).`, [{ kind: "message_sent", messageId: message.id, conversationId: message.conversationId }]);
+    effects.push({ kind: "message_sent", messageId: message.id, conversationId: message.conversationId });
+    return ok(
+      created
+        ? `Escalated to ${manager.name} (${manager.title}) as T-${created.number}. Return outcome "waiting"; you will be resumed with their answer.`
+        : `Escalated to ${manager.name} (${manager.title}).`,
+      effects,
+      created ? { taskId: created.id, number: created.number } : undefined,
+    );
   },
 };
 

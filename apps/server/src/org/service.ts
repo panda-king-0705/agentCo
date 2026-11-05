@@ -256,6 +256,8 @@ export class OrgService implements OrgView, AgentStateWriter {
     const identity = { ...agent.identity };
     if (patch.narrative !== undefined) identity.narrative = patch.narrative;
     if (patch.okrs !== undefined) identity.okrs = patch.okrs;
+    if (patch.assets !== undefined) identity.assets = [...patch.assets];
+    if (patch.resourceConnections !== undefined) identity.resourceConnections = [...patch.resourceConnections];
     this.deps.repos.agents.update(agentId, {
       identity,
       affect: patch.affect ?? agent.affect,

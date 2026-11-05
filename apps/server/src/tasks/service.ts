@@ -235,10 +235,13 @@ export class TaskService implements TaskView {
     return failed;
   }
 
-  /** Cancels the task and every open descendant (runs are aborted by RunService's terminal listener). */
+  /**
+   * Cancels an open task and every open descendant (running runs are aborted by RunService's
+   * terminal listener). A no-op on terminal tasks (TaskView contract); the HTTP route checks first.
+   */
   cancel(taskId: string, reason = "Cancelled by the Board"): Task {
     const task = this.require(taskId);
-    if (TERMINAL.has(task.status)) throw conflict(`${taskRef(task)} is already ${task.status}`);
+    if (TERMINAL.has(task.status)) return task;
     for (const child of this.children(taskId)) if (!TERMINAL.has(child.status)) this.cancel(child.id, `Parent ${taskRef(task)} was cancelled`);
     return this.transition(this.require(taskId), "cancelled", { error: reason, completedAt: this.iso() });
   }

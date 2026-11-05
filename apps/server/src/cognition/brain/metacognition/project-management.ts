@@ -170,10 +170,24 @@ export function inspectSubtasks(children: Task[]): RecoveryInspection {
   return { open, finished, existingTitles: children.map((c) => c.title.trim().toLowerCase()) };
 }
 
-export async function rollbackRecovery(run: BrainRun, reason: string): Promise<RecoveryInspection> {
+/**
+ * Establish the real state of the subtasks before acting. With `cancelOpen` (a rollback of the
+ * rejected candidate) the still-open subtasks are cancelled through platform.tasks.cancel
+ * first, so the re-plan neither duplicates them nor leaves them burning budget.
+ */
+export async function rollbackRecovery(run: BrainRun, reason: string, options: { cancelOpen?: boolean } = {}): Promise<RecoveryInspection> {
   return block(run, "metacognition.project_management.rollback_failure_recovery", "Establishing the real state before acting", (span) => {
-    const children = run.task ? run.platform.tasks.children(run.task.id) : [];
+    let children = run.task ? run.platform.tasks.children(run.task.id) : [];
+    let cancelled = 0;
+    if (options.cancelOpen) {
+      for (const c of inspectSubtasks(children).open) {
+        run.platform.tasks.cancel(c.id, `Superseded: ${truncate(reason, 160)}`);
+        cancelled++;
+      }
+      if (cancelled > 0 && run.task) children = run.platform.tasks.children(run.task.id);
+    }
     const r = inspectSubtasks(children);
+    span.setAttributes({ "agentco.recovery.cancelled": cancelled });
     span.setAttributes({ "agentco.recovery.reason": truncate(reason, 200), "agentco.recovery.open": r.open.length, "agentco.recovery.finished": r.finished.length });
     return r;
   });

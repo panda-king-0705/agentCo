@@ -91,8 +91,8 @@ test("reflex: exhausting steps on both tiers fails", async () => {
   assert.deepEqual(tiers, ["economy", "standard"]);
 });
 
-test("reflex: report_blocker escalates to the manager and fails with the reason", async () => {
-  const blocker: ModelProvider = {
+function blockerProvider(): ModelProvider {
+  return {
     name: "mock",
     complete: async () => ({
       content: "",
@@ -101,12 +101,37 @@ test("reflex: report_blocker escalates to the manager and fails with the reason"
       finishReason: "tool_calls",
     }),
   };
-  const { platform, worker, task, manager } = setup({ providers: { mock: blocker } });
+}
+
+test("reflex: report_blocker escalates to the manager (escalation subtask) and returns waiting", async () => {
+  const { platform, worker, task, manager } = setup({ providers: { mock: blockerProvider() } });
   const result = await new ReflexEngine().run(platform.context(worker, taskInput(task)));
-  assert.equal(result.outcome, "failed");
-  assert.match(result.error ?? "", /No product name decided/);
+  assert.equal(result.outcome, "waiting");
+  assert.match(result.output, /No product name decided/);
   assert.equal(platform.sent[0]!.to, manager.id);
+  const [esc] = platform.tasks.children(task.id);
+  assert.equal(esc!.assigneeId, manager.id);
+  assert.equal(esc!.state.kind, "escalation");
   assert.ok(platform.tracer.spans.some((s) => s.name === "tool.report_blocker" && s.kind === "tool"));
+});
+
+test("reflex: escalation answer arrives on subtasks_completed and goes into the prompt", async () => {
+  const seen: string[] = [];
+  const mock = new MockProvider({ latencyMs: 0 });
+  const spy: ModelProvider = {
+    name: "mock",
+    complete: async (profile, request, signal) => {
+      seen.push(request.messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n"));
+      return mock.complete(profile, request, signal);
+    },
+  };
+  const { platform, worker, task, manager } = setup({ providers: { mock: spy } });
+  const esc = platform.addTask(
+    makeTask({ id: "tsk_esc", number: 13, parentTaskId: task.id, rootTaskId: task.id, title: "Escalation", assigneeId: manager.id, status: "done", result: "Name it Notely.", state: { kind: "escalation", escalatedBy: worker.id } }),
+  );
+  const result = await new ReflexEngine().run(platform.context(worker, taskInput(task, "subtasks_completed", { subtasks: [esc] })));
+  assert.ok(seen.some((m) => m.includes("Answer to your escalation") && m.includes("Name it Notely.")), "answer in the prompt");
+  assert.equal(result.outcome, "completed");
 });
 
 test("reflex: respects abort and does not cascade", async () => {

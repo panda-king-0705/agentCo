@@ -114,7 +114,11 @@ export function buildRouter(platform: Platform): Router {
       approvals: approvals.forTask(task.id),
     };
   });
-  router.post("/api/tasks/:id/cancel", ({ params }) => tasks.cancel(param(params, "id")));
+  router.post("/api/tasks/:id/cancel", ({ params }) => {
+    const task = tasks.require(param(params, "id"));
+    if (["done", "failed", "cancelled"].includes(task.status)) throw conflict(`T-${task.number} is already ${task.status}`);
+    return tasks.cancel(task.id);
+  });
   router.post("/api/tasks/:id/retry", ({ params }) => {
     const task = tasks.retry(param(params, "id"));
     platform.scheduler.nudge();

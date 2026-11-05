@@ -8,9 +8,11 @@
  * next tier up (economy → standard → frontier), then fails. Completion writes
  * one episodic memory.
  *
- * report_blocker: the engine escalates via the `escalate` tool when the agent
- * has it; an approval effect → outcome "blocked" (re-run on human_answer);
- * otherwise → "failed" with the reason, so the manager's evaluation sees it.
+ * report_blocker: the engine escalates up the chain via the `escalate` tool. An
+ * escalation subtask for the manager (task_created effect) → outcome "waiting";
+ * the normal wake-up (subtasks_completed) re-runs the task with the manager's
+ * answer in the prompt. An approval effect (only when there is no manager) →
+ * "blocked" (re-run on human_answer); otherwise → "failed" with the reason.
  */
 import type { ModelTier, Task } from "../../../../packages/shared/src/index.ts";
 import type { CognitiveEngine, EngineContext, EngineResult, ToolSpec } from "../contracts.ts";
@@ -63,6 +65,15 @@ export class ReflexEngine implements CognitiveEngine {
     if (lessons.length) parts.push(`Lessons from past work:\n${lessons.map((m) => `- ${oneLine(m.content, 200)}`).join("\n")}`);
     if (inbox.length) parts.push(`Unread messages:\n${inbox.map((m) => `- ${m.senderId}: ${oneLine(m.content, 200)}`).join("\n")}`);
     if (input.trigger !== "message" && input.recoveryNotice) parts.push(`RECOVERY NOTICE: ${input.recoveryNotice}`);
+    if (input.trigger === "subtasks_completed" && input.subtasks.length) {
+      const answers = input.subtasks.filter((c) => c.state.kind === "escalation");
+      for (const c of answers) {
+        const who = c.assigneeId ? (platform.org.getAgent(c.assigneeId)?.name ?? "your manager") : "your manager";
+        parts.push(`Answer to your escalation from ${who} (${c.status}): ${truncate(c.result ?? c.error ?? "(no answer)", 1500)}\nContinue the task using this answer; do not escalate the same question again.`);
+      }
+      const others = input.subtasks.filter((c) => c.state.kind !== "escalation");
+      if (others.length) parts.push(`Finished subtasks:\n${others.map((c) => `- ${c.title} [${c.status}]: ${truncate(c.result ?? c.error ?? "", 300)}`).join("\n")}`);
+    }
     if (input.trigger === "human_answer" && input.answeredApproval) {
       parts.push(`Answer to your question: ${input.answeredApproval.note ?? input.answeredApproval.status}`);
     }
@@ -121,14 +132,19 @@ export class ReflexEngine implements CognitiveEngine {
 
     if (loop.status === "blocked") {
       let approvalId: string | undefined;
+      let escalated = false;
       if (task && agent.tools.includes("escalate")) {
         const r = await platform.tools.execute(
           { id: `blocker_${ctx.run.id}`, name: "escalate", arguments: { reason: loop.reason, question: `Blocked on T-${task.number} "${task.title}": ${loop.reason}` } },
           { agent, runId: ctx.run.id, traceId: ctx.run.traceId, parentSpanId: ctx.span.spanId, taskId: task.id, conversationId: null, signal: ctx.signal },
         );
-        for (const e of r.effects) if (e.kind === "approval_requested") approvalId = e.approvalId;
+        for (const e of r.effects) {
+          if (e.kind === "approval_requested") approvalId = e.approvalId;
+          if (e.kind === "task_created") escalated = true;
+        }
       }
       this.remember(ctx, task, "blocked", loop.reason);
+      if (escalated) return { outcome: "waiting", output: `Escalated to my manager: ${loop.reason}` };
       if (approvalId) return { outcome: "blocked", output: `Blocked: ${loop.reason}`, approvalId };
       return { outcome: "failed", output: "", error: `Blocked: ${loop.reason}` };
     }
