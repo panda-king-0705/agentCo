@@ -1,0 +1,142 @@
+/**
+ * Self-management › Identity: Self-Identity → Desire → Motivation (drives).
+ *
+ * Self-Identity (worldview, life view → value, BIO/assets, resource
+ * connection) becomes the identity charter at the top of every brain prompt.
+ * Desire and Motivation become numeric drives that change behaviour; Emotion
+ * (Sensibility) and Maslow's needs modulate Motivation.
+ */
+import type { Agent, AgentIdentity, AffectState, NeedsState } from "../../../../../../packages/shared/src/index.ts";
+import { clamp, round } from "../../coerce.ts";
+import { truncate } from "../../text.ts";
+import type { AgentFacts } from "../../prompt.ts";
+import { Q5_BIO_ASSETS_LABEL } from "../interpretation.ts";
+import { toneFor } from "./personality.ts";
+
+export type NeedLevel = "physiological" | "safety" | "belonging" | "esteem" | "self_actualization";
+
+export interface Drives {
+  // Desire (effective, 0..1)
+  taskDriven: number;
+  curiosity: number;
+  epistemic: number;
+  vision: number;
+  // Motivation (effective, 0..1)
+  autonomy: number;
+  competence: number;
+  purpose: number;
+  needs: NeedsState;
+  lowestUnmetNeed: NeedLevel | null;
+  /** physiological low: only essential work (skip optional model calls, minimal plans). */
+  essentialOnly: boolean;
+  /** safety low (or physiological): cheapest acceptable candidate, no revisions. */
+  conservation: boolean;
+  /** belonging low: reach out to the manager chain first. */
+  reachOutFirst: boolean;
+  /** esteem low: stricter self-evaluation. */
+  strictSelfEvaluation: boolean;
+  // Derived behaviour
+  recallK: number; // literature review breadth: 4 + 4·curiosity
+  perspectives: number; // 2 + round(2·curiosity), −1 when strongly task-driven
+  truthfulGate: number; // 0.6 + 0.3·epistemic
+  visionMultiplier: number; // 1 + 0.5·vision for vision/OKR-aligned work
+  earlyStopThreshold: number; // 0.25, +0.1 when autonomy is low
+  maxSolveSteps: number; // ≤ 6, shorter when strongly task-driven
+  frustrationGate: boolean; // frustration > 0.7 forces the early stop
+  /** Notes explaining every modulation, for the trace. */
+  notes: string[];
+}
+
+export const EARLY_STOP_BASE = 0.25;
+export const LOW_AUTONOMY = 0.4;
+export const FRUSTRATION_LIMIT = 0.7;
+
+/** Maslow: the lowest unmet need steers behaviour. */
+export function lowestUnmetNeed(needs: NeedsState): NeedLevel | null {
+  if (needs.physiological === "low") return "physiological";
+  if (needs.safety === "low") return "safety";
+  if (needs.belonging === "low") return "belonging";
+  if (needs.esteem === "low") return "esteem";
+  if (needs.selfActualization < 1) return "self_actualization";
+  return null;
+}
+
+/** Desire → Motivation ← Emotion, needs. Pure. */
+export function computeDrives(identity: AgentIdentity, affect: AffectState, needs: NeedsState): Drives {
+  const notes: string[] = [];
+  let curiosity = identity.desires.curiosity;
+  let autonomy = identity.motivation.autonomy;
+  // Sensibility/Emotion → Motivation.
+  if (affect.valence < -0.3) {
+    autonomy -= 0.1;
+    notes.push("negative valence lowers autonomy by 0.1");
+  }
+  if (affect.valence > 0.3) {
+    curiosity += 0.1;
+    notes.push("positive valence raises curiosity by 0.1");
+  }
+  const lowest = lowestUnmetNeed(needs);
+  if (lowest === "self_actualization") {
+    curiosity += 0.1;
+    notes.push("self-actualisation need raises curiosity by 0.1");
+  }
+  curiosity = clamp(curiosity, 0, 1);
+  autonomy = clamp(autonomy, 0, 1);
+  const taskDriven = clamp(identity.desires.taskDriven, 0, 1);
+  const epistemic = clamp(identity.desires.epistemic, 0, 1);
+  const vision = clamp(identity.desires.vision ?? 0.5, 0, 1);
+  const essentialOnly = needs.physiological === "low";
+  const conservation = essentialOnly || needs.safety === "low";
+  if (essentialOnly) notes.push("physiological need low: essential work only");
+  else if (conservation) notes.push("safety need low: conservation mode");
+  const reachOutFirst = lowest === "belonging";
+  const strictSelfEvaluation = needs.esteem === "low";
+  const lowAutonomy = autonomy < LOW_AUTONOMY;
+  if (lowAutonomy) notes.push("low autonomy: early-stop threshold +0.1");
+  const perspectives = clamp(2 + Math.round(2 * curiosity) - (taskDriven > 0.7 ? 1 : 0), 1, 4);
+  return {
+    taskDriven,
+    curiosity: round(curiosity, 3),
+    epistemic,
+    vision,
+    autonomy: round(autonomy, 3),
+    competence: clamp(identity.motivation.competence, 0, 1),
+    purpose: clamp(identity.motivation.purpose, 0, 1),
+    needs,
+    lowestUnmetNeed: lowest,
+    essentialOnly,
+    conservation,
+    reachOutFirst,
+    strictSelfEvaluation,
+    recallK: Math.round(4 + 4 * curiosity),
+    perspectives: essentialOnly ? 1 : perspectives,
+    truthfulGate: round(0.6 + 0.3 * epistemic, 3),
+    visionMultiplier: round(1 + 0.5 * vision, 3),
+    earlyStopThreshold: round(EARLY_STOP_BASE + (lowAutonomy ? 0.1 : 0), 3),
+    maxSolveSteps: clamp(6 - (taskDriven > 0.7 ? 2 : 0), 2, 6),
+    frustrationGate: affect.frustration > FRUSTRATION_LIMIT,
+    notes,
+  };
+}
+
+/** Self-Identity → the charter at the top of every brain prompt (tight: it is paid on every call). */
+export function renderCharter(agent: Agent, facts: AgentFacts): string {
+  const id = agent.identity;
+  const okrs = id.okrs
+    .slice(0, 2)
+    .map((o) => `${truncate(o.objective, 80)} [${o.keyResults.slice(0, 2).map((k) => `${truncate(k.description, 50)} ${k.current}/${k.target}${k.unit}`).join("; ")}]`)
+    .join(" | ");
+  const lines = [
+    `You are ${agent.name}, ${agent.title} (${facts.department}) at an AI-run company; the human Board oversees it.`,
+    `Mission: ${truncate(id.mission, 200)}`,
+    id.worldview ? `Worldview: ${truncate(id.worldview, 160)}` : "",
+    id.lifeView ? `Life view: ${truncate(id.lifeView, 160)}${id.values.length ? ` — hence values: ${id.values.slice(0, 5).join(", ")}` : ""}` : id.values.length ? `Values: ${id.values.slice(0, 5).join(", ")}` : "",
+    id.vision ? `Vision: ${truncate(id.vision, 160)}` : "",
+    okrs ? `OKRs: ${okrs}` : "",
+    id.narrative ? `Self-narrative: ${truncate(id.narrative, 240)}` : "",
+    id.assets.length ? `${Q5_BIO_ASSETS_LABEL}: ${id.assets.slice(-5).map((a) => truncate(a, 40)).join(", ")}` : "",
+    id.resourceConnections.length ? `Connections: ${id.resourceConnections.slice(-5).map((a) => truncate(a, 40)).join(", ")}` : "",
+    `Style: ${truncate(agent.persona.style || "clear and direct", 100)}${toneFor(agent.persona.personalityType)}`,
+  ];
+  return lines.filter(Boolean).join("\n");
+}
