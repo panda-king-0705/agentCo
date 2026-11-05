@@ -7,8 +7,10 @@ import type { Conversation, Department } from "../../../../packages/shared/src/i
 import type { Repositories } from "../db/index.ts";
 import { newId } from "../db/ids.ts";
 import type { OrgTemplateId } from "../config.ts";
+import type { Catalog } from "../catalog/service.ts";
+import { AppError } from "../http/errors.ts";
 import type { OrgService } from "./service.ts";
-import { DEPARTMENT_TEMPLATES, roleTemplate, templateRoleIds } from "./templates.ts";
+import { AGENCY_STAFFING, DEPARTMENT_TEMPLATES, roleTemplate, templateRoleIds } from "./templates.ts";
 
 export interface BootstrapResult {
   created: boolean;
@@ -18,7 +20,7 @@ export interface BootstrapResult {
 }
 
 /** Creates the org for `template` unless agents already exist; always ensures a Boardroom. */
-export function bootstrapCompany(repos: Repositories, org: OrgService, template: OrgTemplateId, now: () => Date): BootstrapResult {
+export function bootstrapCompany(repos: Repositories, org: OrgService, template: OrgTemplateId, now: () => Date, catalog: Catalog | null = null): BootstrapResult {
   if (repos.agents.list().length > 0) {
     return { created: false, departments: repos.departments.list().length, agents: repos.agents.countActive(), boardroomId: ensureBoardroom(repos, org, now).id };
   }
@@ -26,9 +28,46 @@ export function bootstrapCompany(repos: Repositories, org: OrgService, template:
   const departments = createDepartments(repos, roleIds, now);
   for (const roleId of roleIds) org.createAgent({ roleId }, "system", { ignoreHeadcount: true });
   assignHeads(repos, departments);
+  if (template === "agency") staffAgency(repos, org, catalog);
   const boardroom = ensureBoardroom(repos, org, now);
   welcome(repos, org, now);
-  return { created: true, departments: departments.length, agents: roleIds.length, boardroomId: boardroom.id };
+  return { created: true, departments: repos.departments.list().length, agents: repos.agents.countActive(), boardroomId: boardroom.id };
+}
+
+export interface AgencyStaffingResult {
+  hired: number;
+  /** Specialists left out because MAX_HEADCOUNT was reached. */
+  skippedForHeadcount: number;
+}
+
+/**
+ * ORG_TEMPLATE=agency: brings every department to its AGENCY_STAFFING specialist set (2-4 each),
+ * counting specialists a startup worker template already staffs, creating missing departments
+ * (Security, Data & AI, Strategy) on demand. Hires stop at MAX_HEADCOUNT; the rest are counted.
+ */
+export function staffAgency(repos: Repositories, org: OrgService, catalog: Catalog | null): AgencyStaffingResult {
+  const result: AgencyStaffingResult = { hired: 0, skippedForHeadcount: 0 };
+  if (!catalog || catalog.size === 0) {
+    console.warn("[bootstrap] ORG_TEMPLATE=agency but no catalog is loaded; staffed the startup org only");
+    return result;
+  }
+  for (const [slug, ids] of Object.entries(AGENCY_STAFFING)) {
+    for (const catalogId of ids) {
+      if (!catalog.has(catalogId)) continue;
+      const department = org.ensureDepartment(slug);
+      const staffed = repos.agents.list({ departmentId: department.id, includeTerminated: false }).some((a) => a.tier === "worker" && a.catalogId === catalogId);
+      if (staffed) continue;
+      try {
+        org.createAgent({ catalogId, departmentId: department.id }, "system");
+        result.hired++;
+      } catch (error) {
+        if (error instanceof AppError && error.status === 409) result.skippedForHeadcount++;
+        else throw error;
+      }
+    }
+  }
+  if (result.skippedForHeadcount) console.warn(`[bootstrap] agency org: ${result.skippedForHeadcount} specialist(s) not hired (MAX_HEADCOUNT reached)`);
+  return result;
 }
 
 /** Departments that have at least one role in the template (parents first). */

@@ -4,6 +4,7 @@ import type {
   CreateAgentInput, CreateTaskInput, DecideApprovalInput, DestroyAgentResult, MemoryItem, MemoryKind, Message,
   MetricsOverview, ModelsInfo, OrgResponse, PostMessageResult, RoleTemplate, Run, RunDetail, Task, TaskDetail,
   TaskStatus, AgentStatus, TimeseriesPoint, TraceDetail, TraceSummary, UpdateAgentInput, ApprovalStatus,
+  CatalogAgentDetail, CatalogListResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -21,12 +22,51 @@ export function setErrorHandler(fn: (err: ApiError, label: string) => void): voi
   errorHandler = fn;
 }
 
+// ───────────── access token (APP_AUTH_TOKEN off loopback) ─────────────
+// Stored in localStorage "agentco.token" for this origin. A `?token=…` link stores it once and is
+// then removed from the address bar; a 401 asks for it (TokenGate in ui/token-gate.tsx).
+const TOKEN_KEY = "agentco.token";
+
 export function readToken(): string | null {
   try {
-    return localStorage.getItem("agentco.token");
+    return localStorage.getItem(TOKEN_KEY);
   } catch {
     return null;
   }
+}
+
+export function saveToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage unavailable: the token lives only for this page */
+  }
+}
+
+/** `?token=…` in the URL (before the #route): store it once and strip it from the address bar. */
+function captureTokenFromUrl(): void {
+  if (typeof location === "undefined") return;
+  const params = new URLSearchParams(location.search);
+  const token = params.get("token")?.trim();
+  if (!token) return;
+  saveToken(token);
+  params.delete("token");
+  const search = params.toString();
+  history.replaceState(history.state, "", `${location.pathname}${search ? `?${search}` : ""}${location.hash}`);
+}
+captureTokenFromUrl();
+
+/** The SSE stream URL (EventSource cannot send headers, so the token goes in the query). */
+export function streamUrl(): string {
+  const token = readToken();
+  return token ? `/api/events/stream?token=${encodeURIComponent(token)}` : "/api/events/stream";
+}
+
+let unauthorizedHandler: (() => void) | null = null;
+/** Called (instead of a toast) when the API answers 401: the server wants APP_AUTH_TOKEN. */
+export function setUnauthorizedHandler(fn: () => void): void {
+  unauthorizedHandler = fn;
 }
 
 type Query = Record<string, string | number | null | undefined>;
@@ -66,7 +106,8 @@ async function request<T>(method: string, path: string, body?: unknown, opts: Op
   if (!res.ok) {
     const e = (json as { error?: { code?: string; message?: string } } | null)?.error;
     const err = new ApiError(e?.code ?? `http_${res.status}`, e?.message ?? `${method} ${path} failed with ${res.status}`, res.status);
-    if (!opts.quiet) errorHandler?.(err, `${method} ${path}`);
+    if (res.status === 401 && unauthorizedHandler) unauthorizedHandler();
+    else if (!opts.quiet) errorHandler?.(err, `${method} ${path}`);
     throw err;
   }
   return json as T;
@@ -115,6 +156,9 @@ export const api = {
   metricsOverview: (opts?: Opts) => get<MetricsOverview>("/api/metrics/overview", undefined, opts),
   timeseries: (metric: "cost" | "runs" | "tokens", hours = 24) => get<TimeseriesPoint[]>("/api/metrics/timeseries", { metric, hours }),
   events: (q?: { since?: number; limit?: number }, opts?: Opts) => get<CompanyEvent[]>("/api/events", q, opts),
+  catalog: (q?: { division?: string; q?: string }) => get<CatalogListResponse>("/api/catalog", q),
+  // Ids contain a slash ("engineering/engineering-backend-architect"): sent encoded as one segment.
+  catalogAgent: (catalogId: string) => get<CatalogAgentDetail>(`/api/catalog/${id(catalogId)}`),
 };
 
 /** Every route the console calls — kept here so the backend can be checked against it. */
@@ -132,4 +176,5 @@ export const ROUTES_USED = [
   "GET /api/blackboard", "PUT /api/blackboard/:key", "GET /api/memory",
   "GET /api/metrics/overview", "GET /api/metrics/timeseries",
   "GET /api/events", "GET /api/events/stream (SSE)",
+  "GET /api/catalog", "GET /api/catalog/:id",
 ] as const;

@@ -139,6 +139,8 @@ export function renderCharter(agent: Agent, facts: AgentFacts): string {
     id.narrative ? `Self-narrative: ${truncate(id.narrative, 240)}` : "",
     id.assets.length ? `${Q5_BIO_ASSETS_LABEL}: ${id.assets.slice(-5).map((a) => truncate(a, 40)).join(", ")}` : "",
     id.resourceConnections.length ? `Connections: ${id.resourceConnections.slice(-5).map((a) => truncate(a, 40)).join(", ")}` : "",
+    // Catalog specialist as optional domain expertise (docs/CATALOG.md); short, it is paid on every stage.
+    facts.expertise ? truncate(facts.expertise, 600) : "",
     `Style: ${truncate(agent.persona.style || "clear and direct", 100)}${toneFor(agent.persona.personalityType)}`,
   ];
   return lines.filter(Boolean).join("\n");

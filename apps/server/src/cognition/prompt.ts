@@ -11,15 +11,24 @@ import { truncate } from "./text.ts";
 export interface AgentFacts {
   department: string;
   departmentSlug: string;
+  /** Workers with a catalog specialist: the compiled specialist playbook (docs/CATALOG.md). */
+  playbook?: string | null;
+  /** Executives/managers with a catalog specialist: a short domain-expertise line for the charter. */
+  expertise?: string | null;
 }
 
 export function agentFacts(platform: PlatformServices, agent: Agent): AgentFacts {
   const dep = platform.org.department(agent.departmentId);
   const name = dep?.name ?? platform.org.departmentName(agent.departmentId) ?? "General";
-  return { department: name, departmentSlug: dep?.slug ?? name.toLowerCase().replace(/[^a-z0-9]+/g, "-") };
+  const facts: AgentFacts = { department: name, departmentSlug: dep?.slug ?? name.toLowerCase().replace(/[^a-z0-9]+/g, "-") };
+  if (agent.catalogId && platform.catalog) {
+    if (agent.tier === "worker") facts.playbook = platform.catalog.playbookFor(agent);
+    else facts.expertise = platform.catalog.expertiseFor(agent);
+  }
+  return facts;
 }
 
-/** Minimal worker charter (mission + values + persona style). */
+/** Minimal worker charter (mission + values + persona style); the specialist playbook, when any, follows it in the prompt. */
 export function workerCharter(agent: Agent, facts: AgentFacts): string {
   const id = agent.identity;
   return [

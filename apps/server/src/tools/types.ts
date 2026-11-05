@@ -10,6 +10,7 @@ import type { ConversationService } from "../runs/conversations.ts";
 import type { ApprovalService } from "../tasks/approvals.ts";
 import type { TaskService } from "../tasks/service.ts";
 import type { Workspaces } from "./workspace.ts";
+import type { Catalog } from "../catalog/service.ts";
 
 export interface ToolServices {
   config: AppConfig;
@@ -21,6 +22,8 @@ export interface ToolServices {
   workspaces: Workspaces;
   company: CompanyService;
   tracer: TracerImpl;
+  /** The specialist catalog (catalog_search, hire_agent with catalogId); optional for test wiring. */
+  catalog?: Catalog;
 }
 
 export interface ToolRunContext extends ToolCallContext {

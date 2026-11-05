@@ -108,4 +108,7 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX spend_agent_at ON spend(agent_id, at);
   CREATE INDEX spend_at ON spend(at);
   `,
+  /* v2 — catalog specialists (docs/CATALOG.md): the agency-agents id an agent is staffed from */ `
+  ALTER TABLE agents ADD COLUMN catalog_id TEXT;
+  `,
 ];

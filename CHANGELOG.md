@@ -5,6 +5,25 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
+### Added
+- Specialist catalog: ~280 agency-agents specialists (MIT, vendored at b37b5bb3) as the
+  company's hiring pool; every worker role runs on a compiled, token-capped playbook;
+  leaders get a short domain-expertise line; Catalog view, hire-from-catalog API and tool
+  (`catalog_search`, `hire_agent {catalogId}`); optional departments created on demand;
+  `ORG_TEMPLATE=agency`.
+- Live models: Anthropic defaults when `ANTHROPIC_API_KEY` is set (Opus 5.5 for directors,
+  Sonnet 5.5 for managers, Haiku 5.5 for workers); `MANAGER_MODEL_TIER=frontier` option;
+  startup tier summary; `npm run check:models`.
+- Docker: multi-stage image (non-root, healthcheck, `/data` volume), docker-compose for LAN,
+  a VPS variant behind a TLS proxy; console token prompt; docs/DEPLOY.md with hosting and
+  per-objective model cost estimates.
+
+### Fixed
+- Windows: console path resolution; fixture server entry check; LF line endings pinned.
+
+
 ## [0.1.0] - 2026-11-06
 
 First release: a company run by AI agents, with a human founder as the Board.

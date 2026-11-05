@@ -1,6 +1,8 @@
 /** Every route of the API table in docs/ARCHITECTURE.md → API (the SSE stream is wired by server.ts). */
 import type {
   AgentDetail,
+  CatalogAgentDetail,
+  CatalogListResponse,
   CreateAgentInput,
   CreateTaskInput,
   DecideApprovalInput,
@@ -43,6 +45,41 @@ export function buildRouter(platform: Platform): Router {
   router.get("/api/org", () => ({ departments: org.listDepartments(), agents: org.listActiveAgents() }));
   router.get("/api/roles", (): RoleTemplate[] => [...ROLE_TEMPLATES]);
   router.get("/api/models", () => platform.modelsInfo());
+
+  // ───────────── specialist catalog (docs/CATALOG.md) ─────────────
+  const hiredCounts = (): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const a of org.listActiveAgents()) if (a.catalogId) counts.set(a.catalogId, (counts.get(a.catalogId) ?? 0) + 1);
+    return counts;
+  };
+  const catalogContext = () => {
+    const counts = hiredCounts();
+    return { departmentName: (slug: string) => org.departmentNameForSlug(slug), hiredCount: (id: string) => counts.get(id) ?? 0 };
+  };
+  router.get("/api/catalog", ({ query }): CatalogListResponse => {
+    const { catalog } = platform;
+    const division = query.get("division") || null;
+    if (division && !catalog.divisions().some((d) => d.id === division)) throw badRequest(`unknown division: ${division}`);
+    const context = catalogContext();
+    const agents = catalog.list({ division, q: query.get("q") }).map((a) => catalog.summary(a, context));
+    return { source: catalog.source(), divisions: catalog.divisions(), agents, total: catalog.size };
+  });
+  const catalogDetail = (id: string): CatalogAgentDetail => {
+    const { catalog } = platform;
+    const agent = catalog.get(id);
+    if (!agent) throw notFound("catalog agent", id);
+    return {
+      agent,
+      summary: catalog.summary(agent, catalogContext()),
+      body: catalog.body(id),
+      playbook: catalog.playbook(id)!,
+      expertise: catalog.expertise(id) ?? "",
+      placement: org.catalogPlacement(id),
+    };
+  };
+  // Ids contain a slash ("engineering/engineering-backend-architect"): accept it encoded or as two segments.
+  router.get("/api/catalog/:id", ({ params }) => catalogDetail(param(params, "id")));
+  router.get("/api/catalog/:division/:slug", ({ params }) => catalogDetail(`${param(params, "division")}/${param(params, "slug")}`));
 
   // ───────────── agents ─────────────
   router.get("/api/agents", ({ query }) => org.listAgents({ ...opt("status", query.get("status")), ...opt("departmentId", query.get("departmentId")) }));

@@ -1,0 +1,46 @@
+# AgentCo on Docker Compose — the recommended way to run it for the whole LAN.
+#
+#   copy .env.example .env      (Windows: copy; macOS/Linux: cp) — then set ANTHROPIC_API_KEY
+#                               and APP_AUTH_TOKEN in .env (never in chat or git)
+#   docker compose up -d --build
+#   open http://localhost:3000 on this PC, http://<this PC's LAN IP>:3000 elsewhere
+#
+# Full guide (Windows firewall, logs, backup, updates, VPS): docs/DEPLOY.md
+name: agentco
+
+services:
+  agentco:
+    build: .
+    image: agentco:local
+    env_file: .env
+    environment:
+      # Pinned for the container whatever .env says: listen on all interfaces inside the container,
+      # keep state in the volume. (HOST=127.0.0.1 from an old .env would make it unreachable.)
+      HOST: 0.0.0.0
+      PORT: "3000"
+      DATA_DIR: /data
+      # Off loopback the API needs a bearer token; stop here with a clear message if .env lacks it.
+      # (The server itself also refuses to start with fewer than 24 characters.)
+      APP_AUTH_TOKEN: ${APP_AUTH_TOKEN:?APP_AUTH_TOKEN is empty - set it in .env to 24+ random characters (see docs/DEPLOY.md)}
+    # All interfaces of this PC, i.e. the LAN (e.g. http://192.168.1.92:3000). For this PC only use
+    # "127.0.0.1:3000:3000"; on a VPS behind Caddy add -f docker-compose.vps.yml.
+    ports: ["3000:3000"]
+    volumes:
+      - agentco-data:/data
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  agentco-data:

@@ -27,7 +27,9 @@ import type { Workspaces } from "../tools/workspace.ts";
 import { buildAgent, pickName } from "./agent-factory.ts";
 import type { CompanyService } from "./company.ts";
 import { computeNeeds } from "./needs.ts";
-import { roleTemplate } from "./templates.ts";
+import type { Catalog, CatalogSeed } from "../catalog/service.ts";
+import { newId } from "../db/ids.ts";
+import { DEPARTMENT_TEMPLATES, roleTemplate } from "./templates.ts";
 
 export interface OrgDeps {
   repos: Repositories;
@@ -41,6 +43,10 @@ export interface OrgDeps {
   knownTools: () => string[];
   /** Ids of the configured model profiles (for validating modelOverride); absent = not checked. */
   knownProfiles?: () => string[];
+  /** MANAGER_MODEL_TIER: model tier for new managers (default "standard"). */
+  managerModelTier?: "frontier" | "standard";
+  /** The specialist catalog (docs/CATALOG.md); absent = catalogId hires are refused. */
+  catalog?: Catalog | null;
 }
 
 /** Hands an open task to a new assignee (TaskService.reassign): refund, clean state, keep it schedulable. */
@@ -189,15 +195,36 @@ export class OrgService implements OrgView, AgentStateWriter {
     if (!options.ignoreHeadcount && this.deps.repos.agents.countActive() >= this.deps.company.settings().maxHeadcount) {
       throw conflict(`headcount limit (${this.deps.company.settings().maxHeadcount}) reached; raise maxHeadcount first`);
     }
-    const departmentId = this.resolveDepartment(input.departmentId, role);
-    const managerId = this.resolveManager(input.managerId, role, departmentId);
+    const hire = this.resolveCatalogHire(input.catalogId);
     this.validateTools(input.tools);
+    // A catalog hire without a role lands in its division's department (created on demand) under that department's lead.
+    const catalogPlaced = hire !== null && role === null;
+    const departmentId = catalogPlaced && !input.departmentId ? this.ensureDepartment(this.catalogDepartmentSlug(hire.catalogId)).id : this.resolveDepartment(input.departmentId, role);
+    const managerId =
+      catalogPlaced && input.managerId === undefined ? (this.departmentLeadOf(departmentId)?.id ?? null) : this.resolveManager(input.managerId, role, departmentId);
+    const catalog = hire ?? (role?.catalogId ? (this.deps.catalog?.seed(role.catalogId) ?? null) : null);
     const name = pickName(input.name, role, this.deps.repos.agents.names());
-    const agent = buildAgent({ role, input, departmentId, managerId, name, createdBy }, this.deps.now(), this.deps.castBaZi);
+    const agent = buildAgent({ role, input, departmentId, managerId, name, createdBy, catalog }, this.deps.now(), this.deps.castBaZi, {
+      managerModelTier: this.deps.managerModelTier,
+    });
     this.deps.repos.agents.insert(agent);
     this.deps.workspaces.ensure(agent.id);
     this.deps.bus.emit("agent.created", { agentId: agent.id, summary: summaries.agentCreated(agent), data: agent });
     return agent;
+  }
+
+  /**
+   * MANAGER_MODEL_TIER set explicitly: moves existing managers between "standard" and "frontier" at
+   * boot (managers on economy or with a modelOverride are left alone). Returns how many changed.
+   */
+  applyManagerModelTier(tier: "frontier" | "standard"): number {
+    let changed = 0;
+    for (const agent of this.deps.repos.agents.list({ includeTerminated: false })) {
+      if (agent.tier !== "manager" || agent.modelOverride || agent.modelTier === tier || agent.modelTier === "economy") continue;
+      this.updateAgent(agent.id, { modelTier: tier });
+      changed++;
+    }
+    return changed;
   }
 
   /** Applies an UpdateAgentInput (validated); a manager change may not create a cycle. */
@@ -324,6 +351,125 @@ export class OrgService implements OrgView, AgentStateWriter {
     const at = this.deps.now().toISOString();
     this.deps.repos.agents.update(agent.id, { status: "terminated", activity: null, brainBlock: null, currentRunId: null, currentTaskId: null, terminatedAt: at, updatedAt: at });
     return this.requireAgent(agent.id);
+  }
+
+  // ───────────── catalog placement (docs/CATALOG.md) ─────────────
+
+  /** The department slug a catalog specialist lands in (division mapping / overrides). */
+  catalogDepartmentSlug(catalogId: string): string {
+    return this.deps.catalog?.departmentSlugFor(catalogId) ?? "operations";
+  }
+
+  /**
+   * The department's lead: its head when that is an active executive/manager, else the holder of the
+   * department template's head role or of an ancestor of it (support-manager → coo), else the optional
+   * department's owner role, else the parent department's lead, else the CEO. Never a worker.
+   */
+  departmentLead(slug: string): Agent | null {
+    const isLead = (a: Agent | null | undefined): a is Agent => !!a && a.status !== "terminated" && a.tier !== "worker";
+    const seen = new Set<string>();
+    let current: string | null = slug;
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const department = this.deps.repos.departments.bySlug(current);
+      const head = department?.headAgentId ? this.getAgent(department.headAgentId) : null;
+      if (isLead(head)) return head;
+      const template = DEPARTMENT_TEMPLATES.find((d) => d.slug === current);
+      for (let r = template ? roleTemplate(template.headRoleId) : undefined; r; r = r.reportsToRoleId ? roleTemplate(r.reportsToRoleId) : undefined) {
+        const holder = this.deps.repos.agents.byRole(r.id);
+        if (isLead(holder)) return holder;
+      }
+      const optional: { ownerRoleIds: string[]; parentSlug: string | null } | null = this.deps.catalog?.optionalDepartment(current) ?? null;
+      for (const roleId of optional?.ownerRoleIds ?? []) {
+        const holder = this.deps.repos.agents.byRole(roleId);
+        if (isLead(holder)) return holder;
+      }
+      const parentId = department?.parentId ?? null;
+      current = parentId ? (this.department(parentId)?.slug ?? null) : (template?.parentSlug ?? optional?.parentSlug ?? null);
+    }
+    return this.ceo();
+  }
+
+  private departmentLeadOf(departmentId: string): Agent | null {
+    const department = this.department(departmentId);
+    return department ? this.departmentLead(department.slug) : this.ceo();
+  }
+
+  /**
+   * The department with this slug, created on demand from DEPARTMENT_TEMPLATES or the catalog's
+   * optional departments (Game Studio, Geospatial, Healthcare Practice, Spatial Computing). Its head is
+   * its lead (departmentLead); its parent is the template's parent when that exists, else the lead's
+   * department.
+   */
+  ensureDepartment(slug: string): Department {
+    const existing = this.deps.repos.departments.bySlug(slug);
+    if (existing) return existing;
+    const template = DEPARTMENT_TEMPLATES.find((d) => d.slug === slug);
+    const optional = this.deps.catalog?.optionalDepartment(slug) ?? null;
+    const def = template ?? optional;
+    if (!def) throw badRequest(`unknown department: ${slug}`);
+    const lead = this.departmentLead(slug);
+    const parentSlug = template ? template.parentSlug : (optional?.parentSlug ?? null);
+    const parentId = parentSlug ? (this.deps.repos.departments.bySlug(parentSlug)?.id ?? lead?.departmentId ?? null) : optional ? (lead?.departmentId ?? null) : null;
+    const department: Department = {
+      id: newId("dep"),
+      slug,
+      name: def.name,
+      mandate: def.mandate,
+      parentId,
+      headAgentId: lead?.id ?? null,
+      color: def.color,
+      monthlyBudgetUsd: 0,
+      createdAt: this.deps.now().toISOString(),
+    };
+    this.deps.repos.departments.insert(department);
+    return department;
+  }
+
+  /** Where a catalog hire lands by default (no side effects). */
+  catalogPlacement(catalogId: string): { departmentSlug: string; departmentName: string; departmentId: string | null; createsDepartment: boolean; managerId: string | null } {
+    const slug = this.catalogDepartmentSlug(catalogId);
+    const existing = this.deps.repos.departments.bySlug(slug);
+    const name = existing?.name ?? DEPARTMENT_TEMPLATES.find((d) => d.slug === slug)?.name ?? this.deps.catalog?.optionalDepartment(slug)?.name ?? slug;
+    return { departmentSlug: slug, departmentName: name, departmentId: existing?.id ?? null, createsDepartment: !existing, managerId: this.departmentLead(slug)?.id ?? null };
+  }
+
+  /** Display name of a department slug, whether or not it exists yet. */
+  departmentNameForSlug(slug: string): string {
+    return this.deps.repos.departments.bySlug(slug)?.name ?? DEPARTMENT_TEMPLATES.find((d) => d.slug === slug)?.name ?? this.deps.catalog?.optionalDepartment(slug)?.name ?? slug;
+  }
+
+  /**
+   * Boot: agents created before the catalog existed get their role template's catalogId (and, for
+   * workers, the specialist's emoji and vibe); executives that can hire also get catalog_search.
+   * Returns how many agents changed.
+   */
+  backfillCatalog(): number {
+    const catalog = this.deps.catalog;
+    if (!catalog || catalog.size === 0) return 0;
+    let changed = 0;
+    for (const agent of this.deps.repos.agents.list({ includeTerminated: false })) {
+      const patch: Partial<Agent> = {};
+      if (agent.tier === "executive" && agent.tools.includes("hire_agent") && !agent.tools.includes("catalog_search")) patch.tools = [...agent.tools, "catalog_search"];
+      const catalogId = agent.catalogId ? null : roleTemplate(agent.roleId)?.catalogId;
+      const seed = catalogId ? catalog.seed(catalogId) : null;
+      if (catalogId && seed) {
+        patch.catalogId = catalogId;
+        if (agent.tier === "worker") patch.persona = { ...agent.persona, emoji: seed.emoji || null, vibe: seed.vibe || null };
+      }
+      if (Object.keys(patch).length === 0) continue;
+      this.deps.repos.agents.update(agent.id, { ...patch, updatedAt: this.deps.now().toISOString() });
+      changed++;
+    }
+    return changed;
+  }
+
+  private resolveCatalogHire(catalogId: string | undefined): CatalogSeed | null {
+    if (catalogId === undefined) return null;
+    if (typeof catalogId !== "string" || !catalogId.trim()) throw badRequest("catalogId must be a catalog id such as engineering/engineering-backend-architect");
+    const seed = this.deps.catalog?.seed(catalogId.trim()) ?? null;
+    if (!seed) throw badRequest(`unknown catalogId: ${catalogId}${this.deps.catalog?.size ? "" : " (no catalog is loaded)"}`);
+    return seed;
   }
 
   private resolveRole(roleId: string | undefined): RoleTemplate | null {

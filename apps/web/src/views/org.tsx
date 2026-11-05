@@ -3,9 +3,10 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { api } from "../api";
 import { href, navigate } from "../router";
 import { seed, useApi, useLive } from "../live";
-import { Avatar, Badge, Button, CognitionBadge, ConfirmDialog, Field, Icon, IconButton, Modal, ModelTierBadge, StatusBadge, TierLabel, toast, useAction } from "../ui/kit";
+import { Avatar, Badge, Button, CognitionBadge, ConfirmDialog, Field, Icon, IconButton, Modal, ModelTierBadge, StatusBadge, Tabs, TierLabel, toast, useAction } from "../ui/kit";
 import type { Agent, AgentTier, CognitionKind, CreateAgentInput, DestroyAgentResult, ModelTier } from "../types";
 import { PageHead, liveAgents } from "./common";
+import { CatalogPicker } from "./catalog";
 
 export function useAgentActions() {
   const { busy, run } = useAction();
@@ -427,7 +428,35 @@ export function OrgView() {
   );
 }
 
+/** Hire: a catalog specialist (default) or a role template / custom role. */
 export function HireModal({ onClose }: { onClose: () => void }) {
+  const [source, setSource] = useState<"catalog" | "role">("catalog");
+  if (source === "role") return <RoleHireModal onClose={onClose} tabs={<HireTabs value={source} onChange={setSource} />} />;
+  return (
+    <Modal title="Hire agent" onClose={onClose} width={680}>
+      <HireTabs value={source} onChange={setSource} />
+      <div className="tab-body">
+        <CatalogPicker onClose={onClose} />
+      </div>
+    </Modal>
+  );
+}
+
+function HireTabs({ value, onChange }: { value: "catalog" | "role"; onChange: (v: "catalog" | "role") => void }) {
+  return (
+    <Tabs
+      label="Hire from"
+      value={value}
+      onChange={onChange}
+      tabs={[
+        { id: "catalog", label: "From catalog" },
+        { id: "role", label: "Role template / custom" },
+      ]}
+    />
+  );
+}
+
+function RoleHireModal({ onClose, tabs }: { onClose: () => void; tabs: React.ReactNode }) {
   const roles = useApi("roles", () => api.roles());
   const models = useApi("models", () => api.models());
   const departments = useLive((s) => s.departments);
@@ -501,7 +530,8 @@ export function HireModal({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-      <div className="form-grid">
+      {tabs}
+      <div className="form-grid tab-body">
         <Field label="Role template" hint="Pre-fills the fields below; every one can still be changed." wide>
           <select value={roleId} onChange={(e) => pickRole(e.target.value)} disabled={roles.loading}>
             <option value="">Custom role</option>

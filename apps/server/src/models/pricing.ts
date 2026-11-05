@@ -73,9 +73,9 @@ export const PRICE_TABLE: PriceEntry[] = [
   // Anthropic (via the OpenAI-compatible layer: no prompt caching there, forced tool_choice rejected on
   // Opus/Sonnet/Fable — the router only ever sends tool_choice "auto").
   entry("claude-fable-5-1", "anthropic", 10, 50, 0.25, 1_000_000, SRC_ANTHROPIC, "price"),
-  entry("claude-opus-5-5", "anthropic", 4, 20, 0.2, 1_000_000, SRC_ANTHROPIC, "price"),
-  entry("claude-sonnet-5-5", "anthropic", 2, 10, 0.1, 1_000_000, SRC_ANTHROPIC, "price"),
-  entry("claude-haiku-5-5", "anthropic", 0.1, 0.5, 0.01, 1_000_000, SRC_ANTHROPIC, "price", {
+  entry("claude-opus-5-5", "anthropic", 4, 20, 0.2, 1_000_000, SRC_ANTHROPIC, "price+id"),
+  entry("claude-sonnet-5-5", "anthropic", 2, 10, 0.1, 1_000_000, SRC_ANTHROPIC, "price+id"),
+  entry("claude-haiku-5-5", "anthropic", 0.1, 0.5, 0.01, 1_000_000, SRC_ANTHROPIC, "price+id", {
     note: "Prompts >100k tokens cost 5x (0.50/2.50); AgentCo keeps worker prompts far below that.",
   }),
   // OpenAI
@@ -134,9 +134,12 @@ export const MOCK_TIER_PRICE_KEY: Record<ModelTier, string> = {
 };
 
 /**
- * Recommended live mapping (03-model-tiers.md §3), as MODEL_* env values.
- * Model ids for Anthropic/OpenAI are best guesses from display names (unverified):
- * check the provider's model list before launch.
+ * Recommended live mapping (03-model-tiers.md §3), as MODEL_* env values — the founder's choice:
+ * high-level models for executives (frontier, Opus) and managers (standard, Sonnet), the low-level
+ * model for workers (economy, Haiku). The Anthropic ids are Anthropic's exact API model ids; they are
+ * the default for an unset MODEL_<TIER> whenever ANTHROPIC_API_KEY is present (models/config.ts).
+ * The fallbacks are suggestions only — never applied automatically (set MODEL_<TIER>_FALLBACK);
+ * their OpenAI/Gemini ids are best guesses from display names (unverified).
  */
 export const RECOMMENDED_TIERS: Record<ModelTier, { primary: string; fallback: string }> = {
   frontier: { primary: "anthropic:claude-opus-5-5", fallback: "gemini:gemini-4-argon" },

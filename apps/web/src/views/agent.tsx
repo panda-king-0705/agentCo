@@ -12,6 +12,7 @@ import { BrainView } from "./brain";
 import { ChatThread } from "./chat";
 import { PageHead, TaskRef, useDeptName } from "./common";
 import { useAgentActions } from "./org";
+import { SpecialistPanel } from "./catalog";
 import { TaskStatusBadge } from "../ui/kit";
 
 type TabId = "brain" | "overview" | "work" | "memory" | "chat";
@@ -92,12 +93,14 @@ function OverviewTab({ d }: { d: AgentDetail }) {
               ["Life view", id.lifeView || "—"],
               ["Values", id.values.length ? <ul className="plain-list">{id.values.map((v) => <li key={v}>{v}</li>)}</ul> : "—"],
               ["Vision", id.vision || "—"],
-              ["Persona", `${agent.persona.style}${agent.persona.traits.length ? ` (${agent.persona.traits.join(", ")})` : ""}`],
+              ["Persona", `${agent.persona.emoji ? `${agent.persona.emoji} ` : ""}${agent.persona.style}${agent.persona.traits.length ? ` (${agent.persona.traits.join(", ")})` : ""}`],
+              ...(agent.persona.vibe ? ([["Vibe", <span key="v" className="quote">{agent.persona.vibe}</span>]] as [string, React.ReactNode][]) : []),
               ...(isBrain ? ([["Personality (MBTI)", agent.persona.personalityType ?? "—"]] as [string, string][]) : []),
               ["Tools", <span key="t" className="tool-list">{agent.tools.map((t) => <code key={t}>{t}</code>)}</span>],
             ]}
           />
         </Panel>
+        <SpecialistPanel agent={agent} />
         {isBrain ? (
           <>
             <Panel title="Objectives and key results">

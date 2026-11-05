@@ -57,6 +57,7 @@ export function toAgent(r: Row): Agent {
     name: str(r.name),
     title: str(r.title),
     roleId: str(r.role_id),
+    catalogId: strOrNull(r.catalog_id),
     departmentId: str(r.department_id),
     managerId: strOrNull(r.manager_id),
     tier: str(r.tier) as Agent["tier"],

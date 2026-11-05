@@ -10,7 +10,9 @@ import { resolve } from "node:path";
 import { parseEnv } from "node:util";
 import { fileURLToPath } from "node:url";
 
-export type OrgTemplateId = "startup" | "enterprise";
+export type OrgTemplateId = "startup" | "enterprise" | "agency";
+/** Model tier given to new managers (MANAGER_MODEL_TIER). Executives always get frontier, workers economy. */
+export type ManagerModelTier = "frontier" | "standard";
 
 export interface AppConfig {
   port: number;
@@ -21,6 +23,11 @@ export interface AppConfig {
   dataDir: string;
   companyName: string;
   orgTemplate: OrgTemplateId;
+  /**
+   * MANAGER_MODEL_TIER (default "standard"): the model tier managers get when they are created
+   * (first-boot bootstrap and console hires). "frontier" puts managers on the executives' model.
+   */
+  managerModelTier: ManagerModelTier;
   dailyBudgetUsd: number;
   monthlyBudgetUsd: number;
   maxConcurrentRuns: number;
@@ -38,6 +45,10 @@ export interface AppConfig {
   sseMaxClients: number;
   /** Directory with the built console; defaults to apps/web/dist. */
   webDistDir: string;
+  /** Vendored agency-agents catalog (CATALOG_DIR); defaults to <repo>/catalog/agency-agents. Missing = empty catalog. */
+  catalogDir: string;
+  /** Token cap of a worker's compiled specialist playbook (CATALOG_PLAYBOOK_TOKENS, default 900). */
+  catalogPlaybookTokens: number;
   /**
    * Extra browser origins allowed to call state-changing endpoints (ALLOWED_ORIGINS, comma
    * separated, e.g. "https://agentco.example"); same host:port and the Vite dev origins always are.
@@ -77,7 +88,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const authToken = reader.str("APP_AUTH_TOKEN", "");
   const authRequired = !LOOPBACK.has(host);
   if (authRequired && authToken.length < 24) {
-    errors.push(`APP_AUTH_TOKEN must be at least 24 characters when HOST (${host}) is not loopback`);
+    errors.push(
+      `APP_AUTH_TOKEN must be at least 24 characters when HOST (${host}) is not loopback` +
+        ` (it is ${authToken.length === 0 ? "empty" : `${authToken.length} characters`}). Generate one with:` +
+        ` node -e "console.log(require('node:crypto').randomBytes(24).toString('hex'))" and put it in .env`,
+    );
   }
   const config: AppConfig = {
     port: reader.int("PORT", 3000, 0, 65535),
@@ -86,7 +101,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     authRequired,
     dataDir: resolve(reader.str("DATA_DIR", "./data")),
     companyName: reader.str("COMPANY_NAME", "AgentCo"),
-    orgTemplate: reader.oneOf("ORG_TEMPLATE", ["startup", "enterprise"] as const, "startup"),
+    orgTemplate: reader.oneOf("ORG_TEMPLATE", ["startup", "enterprise", "agency"] as const, "startup"),
+    managerModelTier: reader.oneOf("MANAGER_MODEL_TIER", ["standard", "frontier"] as const, "standard"),
     dailyBudgetUsd: reader.num("DAILY_BUDGET_USD", 5, 0),
     monthlyBudgetUsd: reader.num("MONTHLY_BUDGET_USD", 100, 0),
     maxConcurrentRuns: reader.int("MAX_CONCURRENT_RUNS", 4, 1, 64),
@@ -102,6 +118,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     schedulerTickMs: reader.int("SCHEDULER_TICK_MS", 750, 10, 60_000),
     sseMaxClients: reader.int("SSE_MAX_CLIENTS", 50, 1, 10_000),
     webDistDir: resolve(reader.str("WEB_DIST_DIR", defaultWebDist())),
+    catalogDir: resolve(reader.str("CATALOG_DIR", defaultCatalogDir())),
+    catalogPlaybookTokens: reader.int("CATALOG_PLAYBOOK_TOKENS", 900, 150, 8000),
     allowedOrigins: list(reader.str("ALLOWED_ORIGINS", ""))
       .map((o) => o.replace(/\/+$/, "").toLowerCase())
       .filter((o) => {
@@ -122,6 +140,10 @@ function list(value: string): string[] {
     .split(",")
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+function defaultCatalogDir(): string {
+  return fileURLToPath(new URL("../../../catalog/agency-agents", import.meta.url));
 }
 
 function defaultWebDist(): string {

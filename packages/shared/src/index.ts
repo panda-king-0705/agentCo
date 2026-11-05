@@ -121,6 +121,9 @@ export interface Persona {
   personalityType: string | null;
   /** Role Arrangement › Eight Characters and Five Elements. Weight in role arrangement is configurable. */
   baZi: BaZiChart | null;
+  /** Seeded from the agent's catalog specialist (docs/CATALOG.md); absent for non-catalog agents. */
+  emoji?: string | null;
+  vibe?: string | null;
 }
 
 /**
@@ -167,6 +170,11 @@ export interface Agent {
   name: string; // "Ava Chen"
   title: string; // "Chief Executive Officer"
   roleId: string; // role template slug: "ceo", "backend-engineer"
+  /**
+   * Catalog specialist (agency-agents id "division/slug", docs/CATALOG.md) or null. Workers run with its
+   * compiled specialist playbook; executives/managers get a short "domain expertise" line from it.
+   */
+  catalogId: string | null;
   departmentId: string;
   managerId: string | null; // null only for the CEO (reports to the human Board)
   tier: AgentTier;
@@ -216,6 +224,8 @@ export interface RoleTemplate {
   tools: string[];
   defaultNames: string[];
   inStarterOrg: boolean; // part of the default "startup" org
+  /** Catalog specialist the role is staffed from (workers: playbook; leaders: domain expertise), or null. */
+  catalogId: string | null;
 }
 
 // ───────────────────────────── Work ─────────────────────────────
@@ -439,7 +449,8 @@ export interface CompanySettings {
   maxHeadcount: number;
   hiringRequiresApproval: boolean;
   heartbeatMinutes: number; // 0 = off
-  orgTemplate: "startup" | "enterprise";
+  /** agency = startup leadership + 2-4 catalog specialists per department (docs/CATALOG.md). */
+  orgTemplate: "startup" | "enterprise" | "agency";
 }
 
 // ───────────────────────────── Models ─────────────────────────────
@@ -537,6 +548,12 @@ export interface AgentDetail {
 
 export interface CreateAgentInput {
   roleId?: string; // start from a template; other fields override it
+  /**
+   * Hire a catalog specialist ("division/slug"): fills title, department (division mapping), tier worker,
+   * cognition reflex, economy model, persona and playbook; the manager defaults to the department's lead.
+   * Explicit fields still win. The department is created on demand when it does not exist yet.
+   */
+  catalogId?: string;
   name?: string;
   title?: string;
   departmentId?: string;
@@ -628,4 +645,110 @@ export interface TimeseriesPoint {
 export interface DecideApprovalInput {
   decision: "approved" | "rejected";
   note?: string;
+}
+
+// ───────────────────────────── Specialist catalog (docs/CATALOG.md) ─────────────────────────────
+
+/** Body sections of a catalog agent, classified by heading (markdown, headings stripped). */
+export interface CatalogSections {
+  identity: string;
+  mission: string;
+  rules: string;
+  deliverables: string;
+  workflow: string;
+  metrics: string;
+  other: string;
+}
+
+/** One agency-agents specialist, parsed from its markdown file. */
+export interface CatalogAgent {
+  id: string; // "division/slug", e.g. "engineering/engineering-backend-architect"
+  division: string;
+  name: string;
+  description: string;
+  emoji: string;
+  vibe: string;
+  color: string;
+  sections: CatalogSections;
+  wordCount: number;
+}
+
+export interface CatalogDivision {
+  id: string;
+  label: string;
+  color: string;
+  icon: string; // Lucide icon name from divisions.json
+  count: number;
+  /** Default AgentCo department slug for the division. */
+  departmentSlug: string;
+  /** True when the division's department is an optional one created on demand. */
+  optional: boolean;
+}
+
+/** Where a catalog hire lands by default. */
+export interface CatalogPlacement {
+  departmentSlug: string;
+  departmentName: string;
+  /** null when the department does not exist yet (hiring creates it). */
+  departmentId: string | null;
+  createsDepartment: boolean;
+  /** Default manager (the department's lead); null when nobody can lead it yet. */
+  managerId: string | null;
+}
+
+/** List row: no section text. */
+export interface CatalogAgentSummary {
+  id: string;
+  division: string;
+  divisionLabel: string;
+  name: string;
+  description: string;
+  emoji: string;
+  vibe: string;
+  color: string;
+  wordCount: number;
+  departmentSlug: string;
+  departmentName: string;
+  optionalDepartment: boolean;
+  /** Active agents staffed from this specialist. */
+  hiredCount: number;
+}
+
+export interface CompiledPlaybook {
+  text: string;
+  /** Estimated tokens (chars/4, as the platform estimates everywhere). */
+  tokens: number;
+  maxTokens: number;
+  /** True when lower-priority content was dropped to fit the cap. */
+  truncated: boolean;
+  /** Sections that made it in, in order. */
+  sections: string[];
+}
+
+export interface CatalogSource {
+  repo: string;
+  commit: string;
+  license: string;
+  agents: number;
+  /** Malformed files skipped at load. */
+  skipped: number;
+}
+
+export interface CatalogListResponse {
+  source: CatalogSource;
+  divisions: CatalogDivision[];
+  agents: CatalogAgentSummary[];
+  total: number;
+}
+
+export interface CatalogAgentDetail {
+  agent: CatalogAgent;
+  summary: CatalogAgentSummary;
+  /** The full markdown body (frontmatter removed). */
+  body: string;
+  /** What a worker staffed from it carries in its system prompt. */
+  playbook: CompiledPlaybook;
+  /** What an executive/manager carries as "domain expertise". */
+  expertise: string;
+  placement: CatalogPlacement;
 }
