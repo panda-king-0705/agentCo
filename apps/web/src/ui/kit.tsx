@@ -43,6 +43,7 @@ const ICONS: Record<string, string> = {
   edit: "M4 16l1-4 8-8 3 3-8 8zM12 5l3 3",
   filter: "M3 4h14l-5 6v5l-4 2v-7z",
   graph: "M5 5a2 2 0 100 .1M15 5a2 2 0 100 .1M10 15a2 2 0 100 .1M6.5 6.5l2.5 7M13.5 6.5l-2.5 7M7 5h6",
+  catalog: "M3 4.5c2.2-1.2 4.8-1.2 7 .5 2.2-1.7 4.8-1.7 7-.5v11c-2.2-1.2-4.8-1.2-7 .5-2.2-1.7-4.8-1.7-7-.5zM10 5v11",
 };
 export function Icon({ name, size = 16, className }: { name: keyof typeof ICONS | string; size?: number; className?: string }) {
   return (

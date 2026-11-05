@@ -15,6 +15,7 @@ import { isAbortError } from "../middleware/tracer.ts";
 import { askHuman, escalate, sendMessage } from "./builtins/comms.ts";
 import { delegateTask } from "./builtins/delegation.ts";
 import { workspaceList, workspaceReadFile, workspaceWriteFile } from "./builtins/files.ts";
+import { catalogSearch } from "./builtins/catalog.ts";
 import { hireAgent } from "./builtins/hiring.ts";
 import { blackboardRead, blackboardWrite, memorySearch, memoryWrite } from "./builtins/memory.ts";
 import { webFetch } from "./builtins/web.ts";
@@ -35,6 +36,7 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
   workspaceReadFile,
   workspaceList,
   hireAgent,
+  catalogSearch,
   webFetch,
 ];
 

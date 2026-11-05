@@ -5,7 +5,7 @@
 import { createApp } from "./app.ts";
 import { createEngines } from "./cognition/index.ts";
 import { ConfigError, loadConfig, loadDotEnv } from "./config.ts";
-import { loadModelConfig, modelsInfo } from "./models/config.ts";
+import { loadModelConfig, modelsInfo, modelSummaryLines } from "./models/config.ts";
 import { createModelRouter } from "./models/router.ts";
 
 async function main(): Promise<void> {
@@ -22,6 +22,9 @@ async function main(): Promise<void> {
   const { bootstrapResult: boot } = app.platform;
   console.log(`AgentCo "${app.platform.company.settings().name}" listening on ${url}`);
   console.log(`  org: ${boot?.created ? `bootstrapped ${boot.agents} agents in ${boot.departments} departments` : `${app.platform.repos.agents.countActive()} agents`} · models: ${info.live ? "LIVE" : "MOCK (offline, deterministic)"}`);
+  // tier → model → provider, live or mock. Never prints keys or base URLs.
+  console.log(`  models (managers on ${config.managerModelTier}, MANAGER_MODEL_TIER):`);
+  for (const line of modelSummaryLines(modelConfig, config.managerModelTier)) console.log(`    ${line}`);
   if (config.authRequired) console.log("  auth: bearer token required (APP_AUTH_TOKEN)");
 
   let stopping = false;

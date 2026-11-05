@@ -64,6 +64,8 @@ export class ReflexEngine implements CognitiveEngine {
     const tools: ToolSpec[] = platform.tools.specsFor(agent).filter((t) => mayEscalate || !ESCALATION_TOOLS.has(t.name));
 
     const parts: string[] = [workerCharter(agent, facts)];
+    // Catalog specialist (docs/CATALOG.md): the compiled playbook, capped (CATALOG_PLAYBOOK_TOKENS) for the economy tier.
+    if (facts.playbook) parts.push(facts.playbook);
     if (task) {
       parts.push(
         `Task T-${task.number}: ${task.title}\n${truncate(task.description, 1500)}` +
@@ -95,7 +97,7 @@ export class ReflexEngine implements CognitiveEngine {
 
     const context = {
       mode: task ? "task" : "message",
-      agent: { name: agent.name, title: agent.title, department: facts.department, departmentSlug: facts.departmentSlug },
+      agent: { name: agent.name, title: agent.title, department: facts.department, departmentSlug: facts.departmentSlug, ...(agent.catalogId ? { specialist: agent.catalogId } : {}) },
       task: task ? { number: task.number, title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria } : undefined,
       message: input.trigger === "message" ? input.message.content : undefined,
       tools: tools.map((t) => t.name),

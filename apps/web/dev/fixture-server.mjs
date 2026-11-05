@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { BRAIN_SEQUENCE, LLM_BLOCKS, ROLE_TEMPLATES, castBaZi, createFixtureState, makeAgent, rollupRun, toolsFor } from "./fixtures.mjs";
+import { BRAIN_SEQUENCE, FIXTURE_DEPT_ALIAS, FIXTURE_ON_DEMAND_DEPTS, LLM_BLOCKS, ROLE_TEMPLATES, castBaZi, createFixtureState, makeAgent, rollupRun, toolsFor } from "./fixtures.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DIST = join(here, "..", "dist");
@@ -318,7 +318,53 @@ export async function startFixtureServer({ port = 5173, host = "127.0.0.1", org 
     emit("agent.terminated", `${a.name} (${a.title}) was terminated`, structuredClone(a));
     return { agentId: id, cancelledRuns, reassignedTasks, reassignedReports: reports.length };
   }
+  // ───────────── specialist catalog (docs/CATALOG.md) ─────────────
+  const catalogEntry = (id) => S.catalog.agents.find((c) => c.agent.id === id);
+  const fixtureSlug = (slug) => FIXTURE_DEPT_ALIAS[slug] ?? slug;
+  const deptNameForSlug = (slug) => S.departments.find((d) => d.slug === fixtureSlug(slug))?.name ?? FIXTURE_ON_DEMAND_DEPTS[slug]?.[0] ?? slug;
+  const leadOf = (dep) => {
+    const head = dep?.headAgentId ? agent(dep.headAgentId) : null;
+    return head && head.status !== "terminated" && head.tier !== "worker" ? head.id : "agt_ceo";
+  };
+  function catalogPlacement(entry) {
+    const slug = fixtureSlug(entry.departmentSlug);
+    const dep = S.departments.find((d) => d.slug === slug);
+    const owner = FIXTURE_ON_DEMAND_DEPTS[slug]?.[2];
+    return { departmentSlug: slug, departmentName: deptNameForSlug(entry.departmentSlug), departmentId: dep?.id ?? null, createsDepartment: !dep, managerId: dep ? leadOf(dep) : owner ? `agt_${owner}` : "agt_ceo" };
+  }
+  function ensureDepartment(slug) {
+    const existing = S.departments.find((d) => d.slug === slug);
+    if (existing) return existing;
+    const [name, color, owner] = FIXTURE_ON_DEMAND_DEPTS[slug] ?? [slug, "#64707d", "ceo"];
+    const dep = { id: `dep_${slug}`, slug, name, mandate: `${name} (created on demand for a catalog hire)`, parentId: agent(`agt_${owner}`)?.departmentId ?? null, headAgentId: `agt_${owner}`, color, monthlyBudgetUsd: 0, createdAt: iso() };
+    S.departments.push(dep);
+    return dep;
+  }
+  function catalogSummary(e) {
+    return {
+      id: e.agent.id, division: e.agent.division, divisionLabel: e.divisionLabel, name: e.agent.name, description: e.agent.description, emoji: e.agent.emoji, vibe: e.agent.vibe,
+      color: e.agent.color, wordCount: e.agent.wordCount, departmentSlug: e.departmentSlug, departmentName: deptNameForSlug(e.departmentSlug),
+      optionalDepartment: !!S.catalog.divisions.find((d) => d.departmentSlug === e.departmentSlug && d.optional),
+      hiredCount: S.agents.filter((a) => a.catalogId === e.agent.id && a.status !== "terminated").length,
+    };
+  }
+  function catalogList(q) {
+    const division = q.get("division");
+    if (division && !S.catalog.divisions.some((d) => d.id === division)) throw new HttpError(400, "validation_error", `unknown division: ${division}`);
+    const term = (q.get("q") ?? "").toLowerCase().trim();
+    const words = term.split(/\s+/).filter(Boolean);
+    const score = (e) => (e.agent.name.toLowerCase().includes(term) ? 10 : 0) + words.filter((w) => `${e.agent.name} ${e.agent.description} ${e.agent.vibe}`.toLowerCase().includes(w)).length;
+    let list = S.catalog.agents.filter((e) => !division || e.agent.division === division);
+    if (term) list = list.map((e) => [e, score(e)]).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).map(([e]) => e);
+    return { source: S.catalog.source, divisions: S.catalog.divisions, agents: list.map(catalogSummary), total: S.catalog.agents.length };
+  }
+  function catalogDetail(id) {
+    const e = need(catalogEntry(id), `catalog agent ${id}`);
+    return { agent: e.agent, summary: catalogSummary(e), body: e.body, playbook: e.playbook, expertise: e.expertise, placement: catalogPlacement(e) };
+  }
+
   function createAgent(input, createdBy = "human") {
+    if (input.catalogId !== undefined) return createCatalogAgent(input, createdBy);
     const role = input.roleId ? ROLE_TEMPLATES.find((r) => r.id === input.roleId) : null;
     if (input.roleId && !role) throw new HttpError(400, "bad_request", `Unknown role template ${input.roleId}`);
     const title = input.title ?? role?.title;
@@ -343,6 +389,24 @@ export async function startFixtureServer({ port = 5173, host = "127.0.0.1", org 
     S.agents.push(a);
     S.history.agentMonthBase[a.id] = 0;
     emit("agent.created", `${a.name} joined as ${a.title}`, structuredClone(a));
+    return a;
+  }
+
+  /** POST /api/agents {catalogId}: worker / reflex / economy, department via the mapping (on demand), lead as manager. */
+  function createCatalogAgent(input, createdBy) {
+    const e = catalogEntry(input.catalogId);
+    if (!e) throw new HttpError(400, "validation_error", `unknown catalogId: ${input.catalogId}`);
+    const placement = catalogPlacement(e);
+    const dep = input.departmentId ? S.departments.find((d) => d.id === input.departmentId) : ensureDepartment(placement.departmentSlug);
+    if (!dep) throw new HttpError(400, "validation_error", `unknown departmentId: ${input.departmentId}`);
+    const managerId = input.managerId ?? (input.departmentId ? leadOf(dep) : placement.managerId ?? leadOf(dep));
+    const taken = new Set(S.agents.map((a) => a.name));
+    const name = input.name || ["Alex Morgan", "Jordan Lee", "Riley Quinn", "Casey Diaz", "Avery Singh", "Rowan Ito", "Sage Okoro"].find((n) => !taken.has(n)) || `Agent ${S.agents.length + 1}`;
+    const a = createAgent({ name, title: input.title ?? e.agent.name, departmentId: dep.id, managerId, tier: "worker", cognition: "reflex", modelTier: "economy", mandate: e.agent.description, persona: { style: e.agent.vibe || "Brief and factual" } }, createdBy);
+    Object.assign(a, { catalogId: e.agent.id });
+    Object.assign(a.persona, { emoji: e.agent.emoji, vibe: e.agent.vibe });
+    a.identity.assets = [`${e.agent.emoji} ${e.agent.name} playbook (agency-agents)`];
+    emit("agent.updated", `${a.name} is staffed from ${e.agent.name}`, structuredClone(a));
     return a;
   }
 
@@ -578,6 +642,9 @@ export async function startFixtureServer({ port = 5173, host = "127.0.0.1", org 
   route("GET", "/api/org", () => ({ departments: S.departments, agents: S.agents }));
   route("GET", "/api/roles", () => ROLE_TEMPLATES);
   route("GET", "/api/models", () => S.models);
+  route("GET", "/api/catalog", ({ q }) => catalogList(q));
+  route("GET", "/api/catalog/:id", ({ p }) => catalogDetail(decodeURIComponent(p.id)));
+  route("GET", "/api/catalog/:division/:slug", ({ p }) => catalogDetail(`${p.division}/${p.slug}`));
   route("GET", "/api/agents", ({ q }) => S.agents.filter((a) => (!q.get("status") || a.status === q.get("status")) && (!q.get("departmentId") || a.departmentId === q.get("departmentId"))));
   route("POST", "/api/agents", ({ body }) => createAgent(body));
   route("GET", "/api/agents/:id", ({ p }) => {

@@ -1,0 +1,8 @@
+# VPS override: publish AgentCo on the server's loopback only, so the internet reaches it solely
+# through a TLS reverse proxy (Caddy) on the same machine. See docs/DEPLOY.md, option (c).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
+services:
+  agentco:
+    ports: !override
+      - "127.0.0.1:3000:3000"

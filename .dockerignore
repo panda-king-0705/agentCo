@@ -1,0 +1,18 @@
+# Keep the build context small and secret-free. Patterns are root-relative, so nested
+# folders need the **/ form too.
+.git
+.github
+.sandbox-vendor
+node_modules
+**/node_modules
+dist
+**/dist
+data
+**/data/*.db*
+logs
+**/*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

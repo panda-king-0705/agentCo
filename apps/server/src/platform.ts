@@ -21,6 +21,7 @@ import { TracerImpl } from "./middleware/tracer.ts";
 import { loadModelConfig, modelsInfo as buildModelsInfo } from "./models/config.ts";
 import { createModelRouter } from "./models/router.ts";
 import { computeBaZi } from "./cognition/brain/self-management/bazi.ts";
+import { Catalog, createCatalog } from "./catalog/service.ts";
 import { bootstrapCompany, type BootstrapResult } from "./org/bootstrap.ts";
 import { CompanyService } from "./org/company.ts";
 import { OrgService } from "./org/service.ts";
@@ -47,6 +48,8 @@ export interface PlatformOverrides {
   dbPath?: string;
   /** Skip the first-boot org bootstrap (tests that build their own org). */
   bootstrap?: boolean;
+  /** The specialist catalog; default: loaded (once per process) from config.catalogDir. */
+  catalog?: Catalog;
 }
 
 export interface Platform {
@@ -69,6 +72,8 @@ export interface Platform {
   runs: RunService;
   scheduler: Scheduler;
   workspaces: Workspaces;
+  /** The agency-agents specialist catalog (docs/CATALOG.md). */
+  catalog: Catalog;
   services: PlatformServices;
   bootstrapResult: BootstrapResult | null;
   modelsInfo(): ModelsInfo;
@@ -96,8 +101,10 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const workspaces = new Workspaces(config.dataDir);
 
   const tools = new ToolExecutorImpl(config, { onCall: (runId) => repos.runs.incrementToolCalls(runId) });
+  const catalog = overrides.catalog ?? createCatalog({ dir: config.catalogDir, playbookTokens: config.catalogPlaybookTokens });
   const org = new OrgService({
-    repos, bus, company, budget, workspaces, now, castBaZi: computeBaZi,
+    repos, bus, company, budget, workspaces, now, castBaZi: computeBaZi, catalog,
+    managerModelTier: config.managerModelTier,
     knownTools: () => tools.names(),
     // late-bound: modelsInfo is built below
     knownProfiles: () => modelsInfo().profiles.map((p) => p.id),
@@ -107,7 +114,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const tasks = new TaskService({ repos, bus, tracer, org, conversations, now, redactor });
   org.attachTaskReassigner((taskId, assigneeId, reason) => tasks.reassign(taskId, assigneeId, reason));
   const approvals = new ApprovalService({ repos, bus, org, tasks, company, now, redactor });
-  tools.bind({ config, org, tasks, approvals, conversations, memory, workspaces, company, tracer });
+  tools.bind({ config, org, tasks, approvals, conversations, memory, workspaces, company, tracer, catalog });
 
   const modelConfig = overrides.createRouter && overrides.modelsInfo ? null : loadModelConfig(env);
   const routerDeps: ModelRouterDeps = { config: modelConfig, tracer, budget, getAgent: (id) => org.getAgent(id) };
@@ -117,7 +124,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const modelsInfo = overrides.modelsInfo ?? (() => buildModelsInfo(modelConfig ?? loadModelConfig(env)));
 
   const metrics = new MetricsService(repos, now);
-  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, now };
+  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, now };
   const engines = overrides.engines ?? (await loadEngines(config));
   const governor = new ContextGovernor(repos.settings, { dataDir: config.dataDir, triggerPct: config.contextTriggerPct, carryTurns: config.contextCarryTurns }, now);
   const runs = new RunService({
@@ -132,14 +139,18 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const scheduler = new Scheduler({ repos, bus, org, company, conversations, runs, tickMs: config.schedulerTickMs });
   runs.setSettledHook(() => scheduler.nudge());
 
-  const bootstrapResult = overrides.bootstrap === false ? null : bootstrapCompany(repos, org, company.settings().orgTemplate, now);
+  const bootstrapResult = overrides.bootstrap === false ? null : bootstrapCompany(repos, org, company.settings().orgTemplate, now, catalog);
+  // Agents created before the catalog existed get their role's specialist (docs/CATALOG.md).
+  if (bootstrapResult && !bootstrapResult.created) org.backfillCatalog();
+  // An explicit MANAGER_MODEL_TIER also re-tiers managers created before it was set (like company env overrides).
+  if (config.explicitKeys.has("MANAGER_MODEL_TIER")) org.applyManagerModelTier(config.managerModelTier);
 
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let lastBeat = now().getTime();
 
   const platform: Platform = {
     config, db, repos, bus, tracer, company, budget, org, conversations, memory, tasks, approvals, tools, models, metrics,
-    traces: new TraceService(repos), runs, scheduler, workspaces, services, bootstrapResult, modelsInfo,
+    traces: new TraceService(repos), runs, scheduler, workspaces, catalog, services, bootstrapResult, modelsInfo,
     snapshot() {
       const at = now();
       const agents = repos.agents.list({ includeTerminated: false });

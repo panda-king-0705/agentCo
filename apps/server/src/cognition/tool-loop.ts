@@ -102,7 +102,9 @@ export function describeToolCall(call: ToolCall, ctx: Pick<EngineContext, "platf
     case "blackboard_write":
       return `Updating blackboard "${s("key")}"`;
     case "hire_agent":
-      return `Requesting a hire: ${s("title")}`;
+      return `Requesting a hire: ${s("title") || s("catalogId")}`;
+    case "catalog_search":
+      return `Searching the specialist catalog for "${s("query")}"`;
     case "web_fetch":
       return `Fetching ${s("url")}`;
     case "complete_task":

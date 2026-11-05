@@ -7,9 +7,16 @@
  * offline mock profile for that tier (one-line warning), so the company always
  * runs. Unknown provider names work too when `<NAME>_BASE_URL` and
  * `<NAME>_API_KEY` are set.
+ *
+ * Defaults (the founder's choice): when MODEL_<TIER> is unset and ANTHROPIC_API_KEY
+ * is present, the tiers are Claude — frontier = claude-opus-5-5 (executives),
+ * standard = claude-sonnet-5-5 (managers), economy = claude-haiku-5-5 (workers).
+ * Without the key an unset tier is the offline mock. Fallbacks are opt-in
+ * (MODEL_<TIER>_FALLBACK) and only used when their provider has a key; a
+ * fallback that cannot be built never affects the primary.
  */
 import type { ModelProfile, ModelsInfo, ModelTier } from "../../../../packages/shared/src/index.ts";
-import { lookupPrice, MOCK_TIER_PRICE_KEY, normalizeModelKey } from "./pricing.ts";
+import { lookupPrice, MOCK_TIER_PRICE_KEY, normalizeModelKey, RECOMMENDED_TIERS } from "./pricing.ts";
 
 export const TIERS: ModelTier[] = ["frontier", "standard", "economy"];
 
@@ -233,7 +240,7 @@ export function loadModelConfig(env: NodeJS.ProcessEnv, options: LoadModelConfig
   const tiers = {} as ModelConfig["tiers"];
   for (const tier of TIERS) {
     const upper = tier.toUpperCase();
-    const primarySpec = (env[`MODEL_${upper}`] ?? "").trim() || `mock:${tier}`;
+    const primarySpec = (env[`MODEL_${upper}`] ?? "").trim() || defaultSpec(tier, env);
     let primary = buildProfile(partial, primarySpec, tier, options.now);
     if (!primary) {
       warnings.push(`MODEL_${upper}=${primarySpec} unavailable; the ${tier} tier uses the offline mock`);
@@ -283,6 +290,38 @@ export function loadModelConfig(env: NodeJS.ProcessEnv, options: LoadModelConfig
     defaultMaxOutputTokens: intEnv("MODEL_MAX_OUTPUT_TOKENS", 1200),
     warnings,
   };
+}
+
+/** Unset MODEL_<TIER>: Claude when ANTHROPIC_API_KEY is present, else the offline mock. */
+export function defaultSpec(tier: ModelTier, env: NodeJS.ProcessEnv): string {
+  return (env.ANTHROPIC_API_KEY ?? "").trim() ? RECOMMENDED_TIERS[tier].primary : `mock:${tier}`;
+}
+
+/** Who runs on each tier by default (org/agent-factory.ts; managers follow MANAGER_MODEL_TIER). */
+export function tierUsers(managerTier: "frontier" | "standard" = "standard"): Record<ModelTier, string[]> {
+  const users: Record<ModelTier, string[]> = { frontier: ["executives"], standard: [], economy: ["workers"] };
+  users[managerTier].push("managers");
+  return users;
+}
+
+function describeProfile(p: ModelProfile): string {
+  return p.provider === "mock" ? `${p.id} (offline mock)` : `${p.model} via ${p.provider}`;
+}
+
+/**
+ * Startup summary, one line per tier: tier → model → provider, live or mock, fallback, users.
+ * Never includes keys or base URLs.
+ */
+export function modelSummaryLines(config: ModelConfig, managerTier: "frontier" | "standard" = "standard"): string[] {
+  const users = tierUsers(managerTier);
+  const width = Math.max(...TIERS.map((t) => describeProfile(config.tiers[t].primary).length));
+  return TIERS.map((tier) => {
+    const { primary, fallback } = config.tiers[tier];
+    const who = users[tier].length ? users[tier].join(" + ") : "stage routing only";
+    const mode = primary.provider === "mock" ? "MOCK" : "LIVE";
+    const fb = fallback ? ` · fallback ${describeProfile(fallback)} (${fallback.provider === "mock" ? "MOCK" : "LIVE"})` : "";
+    return `${tier.padEnd(8)} → ${describeProfile(primary).padEnd(width)}  ${mode}  [${who}]${fb}`;
+  });
 }
 
 export function modelsInfo(config: ModelConfig): ModelsInfo {

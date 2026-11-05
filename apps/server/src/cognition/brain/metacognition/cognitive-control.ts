@@ -177,7 +177,11 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
 export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], reports: Agent[]): Promise<void> {
   await block(run, "self_management.role_arrangement", `Assigning ${subprocesses.length} subprocess(es) to the best-fit roles`, (span) => {
     const pool = candidatePool(run.agent, reports, run.platform.org.listActiveAgents(), subprocesses.map((s) => s.suggestedAssigneeId ?? "").filter(Boolean));
-    const candidates: Candidate[] = pool.map((agent) => ({ agent, departmentName: run.platform.org.departmentName(agent.departmentId) }));
+    const candidates: Candidate[] = pool.map((agent) => ({
+      agent,
+      departmentName: run.platform.org.departmentName(agent.departmentId),
+      catalogProfile: run.platform.catalog?.profileFor(agent) ?? null,
+    }));
     const used = new Map<string, number>();
     for (const s of subprocesses) {
       if (candidates.length === 0) break;

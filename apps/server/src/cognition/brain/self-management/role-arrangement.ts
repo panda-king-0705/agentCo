@@ -15,6 +15,11 @@ import { mbtiFit } from "./personality.ts";
 export interface Candidate {
   agent: Agent;
   departmentName: string;
+  /**
+   * Workers staffed from a catalog specialist: its description + mission (CatalogView.profileFor),
+   * added to the mandateFit text so the specialist's real scope counts (docs/CATALOG.md).
+   */
+  catalogProfile?: string | null;
 }
 
 export interface FitScore {
@@ -41,9 +46,11 @@ export function elementFit(agent: Agent, element: FiveElement): number {
   return max <= 0 ? 0.5 : chart.elements[element] / max;
 }
 
-function profileText(c: Candidate): string {
+/** mandateFit text: title, department, mission, assets — plus the catalog specialist's description and mission for catalog workers. */
+export function profileText(c: Candidate): string {
   const a = c.agent;
-  return `${a.title} ${c.departmentName} ${a.identity.mission} ${a.identity.assets.join(" ")}`;
+  const catalog = a.tier === "worker" && c.catalogProfile ? ` ${c.catalogProfile}` : "";
+  return `${a.title} ${c.departmentName} ${a.identity.mission}${catalog} ${a.identity.assets.join(" ")}`;
 }
 
 /** The subprocess's element: from the candidate department that best matches its text. */

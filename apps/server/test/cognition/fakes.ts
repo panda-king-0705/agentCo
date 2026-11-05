@@ -193,6 +193,7 @@ export function makeAgent(partial: Partial<Agent> & { id: string }): Agent {
     name: "Test Agent",
     title: "Agent",
     roleId: "agent",
+    catalogId: null,
     departmentId: "dep_general",
     managerId: null,
     tier: "worker",

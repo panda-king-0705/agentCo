@@ -327,6 +327,16 @@ export interface MetricsView {
   runStreak?(agentId: string, idleGapMs: number, maxRuns?: number): RunStreak;
 }
 
+/** The specialist catalog as the engines see it (docs/CATALOG.md); absent when no catalog is loaded. */
+export interface CatalogView {
+  /** Workers with a catalogId: the compiled specialist playbook for the system prompt; else null. */
+  playbookFor(agent: Agent): string | null;
+  /** Executives/managers with a catalogId: a short "domain expertise" line for the charter; else null. */
+  expertiseFor(agent: Agent): string | null;
+  /** Role Arrangement: the specialist's description + mission (mandateFit text); null without a catalogId. */
+  profileFor(agent: Agent): string | null;
+}
+
 export interface PlatformServices {
   models: ModelRouter;
   metrics: MetricsView;
@@ -336,6 +346,8 @@ export interface PlatformServices {
   org: OrgView;
   tasks: TaskView;
   agents: AgentStateWriter;
+  /** Optional so test fakes and older wiring keep working; the real platform always provides it. */
+  catalog?: CatalogView;
   now(): Date;
 }
 

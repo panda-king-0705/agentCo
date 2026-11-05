@@ -5,6 +5,7 @@ import { setErrorHandler } from "./api";
 import { href, navigate, useRoute } from "./router";
 import { startLive, useLive } from "./live";
 import { Icon, StatusGlyph, ToastHost, toast } from "./ui/kit";
+import { TokenGate } from "./ui/token-gate";
 import { Overview } from "./views/overview";
 import { OrgView } from "./views/org";
 import { AgentView } from "./views/agent";
@@ -14,6 +15,7 @@ import { TasksView } from "./views/tasks";
 import { ApprovalsView } from "./views/approvals";
 import { CostsView } from "./views/costs";
 import { MemoryView } from "./views/memory";
+import { CatalogView } from "./views/catalog";
 
 setErrorHandler((err, label) => toast(err.message, "error", label));
 
@@ -40,6 +42,7 @@ function applyTheme(t: Theme) {
 const NAV: { id: string; path: string; label: string; icon: string }[] = [
   { id: "", path: "/", label: "Overview", icon: "overview" },
   { id: "org", path: "/org", label: "Org chart", icon: "org" },
+  { id: "catalog", path: "/catalog", label: "Catalog", icon: "catalog" },
   { id: "chat", path: "/chat", label: "Chat", icon: "chat" },
   { id: "traces", path: "/traces", label: "Traces", icon: "traces" },
   { id: "tasks", path: "/tasks", label: "Tasks", icon: "tasks" },
@@ -199,6 +202,8 @@ function Routes() {
       return <CostsView />;
     case "memory":
       return <MemoryView />;
+    case "catalog":
+      return <CatalogView />;
     default:
       return <NotFound />;
   }
@@ -239,6 +244,7 @@ function App() {
         <Routes />
       </main>
       <ToastHost />
+      <TokenGate />
     </div>
   );
 }

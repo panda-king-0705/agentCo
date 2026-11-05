@@ -95,6 +95,8 @@ async function run(scheme, interactive) {
       await page.getByRole("button", { name: "Hire agent" }).first().click();
       const dlg = page.locator('[role="dialog"]');
       await dlg.waitFor();
+      // The modal opens on "From catalog"; the role-template form is the second tab.
+      await dlg.getByRole("tab", { name: "Role template / custom" }).click();
       await dlg.locator("select").first().waitFor();
       await page.waitForFunction(() => document.querySelectorAll('[role="dialog"] select option').length > 5);
       const value = await dlg.locator("select").first().evaluate((sel) => {
@@ -169,10 +171,84 @@ async function run(scheme, interactive) {
       await page.waitForSelector(".composer textarea");
     });
 
+    await step("catalog: browse, filter, search", async () => {
+      await go(page, "/catalog");
+      await page.waitForSelector(".cat-card");
+      assert.ok(await page.locator(".cat-card").count() >= 20, "catalog grid shows specialists");
+      assert.ok(await page.locator(".cat-div").count() >= 18, "every division is listed");
+      await shot(page, "catalog-light", { full: true });
+      await page.locator(".cat-div", { hasText: "Security" }).click();
+      await page.waitForFunction(() => {
+        const ids = [...document.querySelectorAll(".cat-card")].map((c) => c.getAttribute("data-catalog"));
+        return ids.length > 0 && ids.every((id) => id.startsWith("security/"));
+      });
+      await page.locator(".cat-div", { hasText: "All divisions" }).click();
+      await page.getByRole("searchbox", { name: "Search skills, roles, tools" }).fill("backend");
+      await page.waitForFunction(() => document.querySelector(".cat-card")?.getAttribute("data-catalog") === "engineering/engineering-backend-architect");
+    });
+
+    await step("catalog: detail drawer with playbook and full text", async () => {
+      await page.locator('.cat-card[data-catalog="engineering/engineering-backend-architect"] .cat-card-open').click();
+      await page.waitForSelector('.drawer [data-testid="playbook"]');
+      assert.match(await page.locator(".drawer .playbook-text").innerText(), /Specialist playbook — .*Backend Architect/);
+      assert.match(page.url(), /[?&]id=engineering/);
+      await shot(page, "catalog-drawer-light");
+      await page.locator(".drawer").getByRole("tab", { name: "Full text" }).click();
+      await page.locator(".drawer .cat-full").getByText("Core Mission").first().waitFor();
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => !document.querySelector(".drawer"));
+    });
+
+    await step("catalog: hire into a new optional department", async () => {
+      await go(page, "/catalog?id=game-development/unity-architect");
+      await page.waitForSelector('.drawer [data-testid="playbook"]');
+      await page.locator(".drawer").getByRole("button", { name: "Hire into…" }).click();
+      const dlg = page.locator('.modal[role="dialog"]');
+      await dlg.getByText("Game Studio (new)").first().waitFor({ state: "attached" });
+      await dlg.locator('input[placeholder="Auto"]').fill("E2E Specialist");
+      await shot(page, "catalog-hire-light");
+      await dlg.getByRole("button", { name: "Hire specialist" }).click();
+      await page.getByRole("heading", { name: "Specialist hired" }).waitFor();
+      await page.getByRole("button", { name: "Open E2E Specialist" }).click();
+      await page.waitForURL(/#\/agents\//);
+      await page.getByRole("tab", { name: "Overview" }).click();
+      await page.waitForSelector('[data-testid="specialist-panel"] [data-testid="playbook"]');
+      assert.match(await page.locator('[data-testid="specialist-panel"] .playbook-text').innerText(), /Unity Architect/);
+      await page.waitForFunction(() => document.body.innerText.includes("Game Studio"));
+    });
+
+    await step("org Hire modal: From catalog tab", async () => {
+      await go(page, "/org");
+      await page.waitForSelector(".org-card");
+      await page.getByRole("button", { name: "Hire agent" }).first().click();
+      const dlg = page.locator('.modal[role="dialog"]');
+      await dlg.getByRole("tab", { name: "From catalog", selected: true }).waitFor();
+      await dlg.getByRole("searchbox", { name: "Search specialists" }).fill("seo");
+      await dlg.locator('.cat-pick[data-catalog="marketing/marketing-seo-specialist"]').click();
+      await dlg.locator('input[placeholder="Auto"]').fill("E2E SEO");
+      await dlg.getByRole("button", { name: "Hire specialist" }).click();
+      await page.waitForSelector('.org-card[data-agent] a.oc-name:text("E2E SEO")', { timeout: 8000 });
+    });
+
+    await step("catalog worker shows its playbook", async () => {
+      await go(page, "/agents/agt_be?tab=overview");
+      await page.waitForSelector('[data-testid="specialist-panel"] [data-testid="playbook"]');
+      await page.locator('[data-testid="specialist-panel"]').scrollIntoViewIfNeeded();
+      await shot(page, "catalog-agent-playbook-light");
+    });
+
     await step("agent overview + edit", async () => {
       await go(page, "/agents/agt_ceo?tab=overview");
       await page.waitForSelector(".panel");
       await S("agent-overview", { full: true });
+    });
+  }
+
+  if (!interactive) {
+    await step(`${scheme} catalog`, async () => {
+      await go(page, "/catalog");
+      await page.waitForSelector(".cat-card");
+      await shot(page, `catalog-${scheme}`, { full: true });
     });
   }
 

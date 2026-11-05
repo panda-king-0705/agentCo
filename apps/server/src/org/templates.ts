@@ -51,7 +51,7 @@ export const DEPARTMENT_TEMPLATES: readonly DepartmentTemplate[] = [
 const BASE_TOOLS = ["send_message", "escalate", "memory_search", "memory_write", "blackboard_read", "workspace_write_file", "workspace_read_file", "workspace_list"];
 const LEAD_TOOLS = [...BASE_TOOLS, "delegate_task", "ask_human", "blackboard_write"];
 export const TOOLSETS: Record<AgentTier, readonly string[]> = {
-  executive: [...LEAD_TOOLS, "hire_agent"],
+  executive: [...LEAD_TOOLS, "hire_agent", "catalog_search"],
   manager: LEAD_TOOLS,
   worker: BASE_TOOLS,
 };
@@ -113,6 +113,85 @@ const ROWS: RoleRow[] = [
 const COGNITION: Record<AgentTier, CognitionKind> = { executive: "brain", manager: "brain", worker: "reflex" };
 const MODEL_TIER: Record<AgentTier, ModelTier> = { executive: "frontier", manager: "standard", worker: "economy" };
 
+/**
+ * Catalog specialists (agency-agents, docs/CATALOG.md → "Worker → catalog mapping"), chosen by hand
+ * for fit with each role's mandate and KPIs. Workers run with the specialist's compiled playbook;
+ * executives and managers carry a short "domain expertise" line from it (only where a good match
+ * exists — the CEO and the Support Manager have none). Every id is checked by the catalog tests.
+ */
+// prettier-ignore
+export const ROLE_CATALOG: Readonly<Record<string, string>> = {
+  // workers → specialist playbook
+  "ops-coordinator": "project-management/project-management-project-shepherd",
+  "support-l1": "specialized/customer-service",
+  "triage-agent": "support/support-support-responder",
+  "fpa-analyst": "finance/finance-fpa-analyst",
+  "bookkeeper": "finance/finance-bookkeeper-controller",
+  "backend-engineer": "engineering/engineering-backend-architect",
+  "frontend-engineer": "engineering/engineering-frontend-developer",
+  "qa-engineer": "testing/testing-test-automation-engineer",
+  "security-analyst": "security/security-threat-detection-engineer",
+  "data-analyst": "support/support-analytics-reporter",
+  "spec-writer": "product/product-manager",
+  "ux-designer": "design/design-ux-architect",
+  "content-writer": "marketing/marketing-content-creator",
+  "growth-analyst": "marketing/marketing-growth-hacker",
+  "sdr-prospector": "sales/sales-outbound-strategist",
+  "account-executive": "sales/sales-deal-strategist",
+  "onboarding-agent": "specialized/customer-success-manager",
+  "recruiter-agent": "specialized/hr-onboarding",
+  "contracts-analyst": "specialized/legal-document-review",
+  "market-researcher": "product/product-trend-researcher",
+  // executives & managers → optional domain expertise
+  "chief-of-staff": "specialized/specialized-chief-of-staff",
+  "internal-audit": "security/security-compliance-auditor",
+  "coo": "specialized/operations-manager",
+  "operations-manager": "project-management/project-management-studio-operations",
+  "cfo": "specialized/chief-financial-officer",
+  "finance-manager": "finance/finance-financial-analyst",
+  "cto": "engineering/engineering-software-architect",
+  "eng-manager": "engineering/engineering-code-reviewer",
+  "ciso": "security/security-architect",
+  "security-manager": "security/security-incident-responder",
+  "cdao": "specialized/specialized-model-qa",
+  "data-manager": "engineering/engineering-data-engineer",
+  "cpo": "product/product-manager",
+  "product-manager": "product/product-sprint-prioritizer",
+  "cmo": "design/design-brand-guardian",
+  "marketing-manager": "marketing/marketing-pr-communications-manager",
+  "cro": "sales/sales-pipeline-analyst",
+  "sales-manager": "sales/sales-coach",
+  "cs-manager": "sales/sales-account-strategist",
+  "chro": "specialized/organizational-psychologist",
+  "people-manager": "specialized/corporate-training-designer",
+  "clo": "support/support-legal-compliance-checker",
+  "legal-manager": "specialized/data-privacy-officer",
+  "cso": "specialized/business-strategist",
+};
+
+/**
+ * ORG_TEMPLATE=agency (docs/CATALOG.md → "Agency org"): the startup leadership plus 2-4 catalog
+ * specialists per department. Lists the full specialist set per department; specialists already
+ * staffed by a startup worker template (e.g. backend-engineer → Backend Architect) count towards it,
+ * the rest are hired from the catalog at first boot, within MAX_HEADCOUNT.
+ */
+// prettier-ignore
+export const AGENCY_STAFFING: Readonly<Record<string, readonly string[]>> = {
+  executive: ["support/support-executive-summary-generator", "project-management/project-management-meeting-notes-specialist"],
+  operations: ["project-management/project-management-project-shepherd", "specialized/specialized-workflow-architect", "specialized/automation-governance-architect"],
+  support: ["specialized/customer-service", "support/support-support-responder"],
+  finance: ["finance/finance-fpa-analyst", "finance/finance-bookkeeper-controller", "finance/finance-financial-analyst"],
+  engineering: ["engineering/engineering-backend-architect", "engineering/engineering-frontend-developer", "engineering/engineering-devops-automator", "testing/testing-test-automation-engineer"],
+  product: ["product/product-manager", "design/design-ux-architect", "design/design-ui-designer", "product/product-feedback-synthesizer"],
+  marketing: ["marketing/marketing-content-creator", "marketing/marketing-growth-hacker", "marketing/marketing-seo-specialist", "marketing/marketing-social-media-strategist"],
+  revenue: ["sales/sales-outbound-strategist", "sales/sales-deal-strategist", "specialized/customer-success-manager", "sales/sales-proposal-strategist"],
+  people: ["specialized/hr-onboarding", "specialized/corporate-training-designer"],
+  legal: ["specialized/legal-document-review", "support/support-legal-compliance-checker"],
+  security: ["security/security-appsec-engineer", "security/security-threat-detection-engineer"],
+  data: ["support/support-analytics-reporter", "engineering/engineering-data-engineer"],
+  strategy: ["product/product-trend-researcher", "specialized/business-strategist"],
+};
+
 export const ROLE_TEMPLATES: readonly RoleTemplate[] = ROWS.map(([id, title, departmentSlug, reportsToRoleId, tier, mandate, kpis, names, inStarterOrg]) => ({
   id,
   title,
@@ -126,6 +205,7 @@ export const ROLE_TEMPLATES: readonly RoleTemplate[] = ROWS.map(([id, title, dep
   tools: [...TOOLSETS[tier], ...(WEB_ROLES.has(id) ? ["web_fetch"] : [])],
   defaultNames: names.split("|"),
   inStarterOrg,
+  catalogId: ROLE_CATALOG[id] ?? null,
 }));
 
 /** Default monthly budget per agent (USD) by tier; 0 would mean "no per-agent cap". */
@@ -208,8 +288,8 @@ export const NAME_POOL: readonly string[] = [
   "Lena Vos", "Omar Farah", "Ivy Tran", "Nico Ferraro", "Zoe Adler", "Ari Cohen", "Luca Moretti", "Hana Mori",
 ];
 
-/** Role ids in a template, in creation order (managers before reports). */
-export function templateRoleIds(template: "startup" | "enterprise"): string[] {
+/** Role ids in a template, in creation order (managers before reports). agency = the startup roles (+ AGENCY_STAFFING). */
+export function templateRoleIds(template: "startup" | "enterprise" | "agency"): string[] {
   return ROLE_TEMPLATES.filter((r) => template === "enterprise" || r.inStarterOrg).map((r) => r.id);
 }
 

@@ -1,7 +1,7 @@
 // Live store: one EventSource to /api/events/stream patches cached entities by event type.
 // Falls back to polling /api/events?since= when SSE keeps failing (e.g. bearer auth off-loopback).
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { api } from "./api";
+import { api, streamUrl } from "./api";
 import type {
   Agent, Approval, CompanyEvent, CompanyEventType, CompanySettings, CompanySnapshot, Department, Message, Run, Span, Task,
 } from "./types";
@@ -96,6 +96,16 @@ function mergeMessages(prev: Message[], add: Message[]): Message[] {
   return [...map.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+let departmentsTimer: number | null = null;
+/** Refetches the departments (throttled): a hire can create one on demand (docs/CATALOG.md). */
+export function refreshDepartments(): void {
+  if (departmentsTimer != null) return;
+  departmentsTimer = window.setTimeout(() => {
+    departmentsTimer = null;
+    api.org().then((o) => seed.departments(o.departments), () => undefined);
+  }, 150);
+}
+
 // ───────────── applying events ─────────────
 type EventListener = (ev: CompanyEvent) => void;
 const eventListeners = new Set<EventListener>();
@@ -125,6 +135,8 @@ export function applyEvent(ev: CompanyEvent): void {
         const next = { ...(prev ?? {}), ...(isObj(d) ? d : {}) } as Agent;
         if (ev.type === "agent.terminated") next.status = "terminated";
         if (prev || (isObj(d) && "name" in d)) patch.agents = { ...state.agents, [agentId]: next };
+        // A catalog hire can create its department on demand: fetch departments we don't know yet.
+        if (ev.type === "agent.created" && next.departmentId && !state.departments[next.departmentId]) refreshDepartments();
       }
       break;
     }
@@ -188,7 +200,7 @@ function handleFrame(e: MessageEvent<string>) {
 function openSse() {
   if (typeof EventSource === "undefined") return startPolling();
   source?.close();
-  const es = new EventSource("/api/events/stream");
+  const es = new EventSource(streamUrl());
   source = es;
   for (const t of EVENT_TYPES) es.addEventListener(t, handleFrame as (e: Event) => void);
   es.onmessage = handleFrame;

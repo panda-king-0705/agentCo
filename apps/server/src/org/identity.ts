@@ -57,6 +57,8 @@ export function buildPersona(seed: RoleSeed | null, override: Partial<Persona> =
     traits: override.traits ?? seed?.traits ?? [],
     personalityType: override.personalityType ?? seed?.mbti ?? FALLBACK_MBTI[tier],
     baZi: override.baZi ?? null,
+    ...(override.emoji ? { emoji: override.emoji } : {}),
+    ...(override.vibe ? { vibe: override.vibe } : {}),
   };
 }
 
