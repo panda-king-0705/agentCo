@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseEnv } from "node:util";
+import { fileURLToPath } from "node:url";
 
 export type OrgTemplateId = "startup" | "enterprise";
 
@@ -124,7 +125,7 @@ function list(value: string): string[] {
 }
 
 function defaultWebDist(): string {
-  return new URL("../../web/dist", import.meta.url).pathname;
+  return fileURLToPath(new URL("../../web/dist", import.meta.url));
 }
 
 /** Every *_API_KEY / *_TOKEN value is a literal the redactor must mask. */
