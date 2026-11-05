@@ -4,7 +4,7 @@
  * JSON/text model-call helpers that put the identity charter in every prompt.
  */
 import type { Agent, BrainBlockId, ModelTier, Task } from "../../../../../packages/shared/src/index.ts";
-import type { EngineContext, PlatformServices, SpanHandle } from "../../contracts.ts";
+import type { ChatResponse, EngineContext, PlatformServices, SpanHandle } from "../../contracts.ts";
 import type { SpanAttributes } from "../../../../../packages/shared/src/index.ts";
 import { isAbortError, isBudgetError } from "../../models/router.ts";
 import { obj, type Json } from "../coerce.ts";
@@ -14,6 +14,29 @@ import type { Drives } from "./self-management/identity.ts";
 /** Local working memory for one task pass; the serialisable part persists in task.state. */
 export interface WorkingMemory {
   [key: string]: unknown;
+}
+
+/** One model call made in this run, timed by the engine (OOD Monitoring profiles these). */
+export interface CallRecord {
+  stage: string;
+  block: BrainBlockId | null;
+  tier: ModelTier;
+  profileId: string;
+  contextWindow: number | null;
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  jsonOk: boolean | null;
+  checked: boolean;
+}
+
+/** OOD Monitoring → Online Learning: profile-guided optimization insight. */
+export interface OptimizationInsight {
+  block: string;
+  tier: string;
+  symptom: string;
+  remedy: string;
 }
 
 export interface BrainRun {
@@ -30,6 +53,14 @@ export interface BrainRun {
   visited: BrainBlockId[];
   costUsd: number;
   maxRevisions: number;
+  calls: CallRecord[];
+  insights: OptimizationInsight[];
+  /** Run time limit (RUN_TIMEOUT_MS) for the constraint-pressure signal. */
+  runTimeoutMs: number;
+  /** Phase span the next blocks hang under (§3 grouping), else the run span. */
+  parent: SpanHandle | null;
+  /** The block currently executing (for call records). */
+  currentBlock: BrainBlockId | null;
 }
 
 export function blockSpanName(id: BrainBlockId): string {
@@ -44,7 +75,7 @@ export async function block<T>(
   fn: (span: SpanHandle) => Promise<T> | T,
   options: { parent?: SpanHandle; attributes?: SpanAttributes; status?: "thinking" | "acting" } = {},
 ): Promise<T> {
-  const parent = options.parent ?? run.ctx.span;
+  const parent = options.parent ?? run.parent ?? run.ctx.span;
   const span = parent.child({
     kind: "stage",
     name: blockSpanName(id),
@@ -52,6 +83,8 @@ export async function block<T>(
   });
   run.visited.push(id);
   run.platform.agents.setActivity(run.agent.id, options.status ?? "thinking", activity, id);
+  const previousBlock = run.currentBlock;
+  run.currentBlock = id;
   try {
     const result = await fn(span);
     span.end({ status: "ok", output: summarize(result) });
@@ -60,7 +93,48 @@ export async function block<T>(
     const cancelled = isAbortError(err, run.ctx.signal) || err instanceof YieldSignal;
     span.end({ status: cancelled ? "cancelled" : "error", error: (err as Error).message });
     throw err;
+  } finally {
+    run.currentBlock = previousBlock;
   }
+}
+
+/**
+ * A §3 phase ("brain.target_understanding", "brain.planning", "brain.evaluation", …):
+ * a stage span grouping the blocks run inside `fn`, so the trace reads at two zoom levels.
+ */
+export async function phase<T>(run: BrainRun, name: string, fn: () => Promise<T>): Promise<T> {
+  const parent = run.parent ?? run.ctx.span;
+  const span = parent.child({ kind: "stage", name: `brain.${name}`, attributes: { "agentco.brain.phase": name } });
+  const previous = run.parent;
+  run.parent = span;
+  try {
+    const result = await fn();
+    span.end({ status: "ok" });
+    return result;
+  } catch (err) {
+    const cancelled = isAbortError(err, run.ctx.signal) || err instanceof YieldSignal;
+    span.end({ status: cancelled ? "cancelled" : "error", error: (err as Error).message });
+    throw err;
+  } finally {
+    run.parent = previous;
+  }
+}
+
+export function recordCall(run: BrainRun, stage: string, response: ChatResponse, latencyMs: number, jsonOk: boolean | null): void {
+  run.costUsd += response.costUsd;
+  run.calls.push({
+    stage,
+    block: run.currentBlock,
+    tier: response.profile.tier,
+    profileId: response.profile.id,
+    contextWindow: response.profile.contextWindow,
+    latencyMs,
+    inputTokens: response.usage.inputTokens,
+    outputTokens: response.usage.outputTokens,
+    costUsd: response.costUsd,
+    jsonOk,
+    checked: false,
+  });
 }
 
 function summarize(v: unknown): string | undefined {
@@ -108,6 +182,7 @@ function tierFor(run: BrainRun, stage: string): ModelTier {
  */
 export async function llmJson(run: BrainRun, o: LlmOptions): Promise<Json> {
   const tier = o.tier ?? tierFor(run, o.stage);
+  const started = Date.now();
   const response = await run.platform.models.chat(
     {
       tier,
@@ -122,13 +197,14 @@ export async function llmJson(run: BrainRun, o: LlmOptions): Promise<Json> {
     },
     callContext(run, o.span, o.stage),
   );
-  run.costUsd += response.costUsd;
+  recordCall(run, o.stage, response, Date.now() - started, response.json !== null);
   if (!response.json) o.span.setAttributes({ "agentco.degraded": true });
   return obj(response.json);
 }
 
 export async function llmText(run: BrainRun, o: Omit<LlmOptions, "shape">): Promise<string> {
   const tier = o.tier ?? tierFor(run, o.stage);
+  const started = Date.now();
   const response = await run.platform.models.chat(
     {
       tier,
@@ -142,7 +218,7 @@ export async function llmText(run: BrainRun, o: Omit<LlmOptions, "shape">): Prom
     },
     callContext(run, o.span, o.stage),
   );
-  run.costUsd += response.costUsd;
+  recordCall(run, o.stage, response, Date.now() - started, null);
   return response.content.trim();
 }
 

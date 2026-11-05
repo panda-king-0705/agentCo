@@ -4,7 +4,7 @@
  * as `tool` spans; everything else goes through platform.tools.execute.
  */
 import type { Agent, BrainBlockId, ModelTier } from "../../../../packages/shared/src/index.ts";
-import type { ChatMessage, EngineContext, SpanHandle, ToolCall, ToolEffect, ToolSpec } from "../contracts.ts";
+import type { ChatMessage, ChatResponse, EngineContext, SpanHandle, ToolCall, ToolEffect, ToolSpec } from "../contracts.ts";
 import { truncate } from "./text.ts";
 
 export const COMPLETE_TASK: ToolSpec = {
@@ -36,6 +36,8 @@ export interface ToolLoopOptions {
   activityLabel: string;
   block?: BrainBlockId | null;
   maxOutputTokens?: number;
+  /** Called after every model response with its measured latency (OOD profiling). */
+  onResponse?: (response: ChatResponse, latencyMs: number) => void;
 }
 
 export interface ToolLoopResult {
@@ -124,6 +126,7 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
     if (ctx.signal.aborted) throw abortErrorFrom(ctx.signal);
     out.steps = step;
     ctx.platform.agents.setActivity(agent.id, "thinking", `${o.activityLabel} (step ${step})`, o.block ?? null);
+    const started = Date.now();
     const response = await ctx.platform.models.chat(
       {
         tier: o.tier,
@@ -135,6 +138,7 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
       { agentId: agent.id, runId: ctx.run.id, traceId: ctx.run.traceId, parentSpanId: o.parentSpan.spanId, taskId: o.taskId, stage: o.stage, signal: ctx.signal },
     );
     out.costUsd += response.costUsd;
+    o.onResponse?.(response, Date.now() - started);
 
     if (response.toolCalls.length === 0) {
       const text = response.content.trim();

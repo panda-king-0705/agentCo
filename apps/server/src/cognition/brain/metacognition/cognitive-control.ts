@@ -1,13 +1,14 @@
 /**
  * Metacognition › Cognitive Control (∝ from Confidence) → Decomposition and
  * Candidate Solutions (Solution 1 High Cost, Solution 2 Low Cost, Solution 3
- * Low Effect). One agent-tier model call proposes both; Role Arrangement
- * assigns each subprocess.
+ * Low Effort). One agent-tier model call proposes both; Role Arrangement
+ * assigns each subprocess. Control level c = clamp(α·uncertainty) (Q4), raised
+ * by OOD constraint pressure (finer decomposition, Q2).
  */
 import type { Agent } from "../../../../../../packages/shared/src/index.ts";
 import { arr, bool, num, obj, oneOf, str } from "../../coerce.ts";
 import { oneLine, truncate } from "../../text.ts";
-import { Q4_CONTROL, Q6_CANDIDATES, q4ControlLevel, type CandidateName } from "../interpretation.ts";
+import { Q2_OOD, Q4_CONTROL, Q6_CANDIDATES, q4ControlLevel, type CandidateName } from "../interpretation.ts";
 import { block, llmJson, type BrainRun } from "../runtime.ts";
 import { candidatePool, scoreCandidates, type Candidate } from "../self-management/role-arrangement.ts";
 import type { Competence } from "./self-ability.ts";
@@ -43,8 +44,9 @@ export interface ControlOutput {
   rationale: string;
 }
 
-export function controlLevel(uncertainty: number, calibrated: number): number {
-  return q4ControlLevel(uncertainty, calibrated);
+/** c = clamp(α·uncertainty) + pressure boost (each constraint-pressure signal decomposes finer). */
+export function controlLevel(uncertainty: number, pressureSignals = 0): number {
+  return Math.min(1, q4ControlLevel(uncertainty) + Q2_OOD.controlBoostPerSignal * Math.max(0, pressureSignals));
 }
 
 export function maxSubprocessesFor(c: number, essentialOnly: boolean): number {
@@ -76,21 +78,21 @@ export function coerceSubprocesses(json: Record<string, unknown>, max: number, f
 /** Always the diagram's three candidates, in order, with defaults scaled from the task. */
 export function coerceCandidates(json: Record<string, unknown>, taskValue: number, taskCost: number): CandidateSolution[] {
   const given = arr(json.candidates).map(obj);
-  const defaults: Record<CandidateName, { approach: string; cost: number; value: number }> = {
-    high_cost: { approach: "Thorough: every part, extra review", cost: Math.max(0.02, taskCost * 2), value: taskValue },
-    low_cost: { approach: "Focused: the essential parts, done well", cost: Math.max(0.01, taskCost), value: taskValue * 0.8 },
-    low_effect: { approach: "Minimal: a short outline only", cost: Math.max(0.005, taskCost * 0.3), value: taskValue * 0.3 },
+  const scale: Record<CandidateName, { cost: number; value: number }> = {
+    high_cost: { cost: 2, value: 1 },
+    low_cost: { cost: 1, value: 0.8 },
+    low_effort: { cost: 0.3, value: 0.5 },
   };
   return Q6_CANDIDATES.map((c, i) => {
     const match = given.find((g) => oneOf(g.name, [c.name] as const, "x" as never) === c.name) ?? given[i] ?? {};
-    const d = defaults[c.name];
+    const d = scale[c.name];
     return {
       name: c.name,
       label: c.label,
-      approach: str(match.approach, d.approach, 400),
-      estCostUsd: num(match.estCostUsd ?? match.cost, d.cost, 0.001, 100),
-      expectedValue: num(match.expectedValue ?? match.value, d.value, 0, 1000),
-      meetsCriteria: bool(match.meetsCriteria, c.name !== "low_effect" || true),
+      approach: str(match.approach, c.approach, 400),
+      estCostUsd: num(match.estCostUsd ?? match.cost, Math.max(0.005, taskCost * d.cost), 0.001, 100),
+      expectedValue: num(match.expectedValue ?? match.value, taskValue * d.value, 0, 1000),
+      meetsCriteria: bool(match.meetsCriteria, true),
     };
   });
 }
@@ -107,11 +109,14 @@ export interface DecomposeArgs {
   calibrated: number;
   feedback: string[];
   preferDelegation: boolean;
+  pressureSignals: number;
+  /** Data-driven Analysis: optimization insights + past-cost notes for the prompt. */
+  lessons: string[];
 }
 
 /** Blocks: decomposition (+ role arrangement) and candidate solutions, from one agent-tier call. */
 export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise<ControlOutput> {
-  const c = controlLevel(a.uncertainty, a.calibrated);
+  const c = controlLevel(a.uncertainty, a.pressureSignals);
   const max = maxSubprocessesFor(c, run.drives.essentialOnly);
   const reports = run.platform.org.directReports(run.agent.id).filter((r) => r.status !== "terminated" && r.status !== "paused");
   const canDelegate = reports.length > 0 && run.platform.tools.specsFor(run.agent).some((t) => t.name === "delegate_task");
@@ -134,9 +139,10 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
               `Use mode "direct" with no subprocesses only if you can do it yourself quickly.\n`
             : `You have no one to delegate to: mode "direct", subprocesses are your own steps (at most ${max}).\n`) +
           (a.feedback.length ? `Address this feedback: ${a.feedback.join("; ")}\n` : "") +
-          `Also give exactly three candidate solutions named high_cost, low_cost, low_effect (low effect = cheap, smaller impact), each {approach, estCostUsd, expectedValue 0-1000, meetsCriteria}.`,
+          (a.lessons.length ? `From past runs:\n${a.lessons.slice(0, 5).map((l) => `- ${l}`).join("\n")}\n` : "") +
+          "Also give exactly three candidate solutions: high_cost (thorough: higher tier, more steps, extra verification), low_cost (same scope, cheaper tiers, fewer steps), low_effort (smallest change that meets the criteria: reuse memory, existing files and subtask results); each {approach, estCostUsd, expectedValue 0-1000, meetsCriteria}.",
         shape:
-          '{"mode":"delegate"|"direct","subprocesses":[{"title":string,"description":string,"assigneeId":string,"value":number,"estCostUsd":number,"acceptanceCriteria":string}],"candidates":[{"name":"high_cost"|"low_cost"|"low_effect","approach":string,"estCostUsd":number,"expectedValue":number,"meetsCriteria":boolean}],"rationale":string}',
+          '{"mode":"delegate"|"direct","subprocesses":[{"title":string,"description":string,"assigneeId":string,"value":number,"estCostUsd":number,"acceptanceCriteria":string}],"candidates":[{"name":"high_cost"|"low_cost"|"low_effort","approach":string,"estCostUsd":number,"expectedValue":number,"meetsCriteria":boolean}],"rationale":string}',
         context: {
           mode: "task",
           task: { number: task.number, title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria },

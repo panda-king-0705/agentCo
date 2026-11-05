@@ -2,11 +2,11 @@
  * Role Arrangement › Personality / MBTI: task-kind fit for role arrangement,
  * a tone hint for prompts, and a persona suggestion for new hires.
  */
-import { Q8_MBTI_TASK_TABLE } from "../interpretation.ts";
+import { MBTI_TASK_TABLE } from "../interpretation.ts";
 
 export function taskKinds(text: string): { kind: string; prefers: string[] }[] {
   const t = text.toLowerCase();
-  return Q8_MBTI_TASK_TABLE.filter((row) => row.pattern.test(t)).map((row) => ({ kind: row.kind, prefers: row.prefers }));
+  return MBTI_TASK_TABLE.filter((row) => row.pattern.test(t)).map((row) => ({ kind: row.kind, prefers: row.prefers }));
 }
 
 /** 0..1: share of the task kinds' preferred letters present in the type; 0.5 when unknown. */

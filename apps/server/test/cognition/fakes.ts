@@ -20,6 +20,7 @@ import type {
 } from "../../../../packages/shared/src/index.ts";
 import type {
   AgentStateWriter,
+  BlockProfile,
   BudgetGate,
   CognitiveStatePatch,
   CreateObjectiveInput,
@@ -29,6 +30,7 @@ import type {
   MemorySearchQuery,
   MemoryService,
   MemoryWriteInput,
+  MetricsView,
   ModelProvider,
   ModelRouter,
   OrgView,
@@ -329,6 +331,28 @@ export class FakePlatform implements PlatformServices {
     this.taskMap.set(task.id, task);
     return task;
   }
+
+  // ── MetricsView: test-set profiles, else computed from recorded llm spans (no latency in the fake tracer).
+  readonly profiles = new Map<string, BlockProfile>();
+  readonly metrics: MetricsView = {
+    blockProfile: (agentId, blockName) => {
+      const set = this.profiles.get(blockName);
+      if (set) return set;
+      const spans = this.tracer.spans.filter((s) => s.kind === "llm" && s.agentId === agentId && s.attributes["agentco.stage"] === blockName && s.status !== "running");
+      const p95 = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * 0.95))]! : null);
+      const ok = spans.filter((s) => s.status === "ok");
+      return {
+        block: blockName,
+        calls: spans.length,
+        p50Ms: null,
+        p95Ms: null,
+        p95InputTokens: p95(ok.map((s) => s.inputTokens ?? 0)),
+        p95OutputTokens: p95(ok.map((s) => s.outputTokens ?? 0)),
+        meanCostUsd: ok.length ? ok.reduce((n, s) => n + (s.costUsd ?? 0), 0) / ok.length : null,
+        errorRate: spans.length ? spans.filter((s) => s.status === "error").length / spans.length : null,
+      };
+    },
+  };
 
   // ── OrgView
   readonly org: OrgView = {

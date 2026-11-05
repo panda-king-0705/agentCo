@@ -228,7 +228,7 @@ export function mockStageJson(stage: string, ctx: MockContext): Record<string, u
         candidates: [
           { name: "high_cost", approach: "Full plan with every function, external research and review rounds", estCostUsd: 0.4, expectedValue: 900 },
           { name: "low_cost", approach: delegate ? "Delegate focused parts to the best-fit reports and integrate" : "Write the deliverable directly from known facts", estCostUsd: 0.08, expectedValue: 700 },
-          { name: "low_effect", approach: "A one-page outline only", estCostUsd: 0.02, expectedValue: 150 },
+          { name: "low_effort", approach: "Smallest change that meets the criteria: reuse existing documents and results", estCostUsd: 0.02, expectedValue: 150 },
         ],
         chosen: "low_cost",
         rationale: "Best value for cost given the team and budget.",

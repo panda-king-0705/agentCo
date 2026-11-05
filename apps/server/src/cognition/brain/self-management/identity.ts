@@ -10,7 +10,8 @@ import type { Agent, AgentIdentity, AffectState, NeedsState } from "../../../../
 import { clamp, round } from "../../coerce.ts";
 import { truncate } from "../../text.ts";
 import type { AgentFacts } from "../../prompt.ts";
-import { Q5_BIO_ASSETS_LABEL } from "../interpretation.ts";
+import { Q1_LABELS, Q5_BIO_ASSETS_LABEL } from "../interpretation.ts";
+import { block, toolContext, type BrainRun } from "../runtime.ts";
 import { toneFor } from "./personality.ts";
 
 export type NeedLevel = "physiological" | "safety" | "belonging" | "esteem" | "self_actualization";
@@ -139,4 +140,56 @@ export function renderCharter(agent: Agent, facts: AgentFacts): string {
     `Style: ${truncate(agent.persona.style || "clear and direct", 100)}${toneFor(agent.persona.personalityType)}`,
   ];
   return lines.filter(Boolean).join("\n");
+}
+
+// ── Blocks: the Self-management pass at the start of every run.
+
+
+/** Self-Identity → Desire → Motivation (← Emotion, needs). Sets run.charter and run.drives. */
+export async function selfManagementPass(run: BrainRun): Promise<void> {
+  await block(run, "self_management.identity.self_identity", "Grounding in my identity", (span) => {
+    run.charter = renderCharter(run.agent, run.facts);
+    span.setAttributes({ "agentco.values": run.agent.identity.values.join(", "), "agentco.charter_chars": run.charter.length });
+    return run.charter;
+  });
+  const needs = run.platform.org.needs(run.agent.id);
+  run.drives = computeDrives(run.agent.identity, run.agent.affect, needs);
+  await block(run, "self_management.identity.desire", "Weighing what I want from this", (span) => {
+    const d = run.drives;
+    span.setAttributes({
+      "agentco.label": Q1_LABELS.desire,
+      "agentco.desire.task_driven": d.taskDriven,
+      "agentco.desire.curiosity": d.curiosity,
+      "agentco.desire.epistemic": d.epistemic,
+      "agentco.desire.vision": d.vision,
+      "agentco.recall_k": d.recallK,
+      "agentco.perspectives": d.perspectives,
+    });
+    return { curiosity: d.curiosity, epistemic: d.epistemic, vision: d.vision };
+  });
+  await block(run, "self_management.identity.motivation", "Checking motivation and needs", async (span) => {
+    const d = run.drives;
+    span.setAttributes({
+      "agentco.label": Q1_LABELS.motivation,
+      "agentco.motivation.autonomy": d.autonomy,
+      "agentco.needs.lowest": d.lowestUnmetNeed ?? "none",
+      "agentco.conservation": d.conservation,
+      "agentco.essential_only": d.essentialOnly,
+      "agentco.early_stop_threshold": d.earlyStopThreshold,
+      "agentco.frustration_gate": d.frustrationGate,
+      "agentco.modulations": d.notes.join("; ") || "none",
+    });
+    // Belonging is the lowest unmet need → reach out to the manager first.
+    if (d.reachOutFirst && run.task && run.agent.managerId && run.agent.tools.includes("send_message")) {
+      await run.platform.tools.execute(
+        {
+          id: `checkin_${run.ctx.run.id}`,
+          name: "send_message",
+          arguments: { toAgentId: run.agent.managerId, content: `Checking in: I'm starting T-${run.task.number} "${truncate(run.task.title, 80)}". Anything I should know first?` },
+        },
+        toolContext(run, span),
+      );
+    }
+    return { needs: d.needs, conservation: d.conservation };
+  });
 }

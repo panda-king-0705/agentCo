@@ -1,47 +1,66 @@
 /**
  * Self-management › Human Nature: the update rules for Sensibility/Emotion,
- * fed by work events from below (Q9). Pure.
+ * fed by the finished processes (Q8): every finished subprocess — done,
+ * failed, escalated, cancelled; the agent's own and its reports' — is an
+ * event. Pure.
  *
  * - negativity bias: a failure moves valence 1.5× a success;
  * - habituation: an outcome in the direction valence already leans counts less;
  * - fatigue: arousal rises with open work and consecutive runs, decays when idle;
  * - recognition: acceptance by the manager or the Board moves valence 2× self-acceptance.
  */
-import type { AffectState } from "../../../../../../packages/shared/src/index.ts";
+import type { AffectState, Task } from "../../../../../../packages/shared/src/index.ts";
 import { clamp, round } from "../../coerce.ts";
-import { Q9_HUMAN_NATURE as H } from "../interpretation.ts";
+import { Q8_HUMAN_NATURE as H } from "../interpretation.ts";
 
-export type WorkOutcome = "success" | "failure" | "escalated" | "partial";
+export type ProcessOutcome = "done" | "failed" | "escalated" | "cancelled";
 
-export interface WorkEvent {
-  outcome: WorkOutcome;
+export interface ProcessEvent {
+  outcome: ProcessOutcome;
+  /** "own" = the agent's own process; "report" = a subprocess finished by a report. */
+  source: "own" | "report";
   recognizedBy: "self" | "manager" | "board";
-  /** Open items on the agent's plate (waiting subtasks, interrupts). */
+}
+
+export interface Workload {
+  /** Open items on the agent's plate (open subprocesses, interrupts). */
   openItems: number;
-  /** Runs in a row without idle time (approximation: 1 per run). */
+  /** Runs in a row without idle time. */
   consecutiveRuns: number;
 }
 
-export function updateAffect(affect: AffectState, event: WorkEvent): AffectState {
-  let delta = 0;
-  if (event.outcome === "success") delta = H.successValence;
-  else if (event.outcome === "partial") delta = H.successValence * 0.25;
-  else if (event.outcome === "failure") delta = -H.successValence * H.negativityBias;
-  else delta = -H.successValence * 0.5;
-  if (delta > 0 && event.recognizedBy !== "self") delta *= H.recognitionMultiplier;
-  // Habituation: repeats (valence already leaning the same way) count less.
-  if (Math.sign(delta) === Math.sign(affect.valence) && affect.valence !== 0) {
-    delta *= 1 - H.habituation * Math.min(1, Math.abs(affect.valence));
+/** Finished subprocesses (reports' tasks) → events. Blocked counts as escalated. */
+export function eventsFromSubtasks(subtasks: Task[]): ProcessEvent[] {
+  const out: ProcessEvent[] = [];
+  for (const t of subtasks) {
+    const outcome: ProcessOutcome | null =
+      t.status === "done" ? "done" : t.status === "failed" ? "failed" : t.status === "cancelled" ? "cancelled" : t.status === "blocked" ? "escalated" : null;
+    if (outcome) out.push({ outcome, source: "report", recognizedBy: "self" });
   }
-  let frustration = affect.frustration;
-  if (event.outcome === "failure") frustration += H.frustrationOnFailure;
-  else if (event.outcome === "escalated") frustration += H.frustrationOnEscalation;
-  else if (event.outcome === "success") frustration -= H.frustrationDecayOnSuccess;
-  const arousalTarget = H.arousalBase + H.arousalPerOpenItem * event.openItems + H.arousalPerRun * event.consecutiveRuns;
-  const arousal = event.openItems === 0 ? affect.arousal - H.arousalIdleDecay * (affect.arousal - H.arousalBase) : (affect.arousal + arousalTarget) / 2;
-  return {
-    valence: round(clamp(affect.valence + delta, -1, 1), 3),
-    arousal: round(clamp(arousal, 0, 1), 3),
-    frustration: round(clamp(frustration, 0, 1), 3),
-  };
+  return out;
+}
+
+function applyOne(a: AffectState, e: ProcessEvent): AffectState {
+  const w = e.source === "report" ? H.reportEventWeight : 1;
+  let delta = 0;
+  if (e.outcome === "done") delta = H.successValence;
+  else if (e.outcome === "failed") delta = -H.successValence * H.negativityBias;
+  else if (e.outcome === "escalated") delta = -H.successValence * 0.5;
+  else delta = -H.successValence * 0.25;
+  if (delta > 0 && e.recognizedBy !== "self") delta *= H.recognitionMultiplier;
+  if (a.valence !== 0 && Math.sign(delta) === Math.sign(a.valence)) delta *= 1 - H.habituation * Math.min(1, Math.abs(a.valence));
+  let frustration = a.frustration;
+  if (e.outcome === "failed") frustration += H.frustrationOnFailure * w;
+  else if (e.outcome === "escalated") frustration += H.frustrationOnEscalation * w;
+  else if (e.outcome === "cancelled") frustration += H.frustrationOnCancel * w;
+  else frustration -= H.frustrationDecayOnSuccess * w;
+  return { valence: clamp(a.valence + delta * w, -1, 1), arousal: a.arousal, frustration: clamp(frustration, 0, 1) };
+}
+
+export function updateAffect(affect: AffectState, events: ProcessEvent[], workload: Workload): AffectState {
+  let a = { ...affect };
+  for (const e of events) a = applyOne(a, e);
+  const target = H.arousalBase + H.arousalPerOpenItem * workload.openItems + H.arousalPerRun * workload.consecutiveRuns;
+  const arousal = workload.openItems === 0 ? a.arousal - H.arousalIdleDecay * (a.arousal - H.arousalBase) : (a.arousal + target) / 2;
+  return { valence: round(a.valence, 3), arousal: round(clamp(arousal, 0, 1), 3), frustration: round(a.frustration, 3) };
 }

@@ -1,11 +1,16 @@
 /**
  * Metacognition › Self-ability Understanding:
  * LLM Capability · Tools/MCP Capability · Budget/Resource → Competence. Computed.
+ *
+ * On the Q3 fallback (Confidence's competence evaluation < 0.5) it re-runs
+ * with the evaluation's gaps and applies targeted remedies: a one-tier model
+ * upgrade for this run if the budget allows, preferring a report with the
+ * missing skill (delegation), and a budget request to the manager.
  */
-import type { Agent, ModelProfile } from "../../../../../../packages/shared/src/index.ts";
+import type { Agent, ModelProfile, ModelTier } from "../../../../../../packages/shared/src/index.ts";
 import { clamp, round } from "../../coerce.ts";
-import { overlapRatio } from "../../text.ts";
-import { block, type BrainRun } from "../runtime.ts";
+import { overlapRatio, truncate } from "../../text.ts";
+import { block, toolContext, type BrainRun } from "../runtime.ts";
 
 export interface Competence {
   score: number;
@@ -15,9 +20,12 @@ export interface Competence {
   reports: { id: string; title: string; mandate: string; department: string }[];
   budgetRemainingUsd: number;
   skillCoverage: number;
+  remedies: string[];
+  preferDelegation: boolean;
 }
 
 const TIER_CAPABILITY: Record<string, number> = { frontier: 1, standard: 0.8, economy: 0.6 };
+const TIER_UP: Record<ModelTier, ModelTier | null> = { economy: "standard", standard: "frontier", frontier: null };
 
 export interface CompetenceInputs {
   profile: ModelProfile;
@@ -32,7 +40,7 @@ export interface CompetenceInputs {
 }
 
 /** Pure competence model. */
-export function assessCompetence(i: CompetenceInputs): Omit<Competence, "model" | "tools" | "reports"> & { parts: Record<string, number> } {
+export function assessCompetence(i: CompetenceInputs): { score: number; gaps: string[]; skillCoverage: number; parts: Record<string, number> } {
   const gaps: string[] = [];
   const llm = (TIER_CAPABILITY[i.profile.tier] ?? 0.6) * (i.profile.supportsTools ? 1 : 0.7);
   if (!i.profile.supportsTools) gaps.push("model lacks tool support");
@@ -47,17 +55,60 @@ export function assessCompetence(i: CompetenceInputs): Omit<Competence, "model" 
   const teamScore = i.reports.length > 0 ? 1 : 0.6;
   const computed = 0.3 * llm + 0.15 * toolScore + 0.2 * budgetScore + 0.2 * Math.max(skillCoverage, 0.4) + 0.15 * teamScore;
   const score = round(clamp(0.8 * computed + 0.2 * i.motivationCompetence, 0, 1), 3);
-  return { score, gaps, budgetRemainingUsd: i.budgetRemainingUsd, skillCoverage: round(skillCoverage, 3), parts: { llm, toolScore, budgetScore, teamScore } };
+  return { score, gaps, skillCoverage: round(skillCoverage, 3), parts: { llm, toolScore, budgetScore, teamScore } };
 }
 
-export async function selfAbility(run: BrainRun, taskText: string): Promise<Competence> {
-  return block(run, "metacognition.self_ability", "Assessing my competence for this", (span) => {
+/** Remedy planning for the fallback pass (pure). */
+export function planRemedies(gaps: string[], o: { tier: ModelTier; budgetRemainingUsd: number; estCostUsd: number; hasReports: boolean; hasManager: boolean }) {
+  const text = gaps.join(" ").toLowerCase();
+  const upgradeTo = TIER_UP[o.tier];
+  const canAffordUpgrade = o.budgetRemainingUsd >= Math.max(0.1, 10 * o.estCostUsd);
+  const remedies: string[] = [];
+  let upgrade: ModelTier | null = null;
+  if (/model|capab|reason|tier|quality|complex|skill|expert/.test(text) && upgradeTo && canAffordUpgrade) {
+    upgrade = upgradeTo;
+    remedies.push(`one-tier model upgrade for this run (${o.tier} → ${upgradeTo})`);
+  }
+  const preferDelegation = o.hasReports && /skill|expert|domain|knowledge|capacity|time|team|overlap/.test(text);
+  if (preferDelegation) remedies.push("delegate to a report with the missing skill");
+  const budgetRequest = /budget|cost|resource|fund/.test(text) && o.hasManager;
+  if (budgetRequest) remedies.push("request budget from the manager");
+  if (remedies.length === 0 && upgradeTo && canAffordUpgrade) {
+    upgrade = upgradeTo;
+    remedies.push(`one-tier model upgrade for this run (${o.tier} → ${upgradeTo})`);
+  }
+  return { upgrade, preferDelegation, budgetRequest, remedies };
+}
+
+/** Block. `gaps` present = the Q3 fallback pass with the competence evaluation's gaps. */
+export async function selfAbility(run: BrainRun, taskText: string, gaps: string[] = []): Promise<Competence> {
+  return block(run, "metacognition.self_ability", gaps.length ? "Re-assessing competence and applying remedies" : "Assessing my competence for this", async (span) => {
+    const budget = run.platform.org.budgetRemainingUsd(run.agent.id);
+    const reports = run.platform.org.directReports(run.agent.id).filter((a) => a.status !== "terminated" && a.status !== "paused");
+    const remedy = gaps.length
+      ? planRemedies(gaps, {
+          tier: run.routingAgent.modelTier,
+          budgetRemainingUsd: budget,
+          estCostUsd: run.task?.estCostUsd ?? 0.05,
+          hasReports: reports.length > 0,
+          hasManager: !!run.agent.managerId,
+        })
+      : { upgrade: null, preferDelegation: false, budgetRequest: false, remedies: [] as string[] };
+    if (remedy.upgrade) run.routingAgent = { ...run.routingAgent, modelTier: remedy.upgrade };
+    if (remedy.budgetRequest && run.agent.managerId && run.agent.tools.includes("send_message")) {
+      await run.platform.tools.execute(
+        {
+          id: `budget_${run.ctx.run.id}`,
+          name: "send_message",
+          arguments: { toAgentId: run.agent.managerId, content: `Budget request for ${run.task ? `T-${run.task.number} "${truncate(run.task.title, 80)}"` : "current work"}: ${gaps.join("; ")}` },
+        },
+        toolContext(run, span),
+      );
+    }
     const tier = run.platform.models.tierForStage("metacognition.solving_evaluation.solving", run.routingAgent);
     const profile = run.platform.models.resolve(tier, run.routingAgent.modelOverride);
     const tools = run.platform.tools.specsFor(run.agent).map((t) => t.name);
-    const reports = run.platform.org.directReports(run.agent.id).filter((a) => a.status !== "terminated" && a.status !== "paused");
     const reportDepartments = reports.map((r) => run.platform.org.departmentName(r.departmentId));
-    const budget = run.platform.org.budgetRemainingUsd(run.agent.id);
     const a = assessCompetence({
       profile,
       tools,
@@ -65,19 +116,29 @@ export async function selfAbility(run: BrainRun, taskText: string): Promise<Comp
       reportDepartments,
       budgetRemainingUsd: budget,
       estCostUsd: run.task?.estCostUsd ?? 0.05,
-      taskText,
+      taskText: `${taskText} ${gaps.join(" ")}`,
       ownProfile: `${run.agent.title} ${run.facts.department} ${run.agent.identity.mission} ${run.agent.identity.assets.join(" ")}`,
       motivationCompetence: run.drives.competence,
     });
-    span.setAttributes({ "agentco.competence": a.score, "agentco.budget_remaining_usd": round(budget, 4), "agentco.reports": reports.length });
+    // Remedies raise competence: delegation covers missing skills, an upgrade covers model capability.
+    const boost = (remedy.upgrade ? 0.1 : 0) + (remedy.preferDelegation ? 0.1 : 0);
+    const score = round(clamp(a.score + boost, 0, 1), 3);
+    span.setAttributes({
+      "agentco.competence": score,
+      "agentco.budget_remaining_usd": round(budget, 4),
+      "agentco.reports": reports.length,
+      ...(gaps.length ? { "agentco.fallback.gaps": gaps.length, "agentco.remedies": remedy.remedies.join("; ") || "none" } : {}),
+    });
     return {
-      score: a.score,
+      score,
       gaps: a.gaps,
       budgetRemainingUsd: budget,
       skillCoverage: a.skillCoverage,
       model: { profile: profile.id, tier: profile.tier, contextWindow: profile.contextWindow, supportsTools: profile.supportsTools },
       tools,
       reports: reports.map((r, i) => ({ id: r.id, title: r.title, mandate: r.identity.mission, department: reportDepartments[i] ?? "" })),
+      remedies: remedy.remedies,
+      preferDelegation: remedy.preferDelegation,
     };
   });
 }

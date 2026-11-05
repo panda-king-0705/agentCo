@@ -40,7 +40,10 @@ export function requestText(run: BrainRun): string {
     return `${prior.length ? `Earlier:\n${prior.join("\n")}\n` : ""}Latest message: ${input.message.content}`;
   }
   const t = input.task;
-  return `T-${t.number}: ${t.title}\n${truncate(t.description, 1500)}${t.acceptanceCriteria ? `\nAcceptance criteria: ${truncate(t.acceptanceCriteria, 400)}` : ""}`;
+  return (
+    `T-${t.number}: ${t.title}\n${truncate(t.description, 1500)}${t.acceptanceCriteria ? `\nAcceptance criteria: ${truncate(t.acceptanceCriteria, 400)}` : ""}` +
+    (input.recoveryNotice ? `\nRECOVERY NOTICE: ${input.recoveryNotice}` : "")
+  );
 }
 
 export function coerceProblem(json: Record<string, unknown>, fallbackTitle: string, defaultIntent: "chat" | "work"): ProblemDefinition {
@@ -54,8 +57,11 @@ export function coerceProblem(json: Record<string, unknown>, fallbackTitle: stri
   };
 }
 
-/** Block (economy): problem definition, incl. chat-vs-work intent for messages. */
-export async function problemDefinition(run: BrainRun): Promise<ProblemDefinition> {
+/**
+ * Block (economy): problem definition, incl. chat-vs-work intent for messages.
+ * `gaps` (Q3): the evaluation's gaps when Confidence sent the block back.
+ */
+export async function problemDefinition(run: BrainRun, gaps: string[] = []): Promise<ProblemDefinition> {
   const input = run.ctx.input;
   const isMessage = input.trigger === "message";
   const fallbackTitle = isMessage ? truncate(input.message.content.split("\n")[0] ?? "Request", 100) : input.task.title;
@@ -65,6 +71,7 @@ export async function problemDefinition(run: BrainRun): Promise<ProblemDefinitio
       span,
       instructions:
         `${requestText(run)}\n\nDefine the problem.` +
+        (gaps.length ? ` Your previous understanding was evaluated as insufficient; re-define the problem around these gaps: ${gaps.join("; ")}.` : "") +
         (isMessage ? ' intent = "work" only if the message asks for work to be done (build, plan, write, research, …); greetings, questions and chat = "chat".' : ""),
       shape: '{"intent":"chat"|"work","title":string,"problem":string,"successCriteria":string[],"constraints":string[],"unknowns":string[]}',
       context: {
@@ -72,6 +79,7 @@ export async function problemDefinition(run: BrainRun): Promise<ProblemDefinitio
         message: isMessage ? input.message.content : undefined,
         task: isMessage ? undefined : { number: input.task.number, title: input.task.title, description: input.task.description, acceptanceCriteria: input.task.acceptanceCriteria },
         agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },
+        gaps,
       },
       maxOutputTokens: 450,
     });
@@ -81,7 +89,8 @@ export async function problemDefinition(run: BrainRun): Promise<ProblemDefinitio
       const ac = !isMessage && input.task.acceptanceCriteria ? input.task.acceptanceCriteria : null;
       p.successCriteria = ac ? [truncate(ac, 200)] : [`A concrete deliverable for "${truncate(p.title, 80)}"`];
     }
-    span.setAttributes({ "agentco.intent": p.intent });
+    if (gaps.length) p.unknowns = p.unknowns.filter((u) => !gaps.includes(u));
+    span.setAttributes({ "agentco.intent": p.intent, "agentco.fallback.gaps": gaps.length });
     return p;
   });
 }

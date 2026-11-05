@@ -6,11 +6,11 @@
  */
 import type { AffectState } from "../../../../../../packages/shared/src/index.ts";
 import { block, type BrainRun } from "../runtime.ts";
-import { updateAffect, type WorkEvent } from "./human-nature.ts";
+import { updateAffect, type ProcessEvent, type Workload } from "./human-nature.ts";
 
-export async function feedbackUpdate(run: BrainRun, event: WorkEvent): Promise<AffectState> {
-  const next = await block(run, "self_management.human_nature", "Applying human-nature update rules", () => updateAffect(run.agent.affect, event), {
-    attributes: { "agentco.outcome": event.outcome, "agentco.recognized_by": event.recognizedBy },
+export async function feedbackUpdate(run: BrainRun, events: ProcessEvent[], workload: Workload): Promise<AffectState> {
+  const next = await block(run, "self_management.human_nature", `Human nature: ${events.length} finished process(es)`, () => updateAffect(run.agent.affect, events, workload), {
+    attributes: { "agentco.events": events.map((e) => `${e.source}:${e.outcome}`).join(",") },
   });
   return block(run, "self_management.sensibility_emotion", "Updating emotion from feedback", () => next, {
     attributes: { "agentco.valence": next.valence, "agentco.frustration": next.frustration, "agentco.arousal": next.arousal },
