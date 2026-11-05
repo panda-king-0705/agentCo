@@ -5,6 +5,33 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-06
+
+First release: a company run by AI agents, with a human founder as the Board.
+
+### Added
+- Org templates modelled on the recurring structure of the world's 50 largest companies:
+  startup (19 agents) and enterprise (46 agents, 14 departments); role templates with
+  mandates, KPIs, tools, identity seeds, MBTI and a BaZi chart per agent.
+- BrainEngine for executives and managers, following the founder's brain-inspired
+  architecture block for block (33 traced blocks: Self-management, interruptible TODO list,
+  Metacognition, Global Memory) with the founder's readings Q1-Q9.
+- ReflexEngine for workers on the economy tier with one-step cascade fallback.
+- Model router: frontier / standard / economy tiers, per-block stage routing, fallback
+  profiles, budget gate with reservations, frontier-cost accounting (routing savings);
+  OpenAI-compatible providers (OpenAI, BytePlus/Volcengine Ark, OpenRouter, DeepSeek,
+  Gemini, Anthropic compat) and a deterministic offline mock.
+- Work model: value/cost-prioritised task board, delegation down the reporting line,
+  escalation up the chain, approvals for hiring / budget / Board questions, kill switch.
+- Traceability: OTel-GenAI-shaped spans, one trace per objective across agents,
+  failing-span attribution, SSE event stream with replay.
+- Ported Glass Box middleware from Volc Agent Launchpad (TikTok-TechJam-2026): two-tier
+  redaction, crash recovery, fail-closed context compaction.
+- Console: live floor, org chart (overview + tree), agent detail with the live Brain view,
+  Boardroom and DMs, trace waterfall, tasks, approvals, costs, memory.
+- SDLC: requirements with ids, ADRs 0001-0007, 168 server tests, Playwright e2e, CI.
+
+
 ### Fixed (independent review, 12 findings)
 
 - Brain: escalation is bounded per task (`task.state.escalation`); after a manager's or the

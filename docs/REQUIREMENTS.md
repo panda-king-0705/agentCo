@@ -44,10 +44,31 @@ Multi-tenant auth and RBAC; horizontal scaling; real outbound email/payments;
 sandboxed code execution for engineering agents (seam noted: the reference
 repo's Codex runner can be added as a tool); embeddings/vector search.
 
-## Traceability matrix
+## Traceability matrix (v0.1.0)
 
-Filled at release — maps each requirement to design section, code and tests.
-
-| id | Design (ARCHITECTURE.md) | Code | Tests |
+| id | Design | Code | Verified by |
 |---|---|---|---|
-| _filled at v0.1.0_ | | | |
+| FR-1 | ARCHITECTURE › Organisation; research/02 | `org/templates.ts`, `org/bootstrap.ts` | system: company-flow (org shape); e2e enterprise run (46 agents) |
+| FR-2 | ARCHITECTURE › Organisation | `org/service.ts`, `org/agent-factory.ts` | core: lifecycle, http |
+| FR-3 | ARCHITECTURE › Lifecycle | `org/service.ts`, `http/routes.ts`, `web/views/org.tsx` | core: lifecycle, review-regressions (R4, F7, F10); system; e2e |
+| FR-4 | ARCHITECTURE › Cognition (message trigger) | `runs/conversations.ts`, `cognition/brain/index.ts`, `web/views/chat.tsx` | system: Boardroom → report; e2e-live |
+| FR-5 | ARCHITECTURE › Work model | `tasks/service.ts`, `tasks/scheduler.ts`, `tools/builtins/delegation.ts` | core: tasks, scheduler, escalation, review-regressions (R3, F5) |
+| FR-6 | BRAIN.md; ADR-0007 | `cognition/brain/**` | cognition: brain, brain-pure, review-regressions, review2-regressions; review 2 block audit |
+| FR-7 | ADR-0003/0004 | `cognition/reflex.ts`, `models/router.ts` | cognition: reflex, models; system (economy spend > 0) |
+| FR-8 | ARCHITECTURE › Console | `web/views/overview.tsx`, `web/src/live.ts` | e2e (fixtures + live) |
+| FR-9 | ARCHITECTURE › Traceability; ADR-0006 | `middleware/tracer.ts`, `runs/service.ts`, `web/views/traces.tsx` | core: traceability; system (cross-agent tree, no orphans) |
+| FR-10 | ARCHITECTURE › Governance | `middleware/budget.ts`, `tasks/approvals.ts` | core: budget, review-regressions (R2, F4) |
+| FR-11 | ADR-0004 | `metrics/service.ts`, `web/views/costs.tsx` | core: metrics, review2-regressions; system (routing savings > 0) |
+| FR-12 | BRAIN.md › Global Memory | `memory/service.ts`, `tools/builtins/memory.ts` | core: tools; web memory view |
+| FR-13 | ARCHITECTURE › Hiring | `tools/builtins/hiring.ts` | core: tools, lifecycle |
+| FR-14 | BRAIN.md › OKRs | `platform.ts` (heartbeat) | core: heartbeat (timer itself untested) |
+| FR-15 | ARCHITECTURE › Tools | `tools/builtins/web.ts` | review-regressions (R8, F9) |
+| NFR-1 | ADR-0001, ADR-0005 | `index.ts`, `models/providers/mock.ts` | system test on mock; e2e-live |
+| NFR-2 | ADR-0004 | `models/providers/openai.ts`, `models/config.ts` | cognition: openai-adapter (local fake server); live providers untested |
+| NFR-3 | ARCHITECTURE › Crash recovery | `tasks/service.ts` (recover), `runs/service.ts` | core: recovery |
+| NFR-4 | SECURITY.md | `middleware/redact*.ts` | core: redaction, review-regressions (R5, F8) |
+| NFR-5 | ARCHITECTURE › Context governance | `memory/compaction.ts` | core: compaction, review2-regressions |
+| NFR-6 | ADR-0001 | server has no runtime deps | `package.json`; boots with plain `node` |
+| NFR-7 | ARCHITECTURE › API | `http/sse.ts`, `web/src/live.ts` | core: sse, review2-regressions (replay, resync, cap) |
+| NFR-8 | CONTRIBUTING.md | `.github/`, `docs/adr/` | git history; 2 independent reviews; CI workflow |
+| NFR-9 | SECURITY.md | `http/guard.ts`, `config.ts` | review-regressions (R7, F6) |
