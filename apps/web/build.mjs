@@ -14,6 +14,7 @@ async function copyStatic() {
   await mkdir(join(dist, "assets"), { recursive: true });
   await copyFile(join(root, "index.html"), join(dist, "index.html"));
   await copyFile(join(root, "src", "styles.css"), join(dist, "assets", "styles.css"));
+  await copyFile(join(root, "src", "views.css"), join(dist, "assets", "views.css"));
 }
 
 /** @type {import("esbuild").BuildOptions} */
@@ -39,7 +40,7 @@ if (watching) {
   const ctx = await esbuild.context(options);
   await ctx.watch();
   console.log("[web] watching src/ for changes");
-  for (const file of ["index.html", join("src", "styles.css")]) {
+  for (const file of ["index.html", join("src", "styles.css"), join("src", "views.css")]) {
     (async () => {
       for await (const _ of fsWatch(join(root, file))) {
         await copyStatic().catch((err) => console.error("[web] copy failed", err));
