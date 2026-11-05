@@ -10,6 +10,8 @@ import type { EventBus } from "../events/bus.ts";
 import { summaries } from "../events/summary.ts";
 import { badRequest, conflict, notFound } from "../http/errors.ts";
 import type { BudgetPeriod } from "../middleware/budget.ts";
+import type { Redactor } from "../middleware/redact.ts";
+import { redactDeep } from "../middleware/redact-deep.ts";
 import type { CompanyService } from "../org/company.ts";
 import type { OrgService } from "../org/service.ts";
 import type { TaskService } from "./service.ts";
@@ -41,6 +43,7 @@ export interface ApprovalDeps {
   tasks: TaskService;
   company: CompanyService;
   now: () => Date;
+  redactor?: Redactor;
 }
 
 export class ApprovalService {
@@ -74,8 +77,8 @@ export class ApprovalService {
       requestedBy: input.requestedBy,
       taskId: input.taskId ?? null,
       traceId: input.traceId ?? null,
-      summary: input.summary.slice(0, 500),
-      payload: input.payload ?? {},
+      summary: this.clean(input.summary).slice(0, 500),
+      payload: this.deps.redactor ? redactDeep(input.payload ?? {}, this.deps.redactor) : (input.payload ?? {}),
       decidedBy: null,
       note: null,
       createdAt: this.deps.now().toISOString(),
@@ -84,6 +87,10 @@ export class ApprovalService {
     this.deps.repos.approvals.insert(approval);
     this.deps.bus.emit("approval.created", { agentId: approval.requestedBy, taskId: approval.taskId, traceId: approval.traceId, summary: summaries.approvalCreated(approval), data: approval });
     return approval;
+  }
+
+  private clean(text: string): string {
+    return this.deps.redactor ? this.deps.redactor.redact(text) : text;
   }
 
   /** One pending budget_increase per scope target (deduped); returns the existing one if present. */

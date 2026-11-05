@@ -48,7 +48,7 @@ export class TracerImpl implements Tracer {
       traceId: options.traceId,
       parentSpanId: options.parentSpanId,
       kind: options.kind,
-      name: options.name,
+      name: truncate(this.deps.redactor.redact(options.name), 200),
       status: "running",
       agentId: options.agentId ?? null,
       runId: options.runId ?? null,

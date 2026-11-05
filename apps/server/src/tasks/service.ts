@@ -18,6 +18,7 @@ import { newId, newTraceId } from "../db/ids.ts";
 import type { EventBus } from "../events/bus.ts";
 import { summaries, taskRef } from "../events/summary.ts";
 import { badRequest, conflict, notFound } from "../http/errors.ts";
+import type { Redactor } from "../middleware/redact.ts";
 import type { TracerImpl } from "../middleware/tracer.ts";
 import type { OrgService } from "../org/service.ts";
 import type { ConversationService } from "../runs/conversations.ts";
@@ -66,6 +67,8 @@ export interface TaskDeps {
   org: OrgService;
   conversations: ConversationService;
   now: () => Date;
+  /** Board/agent-authored titles and descriptions are redacted (high-precision tier) before they are stored. */
+  redactor?: Redactor;
 }
 
 export class TaskService implements TaskView {
@@ -210,6 +213,17 @@ export class TaskService implements TaskView {
     return this.transition(task, "todo", { attempts: Math.max(0, task.attempts - refund), state: merge(task, state) });
   }
 
+  /**
+   * Crash recovery: an in_progress task whose run was killed goes back to todo with
+   * `state.recovery = { runId }` (next run: trigger "recovery"); the lost attempt is refunded.
+   */
+  recover(taskId: string, runId: string): Task {
+    const task = this.require(taskId);
+    if (task.status !== "in_progress") return task;
+    const refund = task.state.lastAttemptCounted === true ? 1 : 0;
+    return this.transition(task, "todo", { attempts: Math.max(0, task.attempts - refund), state: { ...task.state, recovery: { runId } } });
+  }
+
   /** A failed run: retry (todo) while attempts < maxAttempts, else failed + escalation to the manager. */
   fail(taskId: string, error: string, state?: Record<string, unknown>): Task {
     const task = this.require(taskId);
@@ -276,9 +290,9 @@ export class TaskService implements TaskView {
       traceId: input.traceId,
       parentTaskId: input.parentTaskId,
       rootTaskId: input.rootTaskId,
-      title: requireText(input.title, "title", 300),
-      description: requireText(input.description, "description", 20_000),
-      acceptanceCriteria: input.acceptanceCriteria ?? null,
+      title: this.clean(requireText(input.title, "title", 300)),
+      description: this.clean(requireText(input.description, "description", 20_000)),
+      acceptanceCriteria: input.acceptanceCriteria ? this.clean(input.acceptanceCriteria) : null,
       createdBy: input.createdBy,
       assigneeId: input.assigneeId,
       departmentId: input.departmentId,
@@ -369,6 +383,10 @@ export class TaskService implements TaskView {
     if (!assignee || !manager || manager.status === "terminated") return;
     const content = `Escalation: ${taskRef(task)} failed after ${task.attempts} attempt(s). Last error: ${task.error ?? "unknown"}. Please decide how to proceed.`;
     this.deps.conversations.sendAgentMessage(assignee, manager, content, { taskId: task.id, traceId: task.traceId });
+  }
+
+  private clean(text: string): string {
+    return this.deps.redactor ? this.deps.redactor.redact(text) : text;
   }
 
   private iso(): string {

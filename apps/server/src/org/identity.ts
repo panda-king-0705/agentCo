@@ -48,11 +48,14 @@ export function buildIdentity(input: IdentityInput): AgentIdentity {
   };
 }
 
-export function buildPersona(seed: RoleSeed | null, override: Partial<Persona> = {}): Persona {
+/** Personality used when an agent has no role seed (custom hires), so role arrangement always has a type. */
+const FALLBACK_MBTI: Record<AgentTier, string> = { executive: "ENTJ", manager: "ESTJ", worker: "ISTJ" };
+
+export function buildPersona(seed: RoleSeed | null, override: Partial<Persona> = {}, tier: AgentTier = "worker"): Persona {
   return {
     style: override.style ?? seed?.style ?? "Clear, brief and professional.",
     traits: override.traits ?? seed?.traits ?? [],
-    personalityType: override.personalityType ?? seed?.mbti ?? null,
+    personalityType: override.personalityType ?? seed?.mbti ?? FALLBACK_MBTI[tier],
     baZi: override.baZi ?? null,
   };
 }

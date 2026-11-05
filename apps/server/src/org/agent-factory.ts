@@ -31,7 +31,7 @@ export function buildAgent(resolved: ResolvedAgentInput, now: Date, castBaZi: (i
   const mandate = input.mandate?.trim() || role?.mandate || `Do excellent work as ${title}.`;
   const seed = role ? ROLE_SEEDS[role.id] ?? null : null;
   const createdAt = now.toISOString();
-  const persona = buildPersona(seed, input.persona ?? {});
+  const persona = buildPersona(seed, input.persona ?? {}, tier);
   persona.baZi = input.persona?.baZi ?? castBaZi(createdAt);
   return {
     id: newId("agt"),
