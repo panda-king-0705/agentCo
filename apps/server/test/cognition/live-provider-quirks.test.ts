@@ -94,3 +94,28 @@ test("check:models no longer labels any 400 mentioning 'model' as a missing mode
   assert.equal(classifyFailure("openai m: HTTP 400 — The model `gpt-x` does not exist"), "model");
   assert.equal(classifyFailure("openai m: HTTP 404 Not Found"), "model");
 });
+
+const FORMAT_400: Reply = { status: 400, json: { error: { code: "invalid_request_error", message: "response_format.type: Input should be 'json_schema'", type: "invalid_request_error", param: null } } };
+
+test("anthropic: JSON requests carry no response_format (its compat endpoint only takes json_schema)", async () => {
+  await withServer(() => ok('{"a":1}'), async (base, bodies) => {
+    const p = new OpenAICompatibleProvider({ providers: { anthropic: { name: "anthropic", baseUrl: base, apiKey: "k" } } } as never);
+    const r = await p.complete(profile("anthropic"), { ...request, responseFormat: "json" }, new AbortController().signal);
+    assert.equal(r.content, '{"a":1}');
+    assert.equal(bodies.length, 1);
+    assert.equal("response_format" in bodies[0]!, false);
+  });
+});
+
+test("any provider: a 400 rejecting response_format is retried without it and remembered", async () => {
+  await withServer((body) => ("response_format" in body ? FORMAT_400 : ok('{"a":1}')), async (base, bodies) => {
+    const p = new OpenAICompatibleProvider({ providers: { custom: { name: "custom", baseUrl: base, apiKey: "k" } } } as never);
+    const json = { ...request, responseFormat: "json" as const };
+    const r = await p.complete(profile("custom"), json, new AbortController().signal);
+    assert.equal(r.content, '{"a":1}');
+    assert.equal(bodies.length, 2, "one rejected call, one retry");
+    await p.complete(profile("custom"), json, new AbortController().signal);
+    assert.equal(bodies.length, 3, "remembered: no second rejection");
+    assert.equal("response_format" in bodies[2]!, false);
+  });
+});

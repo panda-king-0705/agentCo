@@ -20,12 +20,15 @@ type FetchFn = typeof fetch;
 interface ProviderQuirks {
   maxTokensField: "max_tokens" | "max_completion_tokens";
   sendTemperature: boolean;
+  /** `response_format: {type: "json_object"}` for JSON requests; false = rely on the prompt's JSON contract. */
+  jsonObject: boolean;
 }
 
 const QUIRKS: Record<string, ProviderQuirks> = {
-  openai: { maxTokensField: "max_completion_tokens", sendTemperature: false },
-  // Claude 5.x on Anthropic's OpenAI-compatible endpoint rejects `temperature` ("deprecated for this model").
-  anthropic: { maxTokensField: "max_tokens", sendTemperature: false },
+  openai: { maxTokensField: "max_completion_tokens", sendTemperature: false, jsonObject: true },
+  // Claude 5.x on Anthropic's OpenAI-compatible endpoint rejects `temperature` ("deprecated for this model")
+  // and `response_format: json_object` ("Input should be 'json_schema'"); the prompt's JSON contract is enough.
+  anthropic: { maxTokensField: "max_tokens", sendTemperature: false, jsonObject: false },
 };
 
 /** Floor for the output budget after a reasoning model ran out of tokens before answering. */
@@ -40,7 +43,12 @@ export function isTemperatureRejection(status: number, body: string): boolean {
 export function isOutputLimitRejection(status: number, body: string): boolean {
   return status === 400 && /max_tokens|max_completion_tokens|output limit/i.test(body);
 }
-const DEFAULT_QUIRKS: ProviderQuirks = { maxTokensField: "max_tokens", sendTemperature: true };
+const DEFAULT_QUIRKS: ProviderQuirks = { maxTokensField: "max_tokens", sendTemperature: true, jsonObject: true };
+
+/** A 400 rejecting the `response_format` we sent (e.g. "response_format.type: Input should be 'json_schema'"). */
+export function isResponseFormatRejection(status: number, body: string): boolean {
+  return status === 400 && /response_format/i.test(body);
+}
 
 export function toOpenAIMessages(messages: ChatMessage[]): Record<string, unknown>[] {
   return messages.map((m) => {
@@ -67,7 +75,7 @@ export function buildRequestBody(profile: ModelProfile, request: ChatRequest): R
   if (tools.length > 0) {
     body.tools = tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
     body.tool_choice = "auto";
-  } else if (request.responseFormat === "json") {
+  } else if (request.responseFormat === "json" && quirks.jsonObject) {
     body.response_format = { type: "json_object" };
   }
   if (request.maxOutputTokens) body[quirks.maxTokensField] = request.maxOutputTokens;
@@ -138,16 +146,19 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   /** Profiles learned at runtime to reject `temperature`; never sent to them again. */
   private readonly noTemperature = new Set<string>();
+  /** Profiles learned at runtime to reject `response_format`; JSON is then asked for by the prompt only. */
+  private readonly noResponseFormat = new Set<string>();
 
   /**
-   * One chat completion with two self-healing retries for live-provider quirks:
-   * a 400 rejecting `temperature` is retried once without it (and remembered), and a
+   * One chat completion with self-healing retries for live-provider quirks:
+   * a 400 rejecting `temperature` or `response_format` is retried without it (and remembered), and a
    * response cut off by the output limit before any content is retried once with a
    * larger budget (reasoning models spend tokens thinking before they answer).
    */
   async complete(profile: ModelProfile, request: ChatRequest, signal: AbortSignal) {
     let req = this.noTemperature.has(profile.id) ? { ...request, temperature: undefined } : request;
-    for (let attempt = 0; ; attempt++) {
+    if (this.noResponseFormat.has(profile.id) && req.responseFormat === "json") req = { ...req, responseFormat: "text" };
+    for (let attempt = 0; attempt < 4; attempt++) {
       const result = await this.send(profile, req, signal);
       if (result.kind === "ok") {
         const r = result.value;
@@ -163,12 +174,18 @@ export class OpenAICompatibleProvider implements ModelProvider {
         req = { ...req, temperature: undefined };
         continue;
       }
+      if (attempt < 3 && req.responseFormat === "json" && isResponseFormatRejection(result.status, result.body)) {
+        this.noResponseFormat.add(profile.id);
+        req = { ...req, responseFormat: "text" };
+        continue;
+      }
       if (attempt < 2 && isOutputLimitRejection(result.status, result.body)) {
         req = { ...req, maxOutputTokens: Math.max((req.maxOutputTokens ?? 512) * 4, LENGTH_RETRY_MIN_TOKENS) };
         continue;
       }
       throw result.error;
     }
+    throw new Error(`${profile.provider} ${profile.model}: gave up after repeated self-healing retries`);
   }
 
   private async send(

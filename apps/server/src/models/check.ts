@@ -108,9 +108,11 @@ export async function checkModels(env: NodeJS.ProcessEnv, options: CheckModelsOp
         {
           tier,
           messages: [
-            { role: "system", content: "You are a connectivity check. Reply with the single word OK." },
+            // JSON mode like the brain's stage calls, so a provider rejecting it fails here, not mid-run.
+            { role: "system", content: 'You are a connectivity check. Reply with exactly this JSON object: {"ok":true}' },
             { role: "user", content: "ping" },
           ],
+          responseFormat: "json",
           maxOutputTokens: CHECK_MAX_TOKENS,
           temperature: 0,
         },
