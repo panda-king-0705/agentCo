@@ -70,7 +70,7 @@ test("the CEO cannot be destroyed while it has reports (409), and delegating to 
       return outcome;
     })();
     assert.equal(r.ok, false);
-    assert.match(r.content ?? "", /No active agent/);
+    assert.match(r.content ?? "", /No single active agent matches/);
     assert.throws(() => platform.tasks.createRoot({ title: "t", description: "d", assigneeId: worker.id }), /terminated/);
   } finally {
     await t.close();

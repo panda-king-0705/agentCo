@@ -12,7 +12,7 @@ import type { ToolCall, ToolCallContext, ToolExecutor, ToolResult, ToolSpec } fr
 import type { AppConfig } from "../config.ts";
 import { AppError } from "../http/errors.ts";
 import { isAbortError } from "../middleware/tracer.ts";
-import { askHuman, escalate, sendMessage } from "./builtins/comms.ts";
+import { askHuman, companyDirectory, escalate, sendMessage } from "./builtins/comms.ts";
 import { delegateTask } from "./builtins/delegation.ts";
 import { workspaceList, workspaceReadFile, workspaceWriteFile } from "./builtins/files.ts";
 import { catalogSearch } from "./builtins/catalog.ts";
@@ -26,6 +26,7 @@ import { WorkspaceError } from "./workspace.ts";
 export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
   delegateTask,
   sendMessage,
+  companyDirectory,
   escalate,
   askHuman,
   memorySearch,
@@ -122,7 +123,7 @@ export class ToolExecutorImpl implements ToolExecutor {
   private permitted(tool: ToolDefinition, agent: Agent): boolean {
     if (!tool.tiers.includes(agent.tier)) return false;
     if (tool.enabled && !tool.enabled(this.config)) return false;
-    return agent.tools.includes(tool.name);
+    return tool.universal === true || agent.tools.includes(tool.name);
   }
 }
 

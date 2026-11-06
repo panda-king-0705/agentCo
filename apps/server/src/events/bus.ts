@@ -63,6 +63,11 @@ export class EventBus {
     return this.repo.since(Math.max(0, seq), Math.min(Math.max(limit, 1), 5000));
   }
 
+  /** The newest `limit` events, oldest first. */
+  tail(limit = 120): CompanyEvent[] {
+    return this.repo.tail(Math.min(Math.max(limit, 1), 5000));
+  }
+
   /** Highest seq written so far (0 when the log is empty). */
   head(): number {
     return this.repo.latestSeq();

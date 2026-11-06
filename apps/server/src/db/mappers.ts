@@ -110,6 +110,7 @@ export function toTask(r: Row): Task {
     updatedAt: str(r.updated_at),
     startedAt: strOrNull(r.started_at),
     completedAt: strOrNull(r.completed_at),
+    archivedAt: strOrNull(r.archived_at),
   };
 }
 

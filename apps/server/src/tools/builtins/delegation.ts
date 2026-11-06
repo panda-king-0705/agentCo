@@ -1,6 +1,7 @@
 /** delegate_task — creates a subtask + a `delegation` span (child of the tool span). */
 import { newId } from "../../db/ids.ts";
 import { fail, LEADS, ok, type ToolDefinition } from "../types.ts";
+import { resolveAgent } from "../../org/directory.ts";
 
 export const delegateTask: ToolDefinition = {
   name: "delegate_task",
@@ -9,7 +10,7 @@ export const delegateTask: ToolDefinition = {
   parameters: {
     type: "object",
     properties: {
-      assigneeId: { type: "string", description: "Agent id of the assignee (one of your reports)." },
+      assigneeId: { type: "string", description: "The assignee (one of your reports): agent id, name or title." },
       title: { type: "string", maxLength: 300, description: "Short imperative title." },
       description: { type: "string", maxLength: 20000, description: "What to do, context and constraints." },
       acceptanceCriteria: { type: "string", maxLength: 4000, description: "How the result will be judged." },
@@ -21,8 +22,11 @@ export const delegateTask: ToolDefinition = {
   tiers: LEADS,
   run(args, ctx) {
     const { org, tasks } = ctx.services;
-    const assignee = org.getAgent(String(args.assigneeId));
-    if (!assignee || assignee.status === "terminated") return fail(`No active agent with id ${String(args.assigneeId)}.`);
+    const assignee = resolveAgent(org, String(args.assigneeId), ctx.agent);
+    if (!assignee || assignee.status === "terminated") {
+      const reports = org.directReports(ctx.agent.id).filter((a) => a.status !== "terminated");
+      return fail(`No single active agent matches "${String(args.assigneeId)}". Your direct reports: ${reports.map((r) => `${r.name} (${r.title}, id ${r.id})`).join("; ") || "none"}.`);
+    }
     if (assignee.id === ctx.agent.id) return fail("You cannot delegate to yourself; do the work directly or pick a report.");
     if (!org.isInSubtree(ctx.agent.id, assignee.id)) {
       const reports = org.directReports(ctx.agent.id).map((r) => `${r.id} (${r.title})`).join(", ") || "none";

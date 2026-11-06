@@ -11,7 +11,7 @@
  * task.state: objectiveSpanId, delegationSpanId, nextTrigger, recovery,
  * blockedOnApprovalId, answeredApprovalId, emptyWaits.
  */
-import type { Approval, CreateTaskInput, RunTrigger, Task, TaskStatus } from "../../../../packages/shared/src/index.ts";
+import type { Approval, ArchiveResult, CreateTaskInput, RunTrigger, Task, TaskStatus } from "../../../../packages/shared/src/index.ts";
 import type { CreateObjectiveInput, TaskView } from "../contracts.ts";
 import type { Repositories } from "../db/index.ts";
 import { newId, newTraceId } from "../db/ids.ts";
@@ -258,12 +258,26 @@ export class TaskService implements TaskView {
     return this.transition(this.require(taskId), "cancelled", { error: reason, completedAt: this.iso() });
   }
 
+  /** "Clear finished" on the Tasks board: hides every finished tree (nothing is deleted). */
+  archiveFinished(): ArchiveResult {
+    const batch = this.iso();
+    const r = this.deps.repos.tasks.archiveFinished(batch);
+    return { ...r, batch: r.count ? batch : null };
+  }
+
+  /** Undo a clear (its batch stamp), or bring back everything archived. */
+  unarchive(batch: string | null): ArchiveResult {
+    return { ...this.deps.repos.tasks.unarchive(batch), batch };
+  }
+
   /** failed/cancelled/blocked → todo with a fresh attempt budget. */
   retry(taskId: string): Task {
     const task = this.require(taskId);
     if (!["failed", "cancelled", "blocked"].includes(task.status)) throw conflict(`${taskRef(task)} is ${task.status}; only failed, cancelled or blocked tasks can be retried`);
+    // A retried task in a cleared tree brings its objective back to the board.
+    if (task.archivedAt) this.deps.repos.tasks.unarchiveTree(task.rootTaskId);
     const { blockedOnApprovalId: _b, ...state } = task.state;
-    return this.transition(task, "todo", { attempts: 0, error: null, completedAt: null, state: { ...state, nextTrigger: "task" } });
+    return this.transition(task, "todo", { attempts: 0, error: null, completedAt: null, archivedAt: null, state: { ...state, nextTrigger: "task" } });
   }
 
   /**

@@ -41,6 +41,8 @@ export interface ToolDefinition {
   tiers: readonly AgentTier[];
   /** Feature flag (e.g. web_fetch); default enabled. */
   enabled?: (config: AppConfig) => boolean;
+  /** Every agent has it, whatever its stored tool list (e.g. the company directory). */
+  universal?: boolean;
   run(args: Record<string, unknown>, ctx: ToolRunContext): Promise<ToolResult> | ToolResult;
 }
 

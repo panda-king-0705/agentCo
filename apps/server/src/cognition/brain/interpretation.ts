@@ -178,6 +178,8 @@ export const Q9_ROLE = {
   llmSuggestionBonus: 0.04,
   /** Spread the load: penalty per subprocess already given to the same assignee in this plan (tuning). */
   repeatAssigneePenalty: 0.2,
+  /** The request explicitly names the candidate's department or role: decisive over keyword fit (tuning). */
+  namedBonus: 1,
 } as const;
 /** A subprocess's element, from the department it belongs to (keyword on the department name). */
 export const Q9_DEPARTMENT_ELEMENT: { pattern: RegExp; element: FiveElement }[] = [

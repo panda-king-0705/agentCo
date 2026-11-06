@@ -105,6 +105,11 @@ export class EventRepo {
     return all(this.db, "SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?", seq, limit).map(toEvent);
   }
 
+  /** The newest `limit` events, oldest first (the console's boot/resync window). */
+  tail(limit: number): CompanyEvent[] {
+    return all(this.db, "SELECT * FROM (SELECT * FROM events ORDER BY seq DESC LIMIT ?) ORDER BY seq", limit).map(toEvent);
+  }
+
   latestSeq(): number {
     return Number(one(this.db, "SELECT MAX(seq) AS s FROM events")?.s ?? 0);
   }

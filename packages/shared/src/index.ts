@@ -269,6 +269,8 @@ export interface Task {
   updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  /** Set when the Board cleared the finished tree from the Tasks board (hidden, not deleted). */
+  archivedAt?: string | null;
 }
 
 export type RunTrigger = "message" | "task" | "subtasks_completed" | "human_answer" | "recovery" | "heartbeat";
@@ -610,6 +612,16 @@ export interface PostMessageResult {
   runId: string | null;
   /** Open Board questions this reply answered (it then starts no chat run: the answered tasks resume). */
   answeredApprovalIds?: string[];
+}
+
+/** POST /api/tasks/archive-finished and /api/tasks/unarchive. */
+export interface ArchiveResult {
+  /** Tasks (whole finished trees) archived or restored. */
+  count: number;
+  /** Objectives (root tasks) among them. */
+  objectives: number;
+  /** The batch stamp (archivedAt) — pass it to unarchive to undo exactly this clear. */
+  batch: string | null;
 }
 
 /** POST /api/approvals/decide-many: bulk triage of the Board's queue. */
