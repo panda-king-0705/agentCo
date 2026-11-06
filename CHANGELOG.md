@@ -30,6 +30,7 @@ versioning: [SemVer](https://semver.org/).
   and limit Board questions to irreversible, external or out-of-mandate decisions.
 
 ### Added
+- `scripts/audit/company-audit.mjs`: read-only weekly audit data (docs/DEPLOY.md › Weekly audit).
 - `scripts/maintenance/archive-stale-memory.mjs`: reversibly archive memories, blackboard entries
   and workspace files that teach a stalled habit (docs/DEPLOY.md › Maintenance).
 - Approvals: answer or dismiss all open questions at once (`POST /api/approvals/decide-many`).
