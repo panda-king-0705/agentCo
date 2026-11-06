@@ -142,6 +142,8 @@ export function renderCharter(agent: Agent, facts: AgentFacts): string {
     // Catalog specialist as optional domain expertise (docs/CATALOG.md); short, it is paid on every stage.
     facts.expertise ? truncate(facts.expertise, 600) : "",
     `Style: ${truncate(agent.persona.style || "clear and direct", 100)}${toneFor(agent.persona.personalityType)}`,
+    facts.today ?? "",
+    facts.contacts ?? "",
     operatingRules(agent.tools),
   ];
   return lines.filter(Boolean).join("\n");

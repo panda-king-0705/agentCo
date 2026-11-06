@@ -4,11 +4,15 @@ import { newId } from "../../db/ids.ts";
 import type { Task } from "../../../../../packages/shared/src/index.ts";
 import type { ToolEffect } from "../../contracts.ts";
 import { truncate } from "../../cognition/text.ts";
+import { directory, formatEntry, resolveAgent, searchDirectory } from "../../org/directory.ts";
 import { ALL_TIERS, fail, LEADS, ok, type ToolDefinition, type ToolRunContext } from "../types.ts";
 
 export const sendMessage: ToolDefinition = {
   name: "send_message",
-  description: "Send a direct message to another agent. It lands in their inbox (it does not start a run).",
+  description:
+    "Send a direct message to another agent. It lands in their inbox (it does not start a run). " +
+    "toAgentId takes an agent id, a name, a title, a role word (ceo, cfo, cto…) or \"manager\". " +
+    "Your task result already goes back to whoever assigned the task — no message needed for that.",
   parameters: {
     type: "object",
     properties: { toAgentId: { type: "string" }, content: { type: "string", maxLength: 8000 } },
@@ -17,11 +21,35 @@ export const sendMessage: ToolDefinition = {
   tiers: ALL_TIERS,
   run(args, ctx) {
     const { org, conversations } = ctx.services;
-    const to = org.getAgent(String(args.toAgentId));
-    if (!to || to.status === "terminated") return fail(`No active agent with id ${String(args.toAgentId)}.`);
+    const to = resolveAgent(org, String(args.toAgentId), ctx.agent);
+    if (!to || to.status === "terminated") {
+      const near = searchDirectory(org, String(args.toAgentId)).slice(0, 5);
+      return fail(`No single active agent matches "${String(args.toAgentId)}". ${near.length ? `Did you mean: ${near.map(formatEntry).join("; ")}?` : "Look them up with company_directory."}`);
+    }
     if (to.id === ctx.agent.id) return fail("You cannot message yourself.");
     const message = conversations.sendAgentMessage(ctx.agent, to, String(args.content), { runId: ctx.runId, taskId: ctx.taskId, traceId: ctx.traceId });
     return ok(`Message delivered to ${to.name}'s inbox.`, [{ kind: "message_sent", messageId: message.id, conversationId: message.conversationId }]);
+  },
+};
+
+export const companyDirectory: ToolDefinition = {
+  name: "company_directory",
+  description:
+    "The company directory: every active agent's name, title, department, manager and id (their address for send_message, delegate_task and escalations). " +
+    "query filters by name, title, department or role word (e.g. \"finance\", \"cfo\", \"Kenji\"); empty = everyone.",
+  parameters: { type: "object", properties: { query: { type: "string", maxLength: 200 } } },
+  tiers: ALL_TIERS,
+  universal: true,
+  run(args, ctx) {
+    const query = typeof args.query === "string" ? args.query : "";
+    const entries = query.trim() ? searchDirectory(ctx.services.org, query) : directory(ctx.services.org);
+    if (!entries.length) return ok(`No one matches "${query}". Try a department (finance, engineering, marketing…) or leave query empty.`, [], { entries: [] });
+    const shown = entries.slice(0, 60);
+    return ok(
+      `${entries.length} ${entries.length === 1 ? "person" : "people"}${query.trim() ? ` matching "${query}"` : ""}:\n${shown.map((e) => `- ${formatEntry(e)}`).join("\n")}${entries.length > shown.length ? `\n…and ${entries.length - shown.length} more; narrow the query.` : ""}`,
+      [],
+      { entries: shown },
+    );
   },
 };
 

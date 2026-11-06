@@ -243,7 +243,12 @@ export function buildRouter(platform: Platform): Router {
   // ───────────── metrics & events ─────────────
   router.get("/api/metrics/overview", () => metrics.overview());
   router.get("/api/metrics/timeseries", ({ query }) => metrics.timeseries(query.get("metric") || "cost", intParam(query, "hours", 24)));
-  router.get("/api/events", ({ query }) => bus.since(intParam(query, "since", 0), intParam(query, "limit", 500)));
+  // With `since`: everything after it (catch-up). Without: the NEWEST `limit` events. (Returning the
+  // oldest made the console seed its stream position from the start of history and then replay
+  // days-old task/agent updates over the current state: cancelled tasks back "In progress".)
+  router.get("/api/events", ({ query }) =>
+    query.get("since") === null ? bus.tail(intParam(query, "limit", 120)) : bus.since(intParam(query, "since", 0), intParam(query, "limit", 500)),
+  );
   return router;
 }
 

@@ -131,6 +131,14 @@ function isObj(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null;
 }
 
+/**
+ * An update older than what we hold must not overwrite it (a replayed or out-of-order event). Before
+ * this guard, a boot that replayed day-old events put cancelled tasks back "In progress".
+ */
+function isStale(heldAt: unknown, incomingAt: unknown): boolean {
+  return typeof heldAt === "string" && typeof incomingAt === "string" && incomingAt < heldAt;
+}
+
 export function applyEvent(ev: CompanyEvent): void {
   if (ev.seq <= state.lastSeq) return;
   const patch: Partial<LiveState> = { lastSeq: ev.seq, events: [ev, ...state.events].slice(0, 400) };
@@ -143,6 +151,7 @@ export function applyEvent(ev: CompanyEvent): void {
       const agentId = isObj(d) && typeof d.id === "string" ? d.id : ev.agentId;
       if (agentId) {
         const prev = state.agents[agentId];
+        if (prev && isStale(prev.updatedAt, isObj(d) && typeof d.updatedAt === "string" ? d.updatedAt : null)) break;
         const next = { ...(prev ?? {}), ...(isObj(d) ? d : {}) } as Agent;
         if (ev.type === "agent.terminated") next.status = "terminated";
         if (prev || (isObj(d) && "name" in d)) patch.agents = { ...state.agents, [agentId]: next };
@@ -153,7 +162,9 @@ export function applyEvent(ev: CompanyEvent): void {
     }
     case "task.created":
     case "task.updated":
-      if (isObj(d) && typeof d.id === "string") patch.tasks = { ...state.tasks, [d.id]: { ...(state.tasks[d.id] ?? {}), ...d } as Task };
+      if (isObj(d) && typeof d.id === "string" && !isStale(state.tasks[d.id]?.updatedAt, d.updatedAt ?? ev.at)) {
+        patch.tasks = { ...state.tasks, [d.id]: { ...(state.tasks[d.id] ?? {}), ...d } as Task };
+      }
       break;
     case "run.started":
     case "run.completed":
@@ -172,7 +183,10 @@ export function applyEvent(ev: CompanyEvent): void {
       break;
     case "approval.created":
     case "approval.decided":
-      if (isObj(d) && typeof d.id === "string") patch.approvals = { ...state.approvals, [d.id]: d as unknown as Approval };
+      // A replayed "created" must not reopen an approval we already hold as decided.
+      if (isObj(d) && typeof d.id === "string" && !(ev.type === "approval.created" && state.approvals[d.id]?.status && state.approvals[d.id]!.status !== "pending")) {
+        patch.approvals = { ...state.approvals, [d.id]: d as unknown as Approval };
+      }
       break;
     case "company.updated":
       if (state.company && isObj(d)) {

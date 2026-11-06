@@ -31,6 +31,8 @@ export interface FitScore {
   suggested: boolean;
   /** True when BaZi decided between tied candidates. */
   tieBroken: boolean;
+  /** The request named this candidate's department or role ("Have Finance…", "ask the CTO…"). */
+  named?: boolean;
 }
 
 export function departmentElement(departmentText: string): FiveElement {
@@ -73,7 +75,7 @@ const r3 = (n: number) => Math.round(n * 1000) / 1000;
 export function scoreCandidates(
   subprocessText: string,
   candidates: Candidate[],
-  options: { suggestedId?: string | null; usedCounts?: Map<string, number>; fallbackDepartment: string },
+  options: { suggestedId?: string | null; usedCounts?: Map<string, number>; fallbackDepartment: string; namedIds?: ReadonlySet<string> },
 ): FitScore[] {
   const element = subprocessElement(subprocessText, candidates, options.fallbackDepartment);
   const scored: FitScore[] = candidates.map((c) => {
@@ -81,8 +83,10 @@ export function scoreCandidates(
     const mbti = mbtiFit(c.agent.persona.personalityType, subprocessText);
     const suggested = !!options.suggestedId && options.suggestedId === c.agent.id;
     const used = options.usedCounts?.get(c.agent.id) ?? 0;
-    const fit = Q9_ROLE.mandate * mandate + Q9_ROLE.mbti * mbti + (suggested ? Q9_ROLE.llmSuggestionBonus : 0) - used * Q9_ROLE.repeatAssigneePenalty;
-    return { agentId: c.agent.id, fit: r3(fit), mandateFit: r3(mandate), mbtiFit: r3(mbti), elementFit: r3(elementFit(c.agent, element)), suggested, tieBroken: false };
+    const named = options.namedIds?.has(c.agent.id) ?? false;
+    const fit =
+      Q9_ROLE.mandate * mandate + Q9_ROLE.mbti * mbti + (suggested ? Q9_ROLE.llmSuggestionBonus : 0) + (named ? Q9_ROLE.namedBonus : 0) - used * Q9_ROLE.repeatAssigneePenalty;
+    return { agentId: c.agent.id, fit: r3(fit), mandateFit: r3(mandate), mbtiFit: r3(mbti), elementFit: r3(elementFit(c.agent, element)), suggested, tieBroken: false, named };
   });
   scored.sort((a, b) => b.fit - a.fit);
   if (scored.length < 2) return scored;
@@ -108,4 +112,33 @@ export function candidatePool(self: Agent, reports: Agent[], allActive: Agent[],
     }
   }
   return pool;
+}
+
+const ROLE_ACRONYMS: Record<string, string> = {
+  "chief executive officer": "ceo",
+  "chief financial officer": "cfo",
+  "chief technology officer": "cto",
+  "chief operating officer": "coo",
+  "chief marketing officer": "cmo",
+  "chief people officer": "cpo",
+  "chief product officer": "cpo",
+  "chief revenue officer": "cro",
+};
+
+/**
+ * Candidates whose department or role the text names explicitly — "Have Finance write…", "ask the
+ * CTO", "engineering should…". Keyword fit put a finance budget with the CTO because it mentioned
+ * "model spend"; an explicit name from the Board now decides (Q9_ROLE.namedBonus).
+ */
+export function namedCandidates(text: string, candidates: Candidate[]): Set<string> {
+  const t = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
+  const has = (w: string) => w.length >= 3 && t.includes(` ${w} `);
+  const ids = new Set<string>();
+  for (const c of candidates) {
+    const dept = c.departmentName.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const title = c.agent.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const acronym = ROLE_ACRONYMS[title];
+    if ((dept && has(dept)) || (dept && has(dept.split(" ")[0]!) && dept.split(" ")[0]!.length >= 5) || has(title) || (acronym && has(acronym))) ids.add(c.agent.id);
+  }
+  return ids;
 }

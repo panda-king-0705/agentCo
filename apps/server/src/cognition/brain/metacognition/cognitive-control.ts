@@ -10,7 +10,7 @@ import { arr, bool, num, obj, oneOf, str } from "../../coerce.ts";
 import { oneLine, truncate } from "../../text.ts";
 import { Q2_OOD, Q4_CONTROL, Q6_CANDIDATES, q4ControlLevel, type CandidateName } from "../interpretation.ts";
 import { block, llmJson, type BrainRun } from "../runtime.ts";
-import { candidatePool, scoreCandidates, type Candidate } from "../self-management/role-arrangement.ts";
+import { candidatePool, namedCandidates, scoreCandidates, type Candidate } from "../self-management/role-arrangement.ts";
 import type { Competence } from "./self-ability.ts";
 import type { ProblemDefinition, Understanding } from "./target-understanding.ts";
 
@@ -135,6 +135,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
           (canDelegate
             ? `Your direct reports:\n${reports.map((r) => `- ${r.id}: ${r.title} — ${oneLine(r.identity.mission, 120)}`).join("\n")}\n` +
               `Decompose into at most ${max} subprocesses, each for ONE report (assigneeId), with value 0-1000, estCostUsd and acceptanceCriteria; mode "delegate". ` +
+              "If the request names a department or person (\"have Finance…\", \"ask the CTO…\"), assign that part to them. " +
               (a.preferDelegation ? "Prefer delegating: your own competence is limited here. " : "") +
               `Use mode "direct" (no subprocesses) when you can do it yourself quickly with your own tools — e.g. recording a fact, a short note or decision, a lookup — never split such a task across reports.\n` +
               (task.state.kind === "escalation" ? 'This is a report\'s escalation: answer it yourself (mode "direct") with a decision or guidance unless the fix needs another report\'s work.\n' : "")
@@ -184,9 +185,14 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
       catalogProfile: run.platform.catalog?.profileFor(agent) ?? null,
     }));
     const used = new Map<string, number>();
+    // A department/role named in the request (the Board's words) routes a subprocess that names none itself.
+    const task = run.task;
+    const namedInRequest = task ? namedCandidates(`${task.title} ${task.description}`, candidates) : new Set<string>();
     for (const s of subprocesses) {
       if (candidates.length === 0) break;
-      const scores = scoreCandidates(`${s.title} ${s.description}`, candidates, { suggestedId: s.suggestedAssigneeId, usedCounts: used, fallbackDepartment: run.facts.department });
+      const own = namedCandidates(`${s.title} ${s.description}`, candidates);
+      const namedIds = own.size ? own : namedInRequest.size === 1 ? namedInRequest : undefined;
+      const scores = scoreCandidates(`${s.title} ${s.description}`, candidates, { suggestedId: s.suggestedAssigneeId, usedCounts: used, fallbackDepartment: run.facts.department, ...(namedIds ? { namedIds } : {}) });
       const best = scores[0]!;
       s.assigneeId = best.agentId;
       s.fit = best.fit;
@@ -195,6 +201,7 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
     span.setAttributes({
       "agentco.role_arrangement": subprocesses.map((s) => `${truncate(s.title, 30)}→${s.assigneeId}(${s.fit})`).join("; "),
       "agentco.role_arrangement.overrode_llm": subprocesses.filter((s) => s.suggestedAssigneeId && s.suggestedAssigneeId !== s.assigneeId).length,
+      "agentco.role_arrangement.named": [...namedInRequest].join(","),
     });
   });
 }
