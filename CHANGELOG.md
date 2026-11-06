@@ -21,6 +21,9 @@ versioning: [SemVer](https://semver.org/).
   The confidence step now sees the agent's tools (agents claimed "no memory_write tool").
 - Anthropic JSON calls: no `response_format: json_object` (its endpoint only accepts
   `json_schema`); any provider rejecting `response_format` is retried without it.
+- Chat: a request for any action (even "record X") opens a task; a chat reply has no tools and may
+  no longer promise to do something itself ("I'm writing it to the knowledge base…" with nothing
+  written). The reply step can still open the task if the intent check missed it.
 - Escalations carry the stuck task's own text (and the original request): a manager answering one
   no longer concludes "the ID was not supplied" when it was in the very task that escalated. Board
   questions show what their objective is about.
