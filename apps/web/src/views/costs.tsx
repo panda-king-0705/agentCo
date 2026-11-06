@@ -49,14 +49,27 @@ export function CostsView() {
         <Panel title="Spend by model"><HBars items={byModel} format={money} /></Panel>
         <Panel title="Spend by department"><HBars items={byDept} format={money} /></Panel>
         <Panel title="Spend by agent" actions={<span className="muted small">from the last {runs.data?.length ?? 0} runs</span>}><HBars items={byAgent} format={money} /></Panel>
-        <Panel title="Budget vs spend, per department" actions={<span className="muted small">monthly</span>}>
+        <Panel title="Budget vs spend, per department" actions={<span className="muted small" title="&quot;agents&quot; = no department cap; the limit shown is the sum of its agents' monthly budgets">this month</span>}>
           <ul className="budget-list">
             {Object.values(departments).filter((x) => x.monthlyBudgetUsd > 0 || deptSpend.has(x.id)).map((x) => {
               const spend = deptSpend.get(x.id) ?? 0;
+              // A department cap of $0 means "no department cap": its people are capped one by one, so the
+              // real allowance is the sum of their monthly budgets (showing "/ $0.00" in red was wrong).
+              const agentBudgets = Object.values(agents)
+                .filter((a) => a.departmentId === x.id && a.status !== "terminated")
+                .reduce((n, a) => n + a.monthlyBudgetUsd, 0);
+              const limit = x.monthlyBudgetUsd > 0 ? x.monthlyBudgetUsd : agentBudgets;
+              const basis = x.monthlyBudgetUsd > 0 ? "department cap" : agentBudgets > 0 ? "sum of its agents' monthly budgets (no department cap)" : "no cap set";
               return (
-                <li key={x.id}>
-                  <div className="row small"><span className="lane-dot" style={{ background: x.color }} aria-hidden="true" /><span className="grow">{x.name}</span><span className="num">{money(spend)}</span><span className="muted num">/ {money(x.monthlyBudgetUsd)}</span></div>
-                  <Meter value={spend} max={x.monthlyBudgetUsd || 1} label={`${x.name} budget used`} small />
+                <li key={x.id} title={`Limit: ${basis}`}>
+                  <div className="row small">
+                    <span className="lane-dot" style={{ background: x.color }} aria-hidden="true" />
+                    <span className="grow">{x.name}</span>
+                    <span className="num">{money(spend)}</span>
+                    <span className="muted num">/ {limit > 0 ? money(limit) : "no cap"}</span>
+                    {x.monthlyBudgetUsd > 0 ? null : limit > 0 ? <span className="muted tiny">agents</span> : null}
+                  </div>
+                  {limit > 0 ? <Meter value={spend} max={limit} label={`${x.name} budget used`} small /> : null}
                 </li>
               );
             })}

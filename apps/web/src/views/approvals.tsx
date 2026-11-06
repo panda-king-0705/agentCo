@@ -4,7 +4,7 @@ import { api } from "../api";
 import { money } from "../format";
 import { href } from "../router";
 import { seed, useLive } from "../live";
-import { AgentLink, Badge, Button, Empty, KV, ModelTierBadge, RelTime, useAction, Panel } from "../ui/kit";
+import { AgentLink, Badge, Button, ConfirmDialog, Empty, KV, ModelTierBadge, RelTime, useAction, Panel } from "../ui/kit";
 import type { Approval, ApprovalKind, ModelTier } from "../types";
 import { PageHead, TaskLinkById, useDeptName } from "./common";
 
@@ -136,6 +136,47 @@ function BulkQuestions({ count }: { count: number }) {
   );
 }
 
+/** "Clear history", like archiving an inbox: decided approvals leave the list; nothing is deleted. */
+function ClearHistory({ count }: { count: number }) {
+  const { busy, run } = useAction();
+  const [confirm, setConfirm] = useState(false);
+  const [undo, setUndo] = useState<{ batch: string; count: number } | null>(null);
+  const reload = async () => seed.replaceApprovals(await api.approvals());
+  const clear = async () => {
+    setConfirm(false);
+    const r = await run(() => api.clearApprovalHistory(), "History cleared");
+    if (r) {
+      await reload();
+      if (r.batch) setUndo({ batch: r.batch, count: r.count });
+    }
+  };
+  const restore = async (batch: string | null) => {
+    const r = await run(() => api.restoreApprovalHistory(batch), batch ? "Restored" : "All cleared history restored");
+    if (r) {
+      await reload();
+      setUndo(null);
+    }
+  };
+  return (
+    <div className="row small" style={{ marginLeft: "auto" }}>
+      {undo ? (
+        <>
+          <span className="muted" role="status">Cleared {undo.count} decision{undo.count === 1 ? "" : "s"}.</span>
+          <Button size="sm" variant="ghost" onClick={() => restore(undo.batch)} disabled={busy}>Undo</Button>
+        </>
+      ) : (
+        <Button size="sm" variant="ghost" onClick={() => restore(null)} disabled={busy} title="Bring back everything cleared earlier">Restore cleared</Button>
+      )}
+      <Button size="sm" icon="check" onClick={() => setConfirm(true)} disabled={busy || count === 0}>Clear history{count ? ` (${count})` : ""}</Button>
+      {confirm ? (
+        <ConfirmDialog title={`Clear ${count} past decision${count === 1 ? "" : "s"}?`} confirmLabel="Clear history" onConfirm={clear} onClose={() => setConfirm(false)} busy={busy}>
+          Decided approvals leave this list. Pending ones stay. Nothing is deleted: tasks, traces and answers keep their record, and "Restore cleared" brings them back.
+        </ConfirmDialog>
+      ) : null}
+    </div>
+  );
+}
+
 export function ApprovalsView() {
   const approvals = useLive((s) => s.approvals);
   const all = Object.values(approvals);
@@ -151,7 +192,10 @@ export function ApprovalsView() {
       ) : (
         <Panel><Empty title="Nothing waiting on you" icon="approvals">Agents will queue hires, budget requests and questions here.</Empty></Panel>
       )}
-      <h2 className="section-title mt" style={{ fontSize: 13 }}>History ({history.length})</h2>
+      <div className="row mt">
+        <h2 className="section-title" style={{ fontSize: 13, margin: 0 }}>History ({history.length})</h2>
+        <ClearHistory count={history.length} />
+      </div>
       <Panel flush>
         {history.length ? (
           <ul className="list">

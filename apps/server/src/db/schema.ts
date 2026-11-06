@@ -115,4 +115,7 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE tasks ADD COLUMN archived_at TEXT;
   CREATE INDEX tasks_archived ON tasks(archived_at);
   `,
+  /* v4 — "Clear history" on Approvals: decided approvals are hidden from the history, never deleted */ `
+  ALTER TABLE approvals ADD COLUMN archived_at TEXT;
+  `,
 ];

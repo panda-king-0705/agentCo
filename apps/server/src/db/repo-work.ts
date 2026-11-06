@@ -218,9 +218,24 @@ export class ApprovalRepo {
     return row ? toApproval(row) : null;
   }
 
-  list(status?: string): Approval[] {
+  list(status?: string, archived: "include" | "exclude" | "only" = "include"): Approval[] {
     const where = whereEq({ status });
-    return all(this.db, `SELECT * FROM approvals ${where.sql} ORDER BY created_at DESC LIMIT 500`, ...where.params).map(toApproval);
+    const extra = archived === "exclude" ? "archived_at IS NULL" : archived === "only" ? "archived_at IS NOT NULL" : "";
+    const sql = extra ? (where.sql ? `${where.sql} AND ${extra}` : `WHERE ${extra}`) : where.sql;
+    return all(this.db, `SELECT * FROM approvals ${sql} ORDER BY created_at DESC LIMIT 500`, ...where.params).map(toApproval);
+  }
+
+  /** "Clear history": hides every decided approval (pending ones are never touched). */
+  archiveDecided(at: string): number {
+    return Number(this.db.prepare("UPDATE approvals SET archived_at = ? WHERE status != 'pending' AND archived_at IS NULL").run(at).changes);
+  }
+
+  /** Restores one cleared batch (its stamp), or all cleared history. */
+  unarchive(batch: string | null): number {
+    const res = batch
+      ? this.db.prepare("UPDATE approvals SET archived_at = NULL WHERE archived_at = ?").run(batch)
+      : this.db.prepare("UPDATE approvals SET archived_at = NULL WHERE archived_at IS NOT NULL").run();
+    return Number(res.changes);
   }
 
   forTask(taskId: string): Approval[] {

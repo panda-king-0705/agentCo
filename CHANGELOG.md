@@ -14,6 +14,9 @@ versioning: [SemVer](https://semver.org/).
   extractor returned the first nested object of a truncated reply; it now returns nothing, so the
   stage is repaired and retried, and planning gets more output room. Cross-department work is
   delegated one part per owning report.
+- Costs: "Budget vs spend, per department" showed "/ $0.00" in red for every department. A $0
+  department cap means "no department cap"; the meter now uses the sum of its agents' monthly
+  budgets (marked "agents") or says "no cap".
 - Role arrangement trusts the leader's choice of assignee (keyword overlap overrode a sensible
   pick: "verify and assemble the plan" went from the Chief of Staff to the CTO); a department
   counts as named only in a part's title, not anywhere in its description.
@@ -56,6 +59,8 @@ versioning: [SemVer](https://semver.org/).
   and limit Board questions to irreversible, external or out-of-mandate decisions.
 
 ### Added
+- Approvals: "Clear history" hides decided approvals (pending ones stay; nothing is deleted), with
+  undo and "Restore cleared". Migration v4.
 - Onboarding: a company handbook generated from live data (mission, who's who with ids, how work
   flows, budgets, open objectives, key knowledge). Every new hire gets it from its manager on day
   one; any agent can re-read it (`company_handbook`); the Board sees it on the Org page.

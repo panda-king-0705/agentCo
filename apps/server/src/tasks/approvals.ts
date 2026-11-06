@@ -53,9 +53,21 @@ export class ApprovalService {
     this.deps = deps;
   }
 
-  list(status?: string): Approval[] {
+  list(status?: string, archived: "include" | "exclude" | "only" = "include"): Approval[] {
     if (status !== undefined && !["pending", "approved", "rejected"].includes(status)) throw badRequest("status must be pending, approved or rejected");
-    return this.deps.repos.approvals.list(status);
+    return this.deps.repos.approvals.list(status, archived);
+  }
+
+  /** "Clear history" on the Approvals page: hides every decided approval; nothing is deleted. */
+  archiveDecided(): { count: number; batch: string | null } {
+    const batch = this.deps.now().toISOString();
+    const count = this.deps.repos.approvals.archiveDecided(batch);
+    return { count, batch: count ? batch : null };
+  }
+
+  /** Undo a clear (its batch stamp), or restore all cleared history. */
+  unarchive(batch: string | null): { count: number; batch: string | null } {
+    return { count: this.deps.repos.approvals.unarchive(batch), batch };
   }
 
   require(id: string): Approval {
