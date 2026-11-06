@@ -82,7 +82,8 @@ const walk = (dir) => {
     else {
       const rel = relative(sharedRoot, p);
       const refs = [...e.name.matchAll(/T-?(\d+)/g)].map((m) => byNumber.get(Number(m[1]))).filter(Boolean);
-      const blockerReport = /block/i.test(e.name) || /^\s*(status:\s*)?blocked\b/im.test(readFileSync(p, "utf8").slice(0, 600));
+      // A blocker/status report: named so, or saying near the top that work or spending is blocked.
+      const blockerReport = /block/i.test(e.name) || /\bblock(ed|er|ing)?\b/i.test(readFileSync(p, "utf8").slice(0, 800));
       const allCancelled = refs.length > 0 && refs.every((t) => t.status === "cancelled");
       if (blockerReport || allCancelled) files.push({ path: rel, reason: blockerReport ? "blocker report" : "output of cancelled objective(s) only" });
     }
