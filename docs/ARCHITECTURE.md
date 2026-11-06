@@ -343,6 +343,7 @@ GET    /api/health
 GET    /api/company                       CompanySnapshot
 PATCH  /api/company                       Partial<CompanySettings>
 POST   /api/company/pause | /resume       kill switch (aborts running runs)
+GET    /api/handbook                      {text} (?agentId= personalises; what new hires receive)
 POST   /api/company/reset-mood            {reset} (clears every agent's frustration and negative valence)
 GET    /api/org                           OrgResponse
 GET    /api/roles                         RoleTemplate[]

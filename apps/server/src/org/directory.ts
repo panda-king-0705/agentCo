@@ -94,5 +94,5 @@ export function keyContacts(org: OrgView, agent: Agent): string {
   const reports = org.directReports(agent.id).filter((a) => a.status !== "terminated");
   if (reports.length) lines.push(`your reports ${reports.slice(0, 12).map((r) => `${r.name} (${r.title}, id ${r.id})`).join(", ")}${reports.length > 12 ? ` and ${reports.length - 12} more` : ""}`);
   if (!lines.length) return "";
-  return `Key contacts: ${lines.join("; ")}. Everyone else: company_directory. Your task result goes back to whoever assigned the task automatically; message someone only to tell them something else.`;
+  return `Key contacts: ${lines.join("; ")}. Everyone else: company_directory; how the company works: company_handbook. Your task result goes back to whoever assigned the task automatically; message someone only to tell them something else.`;
 }

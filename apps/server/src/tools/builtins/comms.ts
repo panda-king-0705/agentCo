@@ -53,6 +53,19 @@ export const companyDirectory: ToolDefinition = {
   },
 };
 
+export const companyHandbook: ToolDefinition = {
+  name: "company_handbook",
+  description:
+    "The company handbook: mission, who's who, how work flows (delegation, escalation, when to ask the Board), where things are recorded, budgets, current objectives and key knowledge. Read it when you are new or unsure how something works here.",
+  parameters: { type: "object", properties: {} },
+  tiers: ALL_TIERS,
+  universal: true,
+  run(_args, ctx) {
+    if (!ctx.services.handbook) return fail("The handbook is not available.");
+    return ok(ctx.services.handbook(ctx.agent));
+  },
+};
+
 /** Characters of the stuck task's own text, and of the original request, carried into an escalation. */
 export const ESCALATION_TASK_CHARS = 1500;
 export const ESCALATION_ROOT_CHARS = 800;

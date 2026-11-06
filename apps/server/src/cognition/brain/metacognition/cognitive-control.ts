@@ -136,6 +136,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
             ? `Your direct reports:\n${reports.map((r) => `- ${r.id}: ${r.title} — ${oneLine(r.identity.mission, 120)}`).join("\n")}\n` +
               `Decompose into at most ${max} subprocesses, each for ONE report (assigneeId), with value 0-1000, estCostUsd and acceptanceCriteria; mode "delegate". ` +
               "If the request names a department or person (\"have Finance…\", \"ask the CTO…\"), assign that part to them. " +
+              "Work that spans several departments' expertise (e.g. marketing + pricing + engineering) is delegated: one part per owning report — do not write other departments' parts yourself; reports run on cheaper models, so delegating is usually cheaper than doing it all yourself. " +
               (a.preferDelegation ? "Prefer delegating: your own competence is limited here. " : "") +
               `Use mode "direct" (no subprocesses) when you can do it yourself quickly with your own tools — e.g. recording a fact, a short note or decision, a lookup — never split such a task across reports.\n` +
               (task.state.kind === "escalation" ? 'This is a report\'s escalation: answer it yourself (mode "direct") with a decision or guidance unless the fix needs another report\'s work.\n' : "")
@@ -152,7 +153,8 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
           maxSubprocesses: max,
           feedback: a.feedback,
         },
-        maxOutputTokens: 400 + 220 * max,
+        // Room for the whole plan: a cut-off reply lost every subprocess (json.ts now returns null for it).
+        maxOutputTokens: 900 + 300 * max,
       });
       const subprocesses = coerceSubprocesses(json, max, Math.max(50, Math.round(task.value / Math.max(1, max))));
       let mode = oneOf(json.mode, ["delegate", "direct"] as const, subprocesses.length > 0 && canDelegate ? "delegate" : "direct");

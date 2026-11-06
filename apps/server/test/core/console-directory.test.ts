@@ -134,3 +134,40 @@ test("role arrangement: a department or role named in the request is recognised"
     await t.close();
   }
 });
+
+test("onboarding: a new hire finds the handbook in its inbox from its manager; company_handbook and GET /api/handbook serve it", async () => {
+  const t = await createTestApp({
+    listen: true,
+    reflex: async (ctx) => {
+      const r = await callTool(ctx, "company_handbook", {});
+      return done(r.content);
+    },
+  });
+  try {
+    const { platform } = t.app;
+    const cfo = t.agentByRole("cfo");
+    platform.memory.write({ scope: "global", agentId: null, kind: "semantic", content: "Board custodian ID: U2522199H.", tags: ["board"], importance: 0.9 });
+    const hire = platform.org.createAgent({ roleId: "fpa-analyst", name: "Nia Okoye", managerId: cfo.id }, "human");
+    const inbox = platform.memory.inbox(hire.id, 5);
+    assert.equal(inbox.length, 1, "one welcome message");
+    assert.equal(inbox[0]!.senderId, cfo.id, "from the hire's manager");
+    const text = inbox[0]!.content;
+    assert.match(text, /^Welcome to AgentCo, Nia Okoye!/);
+    for (const section of ["## You", "## Who's who", "## How work flows", "## Current objectives", "## Key company knowledge"]) assert.ok(text.includes(section), section);
+    assert.match(text, new RegExp(`You report to ${cfo.name}, Chief Financial Officer \\(id ${cfo.id}\\)`));
+    assert.match(text, /Board custodian ID: U2522199H/);
+    assert.match(text, /Today: \w+day \d{4}-\d{2}-\d{2}/);
+
+    const task = rootTask(t, hire.id, "Read the handbook");
+    await t.drain();
+    assert.match(platform.tasks.require(task.id).result ?? "", /# AgentCo — company handbook/);
+
+    const api1 = await api<{ text: string }>(t.url, `/api/handbook?agentId=${hire.id}`);
+    assert.match(api1.body.text, /## You\nNia Okoye/);
+    const general = await api<{ text: string }>(t.url, "/api/handbook");
+    assert.ok(!general.body.text.includes("## You"), "the Board's view is not personalised");
+    assert.equal((await api<unknown>(t.url, "/api/handbook?agentId=nope")).status, 404);
+  } finally {
+    await t.close();
+  }
+});

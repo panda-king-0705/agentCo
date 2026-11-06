@@ -12,7 +12,7 @@ import type { ToolCall, ToolCallContext, ToolExecutor, ToolResult, ToolSpec } fr
 import type { AppConfig } from "../config.ts";
 import { AppError } from "../http/errors.ts";
 import { isAbortError } from "../middleware/tracer.ts";
-import { askHuman, companyDirectory, escalate, sendMessage } from "./builtins/comms.ts";
+import { askHuman, companyDirectory, companyHandbook, escalate, sendMessage } from "./builtins/comms.ts";
 import { delegateTask } from "./builtins/delegation.ts";
 import { workspaceList, workspaceReadFile, workspaceWriteFile } from "./builtins/files.ts";
 import { catalogSearch } from "./builtins/catalog.ts";
@@ -27,6 +27,7 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
   delegateTask,
   sendMessage,
   companyDirectory,
+  companyHandbook,
   escalate,
   askHuman,
   memorySearch,

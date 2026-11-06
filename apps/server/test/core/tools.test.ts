@@ -16,7 +16,7 @@ test("specsFor = registry ∩ agent.tools ∩ tier permission (∩ feature flags
     // agent.tools narrows further — except universal tools (the company directory), which everyone has
     const cto = t.agentByRole("cto");
     t.app.platform.repos.agents.update(cto.id, { tools: ["memory_search"] });
-    assert.deepEqual(tools.specsFor(t.app.platform.org.getAgent(cto.id)!).map((s) => s.name), ["company_directory", "memory_search"]);
+    assert.deepEqual(tools.specsFor(t.app.platform.org.getAgent(cto.id)!).map((s) => s.name), ["company_directory", "company_handbook", "memory_search"]);
     assert.ok(worker.includes("company_directory"), "workers get the directory too");
     assert.ok(tools.names().includes("web_fetch"), "flagged tools are still known so they can be assigned");
   } finally {

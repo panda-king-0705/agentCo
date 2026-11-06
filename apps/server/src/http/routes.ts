@@ -240,6 +240,13 @@ export function buildRouter(platform: Platform): Router {
     platform.scheduler.nudge();
     return decided;
   });
+  // The company handbook new hires receive (org/handbook.ts); ?agentId= personalises it.
+  router.get("/api/handbook", ({ query }) => {
+    const agentId = query.get("agentId");
+    const agent = agentId ? org.getAgent(agentId) : null;
+    if (agentId && !agent) throw notFound("agent", agentId);
+    return { text: platform.services.handbook ? platform.services.handbook(agent) : "" };
+  });
   router.get("/api/blackboard", () => memory.blackboardList());
   router.put("/api/blackboard/:key", ({ params, body }) => {
     const value = object(body).value;
