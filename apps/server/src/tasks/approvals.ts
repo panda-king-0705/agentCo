@@ -93,6 +93,57 @@ export class ApprovalService {
     return this.deps.redactor ? this.deps.redactor.redact(text) : text;
   }
 
+  /**
+   * Board questions a reply in this conversation answers: those posted there, those raised under an
+   * objective that came from it, and — in a DM — any the DM partner asked.
+   */
+  questionsForConversation(conversation: { id: string; kind: string; participantIds: string[] }): Approval[] {
+    const partner = conversation.kind === "dm" ? conversation.participantIds.find((p) => p !== "human") ?? null : null;
+    return this.deps.repos.approvals.list("pending").filter((a) => {
+      if (a.kind !== "question") return false;
+      if (a.payload.conversationId === conversation.id) return true;
+      if (partner && a.requestedBy === partner) return true;
+      const task = a.taskId ? this.deps.tasks.get(a.taskId) : null;
+      const root = task ? (task.rootTaskId === task.id ? task : this.deps.tasks.get(task.rootTaskId)) : null;
+      return root?.originConversationId === conversation.id;
+    });
+  }
+
+  /** A Board reply in a conversation answers the open questions linked to it (see questionsForConversation). */
+  answerFromConversation(conversation: { id: string; kind: string; participantIds: string[] }, answer: string): Approval[] {
+    return this.questionsForConversation(conversation).map((a) => this.decide(a.id, { decision: "approved", note: answer }));
+  }
+
+  /**
+   * Bulk triage: decide every pending approval matching the filter (ids and/or kind). Answering a
+   * question needs a note; questions rejected without one are dismissed ("declined to answer").
+   */
+  decideMany(filter: { ids?: string[]; kind?: ApprovalKind }, input: DecideApprovalInput): Approval[] {
+    if (input.decision === "approved" && filter.kind === "question" && !input.note?.trim()) throw badRequest("answering questions needs a note");
+    const ids = filter.ids ? new Set(filter.ids) : null;
+    const targets = this.deps.repos.approvals.list("pending").filter((a) => (!ids || ids.has(a.id)) && (!filter.kind || a.kind === filter.kind));
+    return targets.map((a) => this.decide(a.id, input));
+  }
+
+  /** Closes the pending approvals of tasks that no longer need them (cancelled), without waking anything. */
+  closeForTasks(taskIds: ReadonlySet<string>, note: string): Approval[] {
+    const closed: Approval[] = [];
+    for (const a of this.deps.repos.approvals.list("pending")) {
+      if (!a.taskId || !taskIds.has(a.taskId)) continue;
+      if (this.deps.tasks.get(a.taskId)?.status !== "cancelled") continue;
+      this.deps.repos.approvals.update(a.id, { status: "rejected", decidedBy: "system", note, decidedAt: this.deps.now().toISOString() });
+      const decided = this.require(a.id);
+      this.deps.bus.emit("approval.decided", { agentId: decided.requestedBy, taskId: decided.taskId, traceId: decided.traceId, summary: summaries.approvalDecided(decided), data: decided });
+      closed.push(decided);
+    }
+    return closed;
+  }
+
+  /** The open Board question for an objective (root task), if any. */
+  pendingQuestionFor(rootTaskId: string): Approval | null {
+    return this.deps.repos.approvals.findPending("question", "rootTaskId", rootTaskId);
+  }
+
   /** One pending budget_increase per scope target (deduped); returns the existing one if present. */
   requestBudgetIncrease(request: BudgetIncreaseRequest): Approval {
     const target = request.scope === "agent" ? request.agentId : request.scope === "department" ? (request.departmentId ?? "") : "company";

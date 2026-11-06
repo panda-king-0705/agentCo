@@ -6,6 +6,7 @@ import type {
   CreateAgentInput,
   CreateTaskInput,
   DecideApprovalInput,
+  DecideManyInput,
   MemoryKind,
   PostMessageResult,
   RoleTemplate,
@@ -41,6 +42,16 @@ export function buildRouter(platform: Platform): Router {
   router.post("/api/company/resume", () => {
     platform.resumeCompany();
     return platform.snapshot();
+  });
+  // Clears every agent's frustration and negative mood (a fresh start after a stuck stretch).
+  router.post("/api/company/reset-mood", () => {
+    let reset = 0;
+    for (const agent of org.listActiveAgents()) {
+      if (agent.affect.frustration === 0 && agent.affect.valence >= 0) continue;
+      org.updateCognitiveState(agent.id, { affect: { ...agent.affect, frustration: 0, valence: Math.max(0, agent.affect.valence) } });
+      reset++;
+    }
+    return { reset };
   });
   router.get("/api/org", () => ({ departments: org.listDepartments(), agents: org.listActiveAgents() }));
   router.get("/api/roles", (): RoleTemplate[] => [...ROLE_TEMPLATES]);
@@ -124,7 +135,18 @@ export function buildRouter(platform: Platform): Router {
   router.post("/api/conversations/:id/messages", ({ params, body }): PostMessageResult => {
     const content = object(body).content;
     if (typeof content !== "string") throw badRequest("content must be a non-empty string");
-    const posted = conversations.postHuman(param(params, "id"), content);
+    const conversation = conversations.require(param(params, "id"));
+    const posted = conversations.postHuman(conversation.id, content);
+    // "Reply here": a reply where the Board's open questions were asked answers them, and the
+    // blocked tasks resume with it — instead of a new chat run that leaves them blocked.
+    const answered = conversation.kind === "agent_dm" ? [] : approvals.answerFromConversation(conversation, posted.content);
+    if (answered.length) {
+      conversations.attachRun(posted.id, null);
+      const refs = answered.map((a) => (a.taskId ? tasks.get(a.taskId) : null)).filter((t) => t !== null).map((t) => `T-${t.number}`);
+      conversations.postAs(conversation.id, "system", `Your reply was passed on as the answer to ${answered.length} open question${answered.length === 1 ? "" : "s"}${refs.length ? ` (${[...new Set(refs)].join(", ")})` : ""}; the work resumes from there.`);
+      platform.scheduler.nudge();
+      return { message: repos.conversations.getMessage(posted.id) ?? posted, runId: null, answeredApprovalIds: answered.map((a) => a.id) };
+    }
     const run = runs.startMessageRun(posted);
     platform.scheduler.nudge();
     return { message: repos.conversations.getMessage(posted.id) ?? posted, runId: run?.id ?? null };
@@ -154,7 +176,16 @@ export function buildRouter(platform: Platform): Router {
   router.post("/api/tasks/:id/cancel", ({ params }) => {
     const task = tasks.require(param(params, "id"));
     if (["done", "failed", "cancelled"].includes(task.status)) throw conflict(`T-${task.number} is already ${task.status}`);
-    return tasks.cancel(task.id);
+    const tree = new Set<string>();
+    const walk = (id: string): void => {
+      tree.add(id);
+      for (const c of tasks.children(id)) walk(c.id);
+    };
+    walk(task.id);
+    const cancelled = tasks.cancel(task.id);
+    // Their open approvals (questions, hires, budget asks) would otherwise sit in the Board's queue forever.
+    approvals.closeForTasks(tree, `T-${task.number} was cancelled`);
+    return cancelled;
   });
   router.post("/api/tasks/:id/retry", ({ params }) => {
     const task = tasks.retry(param(params, "id"));
@@ -188,6 +219,18 @@ export function buildRouter(platform: Platform): Router {
     if (input.decision !== "approved" && input.decision !== "rejected") throw badRequest('decision must be "approved" or "rejected"');
     if (input.note !== undefined && typeof input.note !== "string") throw badRequest("note must be a string");
     return approvals.decide(param(params, "id"), input as unknown as DecideApprovalInput);
+  });
+  router.post("/api/approvals/decide-many", ({ body }) => {
+    const input = object(body);
+    if (input.decision !== "approved" && input.decision !== "rejected") throw badRequest('decision must be "approved" or "rejected"');
+    if (input.note !== undefined && typeof input.note !== "string") throw badRequest("note must be a string");
+    if (input.ids !== undefined && (!Array.isArray(input.ids) || input.ids.some((i) => typeof i !== "string"))) throw badRequest("ids must be an array of strings");
+    if (input.kind !== undefined && typeof input.kind !== "string") throw badRequest("kind must be a string");
+    if (input.ids === undefined && input.kind === undefined) throw badRequest("pass ids or kind");
+    const { ids, kind, ...decision } = input as unknown as DecideManyInput;
+    const decided = approvals.decideMany({ ...(ids ? { ids } : {}), ...(kind ? { kind } : {}) }, decision);
+    platform.scheduler.nudge();
+    return decided;
   });
   router.get("/api/blackboard", () => memory.blackboardList());
   router.put("/api/blackboard/:key", ({ params, body }) => {

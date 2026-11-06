@@ -429,12 +429,17 @@ export class BrainEngine implements CognitiveEngine {
     const task = run.task!;
     const u = await this.understand(run);
 
-    // Early Stop? (the Board's explicit go-ahead overrides a low-confidence stop once).
-    const stop = shouldEarlyStop(u.confidence.calibrated, run.drives);
+    // Early Stop? (the Board's explicit go-ahead overrides a low-confidence stop once). Frustration
+    // is about setbacks on THIS task: a fresh task is not stopped by frustration from other work
+    // (a sticky, company-wide gate turned every new request into a Board question).
+    const setbacks = taskSetbacks(run, state);
+    const drives = setbacks ? run.drives : { ...run.drives, frustrationGate: false };
+    if (run.drives.frustrationGate && !setbacks) run.ctx.span.setAttributes({ "agentco.frustration_gate.fresh_task": true });
+    const stop = shouldEarlyStop(u.confidence.calibrated, drives);
     // A manager's or the Board's answer to this task settles it even through the frustration gate,
     // and so does a spent escalation budget: proceed with the guidance (no re-escalation loop).
     const answered = state.managerAnswered || run.escalation?.answered === true;
-    if (stop.stop && !(answered || (state.boardApproved && !run.drives.frustrationGate))) {
+    if (stop.stop && !(answered || (state.boardApproved && !drives.frustrationGate))) {
       if (!escalationSettled(run)) {
         return this.escalateOutcome(run, `Early stop on T-${task.number}: ${stop.reason}. Risks: ${u.confidence.risks.join("; ") || "unclear"}`, u.confidence.calibrated);
       }
@@ -868,3 +873,11 @@ export class BrainEngine implements CognitiveEngine {
   }
 }
 
+/** Has THIS task had setbacks (a failed attempt, an escalation, a rejected or failed plan, a failed/blocked subtask)? */
+export function taskSetbacks(run: BrainRun, state: { feedback: string[]; rejected: string[]; revision: number }): boolean {
+  const task = run.task;
+  if (!task) return true;
+  if (task.attempts > 1 || (run.escalation?.count ?? 0) > 0) return true;
+  if (state.feedback.length > 0 || state.rejected.length > 0 || state.revision > 0) return true;
+  return run.platform.tasks.children(task.id).some((c) => c.status === "failed" || c.status === "blocked" || c.status === "cancelled");
+}

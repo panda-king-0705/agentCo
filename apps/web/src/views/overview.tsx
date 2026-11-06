@@ -193,6 +193,23 @@ function KillSwitch() {
   );
 }
 
+/** Clears frustration and negative mood company-wide (after a stuck stretch every new task early-stopped). */
+function ResetMood() {
+  const agents = useLive((s) => s.agents);
+  const { busy, run } = useAction();
+  const frustrated = Object.values(agents).filter((a) => a.status !== "terminated" && a.affect && a.affect.frustration > 0.7).length;
+  if (!frustrated) return null;
+  const act = async () => {
+    const res = await run(() => api.resetMood(), "Moods reset");
+    if (res) seed.agents((await api.org()).agents);
+  };
+  return (
+    <Button icon="refresh" onClick={act} disabled={busy} title={`${frustrated} agent(s) are frustrated enough to stop every task early`}>
+      Reset moods ({frustrated})
+    </Button>
+  );
+}
+
 export function Overview() {
   const company = useLive((s) => s.company);
   const agents = useLive((s) => s.agents);
@@ -237,6 +254,7 @@ export function Overview() {
           <Meter value={company.spentTodayUsd} max={s.dailyBudgetUsd} label="Daily budget burn" small />
           <span className="sr-only">{pct(burn)} of daily budget used</span>
         </div>
+        <ResetMood />
         <KillSwitch />
       </PageHead>
 

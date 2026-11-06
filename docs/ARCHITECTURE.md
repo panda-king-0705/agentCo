@@ -343,6 +343,7 @@ GET    /api/health
 GET    /api/company                       CompanySnapshot
 PATCH  /api/company                       Partial<CompanySettings>
 POST   /api/company/pause | /resume       kill switch (aborts running runs)
+POST   /api/company/reset-mood            {reset} (clears every agent's frustration and negative valence)
 GET    /api/org                           OrgResponse
 GET    /api/roles                         RoleTemplate[]
 GET    /api/models                        ModelsInfo
@@ -356,11 +357,11 @@ GET    /api/agents/:id/memory             MemoryItem[] (?q=&kind=)
 GET    /api/conversations                 Conversation[] (?agentId=)
 POST   /api/conversations                 {agentId} → Conversation (get-or-create DM; agentId="ceo" or kind boardroom)
 GET    /api/conversations/:id/messages    Message[] (?after=<iso>)
-POST   /api/conversations/:id/messages    {content} → PostMessageResult
+POST   /api/conversations/:id/messages    {content} → PostMessageResult (a reply where open Board questions were asked answers them: answeredApprovalIds, no chat run)
 GET    /api/tasks                         Task[] (?status=&assigneeId=&rootTaskId=&traceId=)
 POST   /api/tasks                         CreateTaskInput → Task
 GET    /api/tasks/:id                     TaskDetail
-POST   /api/tasks/:id/cancel | /retry     Task
+POST   /api/tasks/:id/cancel | /retry     Task (cancel cascades and closes the tree's pending approvals)
 GET    /api/runs                          Run[] (?agentId=&taskId=&limit=)
 GET    /api/runs/:id                      RunDetail
 POST   /api/runs/:id/cancel               Run   (interrupt)
@@ -368,6 +369,7 @@ GET    /api/traces                        TraceSummary[] (?limit=)
 GET    /api/traces/:traceId               TraceDetail
 GET    /api/approvals                     Approval[] (?status=)
 POST   /api/approvals/:id/decide          DecideApprovalInput → Approval
+POST   /api/approvals/decide-many         DecideManyInput {ids?|kind?, decision, note?} → Approval[]
 GET    /api/blackboard                    BlackboardEntry[]
 PUT    /api/blackboard/:key               {value} → BlackboardEntry
 GET    /api/memory                        MemoryItem[] global (?q=&kind=)

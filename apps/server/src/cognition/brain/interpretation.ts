@@ -118,6 +118,10 @@ export const Q8_HUMAN_NATURE = {
   frustrationDecayOnSuccess: 0.15,
   frustrationOnEscalation: 0.1,
   frustrationOnCancel: 0.05,
+  /** Frustration also relaxes on every Report (tuning) … */
+  frustrationDecayPerRun: 0.1,
+  /** … and halves over this much idle time before the run (tuning): setbacks are not carried forever. */
+  frustrationHalfLifeMs: 2 * 3_600_000,
   /** A report's finished subprocess weighs this much relative to the agent's own outcome (tuning). */
   reportEventWeight: 0.5,
   /** Fatigue: arousal rises with open work and consecutive runs, decays when idle. */

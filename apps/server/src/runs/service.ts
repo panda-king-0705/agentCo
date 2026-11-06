@@ -532,6 +532,7 @@ export class RunService implements RunControl {
           return "error";
         }
         tasks.block(task.id, approvalId, state);
+        this.announceQuestion(task, approvalId, agent, run);
         return "blocked";
       }
       case "failed":
@@ -545,6 +546,31 @@ export class RunService implements RunControl {
     const failed = this.deps.tasks.fail(task.id, error, state);
     if (failed.status === "failed" && !failed.parentTaskId && failed.originConversationId && agent) {
       this.report(failed, agent, run, `I could not complete ${taskRef(failed)}: ${error}`);
+    }
+  }
+
+  /**
+   * A Board question raised under an objective that came from a conversation is posted there once,
+   * so the Board sees it where it asked — and a reply in that conversation answers it
+   * (ApprovalService.answerFromConversation).
+   */
+  private announceQuestion(task: Task, approvalId: string, agent: Agent | null, run: Run): void {
+    const { repos, conversations } = this.deps;
+    const approval = repos.approvals.get(approvalId);
+    if (!approval || approval.kind !== "question" || approval.status !== "pending" || approval.payload.conversationId || !agent) return;
+    const root = task.rootTaskId === task.id ? task : repos.tasks.get(task.rootTaskId);
+    const conversationId = root?.originConversationId;
+    if (!conversationId) return;
+    try {
+      repos.approvals.update(approvalId, { payload: { ...approval.payload, conversationId } });
+      const question = typeof approval.payload.question === "string" ? approval.payload.question : approval.summary;
+      conversations.postAs(conversationId, agent.id, `Question for the Board on ${taskRef(task)}: ${question}\n\nReply here to answer it (or use Approvals).`.slice(0, MAX_MESSAGE_CHARS), {
+        runId: run.id,
+        taskId: task.id,
+        traceId: task.traceId,
+      });
+    } catch (error) {
+      console.error("[runs] could not post the Board question:", error instanceof Error ? error.message : error);
     }
   }
 

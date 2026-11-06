@@ -433,7 +433,7 @@ export interface Approval {
   traceId: string | null;
   summary: string; // one line shown in the queue
   payload: Record<string, unknown>;
-  decidedBy: "human" | null;
+  decidedBy: "human" | "system" | null;
   note: string | null; // the human's answer for kind=question
   createdAt: string;
   decidedAt: string | null;
@@ -608,6 +608,14 @@ export interface TaskDetail {
 export interface PostMessageResult {
   message: Message;
   runId: string | null;
+  /** Open Board questions this reply answered (it then starts no chat run: the answered tasks resume). */
+  answeredApprovalIds?: string[];
+}
+
+/** POST /api/approvals/decide-many: bulk triage of the Board's queue. */
+export interface DecideManyInput extends DecideApprovalInput {
+  ids?: string[];
+  kind?: ApprovalKind;
 }
 
 export interface RunDetail {
