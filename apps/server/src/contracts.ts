@@ -355,6 +355,8 @@ export interface PlatformServices {
   agents: AgentStateWriter;
   /** Optional so test fakes and older wiring keep working; the real platform always provides it. */
   catalog?: CatalogView;
+  /** The company handbook (org/handbook.ts), personalised for an agent; optional for test fakes. */
+  handbook?: (agent: Agent | null) => string;
   now(): Date;
 }
 

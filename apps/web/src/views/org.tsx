@@ -7,6 +7,7 @@ import { Avatar, Badge, Button, CognitionBadge, ConfirmDialog, Field, Icon, Icon
 import type { Agent, AgentTier, CognitionKind, CreateAgentInput, DestroyAgentResult, ModelTier } from "../types";
 import { PageHead, liveAgents } from "./common";
 import { CatalogPicker } from "./catalog";
+import { Markdown } from "../ui/markdown";
 
 export function useAgentActions() {
   const { busy, run } = useAction();
@@ -373,11 +374,23 @@ function ZoomControls({ zoom, fit, setZoom }: { zoom: number | null; fit: number
   );
 }
 
+/** The company handbook every new hire gets from its manager (generated live on the server). */
+function HandbookModal({ onClose }: { onClose: () => void }) {
+  const hb = useApi("handbook", () => api.handbook());
+  return (
+    <Modal title="Company handbook" onClose={onClose} width={720}>
+      <p className="muted small">Every new hire finds this in its inbox from its manager, and any agent can re-read it with the company_handbook tool. It is generated from live data: the org, open objectives and key company knowledge.</p>
+      {hb.data ? <Markdown text={hb.data.text} /> : <p className="muted small">Loading…</p>}
+    </Modal>
+  );
+}
+
 export function OrgView() {
   const agents = useLive((s) => s.agents);
   const departments = useLive((s) => s.departments);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [hiring, setHiring] = useState(false);
+  const [handbook, setHandbook] = useState(false);
   const [modeChoice, setModeChoice] = useState<Mode | null>(readMode);
   const [zoom, setZoom] = useState<number | null>(null);
   const [fit, setFit] = useState(1);
@@ -413,6 +426,7 @@ export function OrgView() {
             <Button size="sm" onClick={() => setCollapsed(new Set())} disabled={!collapsed.size}>Expand all</Button>
           </>
         ) : null}
+        <Button onClick={() => setHandbook(true)} title="What every new hire receives on day one">Handbook</Button>
         <Button variant="primary" icon="plus" onClick={() => setHiring(true)}>Hire agent</Button>
       </PageHead>
       <div className="legend row wrap small">
@@ -424,6 +438,7 @@ export function OrgView() {
       {mode === "overview" ? <OrgOverview tree={tree} actions={actions} /> : <OrgTree tree={tree} collapsed={collapsed} toggle={toggle} actions={actions} zoom={zoom} setZoom={setZoom} fit={fit} setFit={setFit} />}
       {actions.dialogs}
       {hiring ? <HireModal onClose={() => setHiring(false)} /> : null}
+      {handbook ? <HandbookModal onClose={() => setHandbook(false)} /> : null}
     </>
   );
 }

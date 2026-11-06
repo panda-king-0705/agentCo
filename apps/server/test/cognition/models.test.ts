@@ -76,6 +76,11 @@ test("json: robust parsing of model output", () => {
   assert.equal(parseJsonObject("[1,2,3]"), null);
   assert.equal(parseJsonObject("not json at all"), null);
   assert.equal(parseJsonObject(""), null);
+  // A reply cut off mid-object is NOT parsed into one of its nested objects (live: a truncated plan came
+  // back as its first candidate, dropping mode and subprocesses) — null, so llmJson repairs it.
+  const cut = '{"mode":"delegate","subprocesses":[{"title":"Marketing","assigneeId":"agt_cmo"}],"candidates":[{"name":"high_cost","approach":"x","estCostUsd":0.1},{"name":"low_co';
+  assert.equal(parseJsonObject(cut), null);
+  assert.equal(parseJsonObject("```json\n" + cut), null);
   assert.deepEqual(parseToolArguments('{"path":"a.md"}'), { path: "a.md" });
   assert.deepEqual(parseToolArguments("{oops"), { _raw: "{oops" });
 });

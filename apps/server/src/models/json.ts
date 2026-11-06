@@ -41,15 +41,19 @@ export function parseJsonObject(text: string | null | undefined): Record<string,
   } catch {
     /* fall through to scanning */
   }
-  for (let i = s.indexOf("{"); i >= 0; i = s.indexOf("{", i + 1)) {
+  // Top-level objects only. An object that opens but never closes means the reply was CUT OFF: return
+  // null (the caller repairs/retries) instead of a nested fragment of it — a truncated plan used to
+  // come back as its first candidate object, silently dropping the mode and every subprocess.
+  for (let i = s.indexOf("{"); i >= 0; ) {
     const end = balancedObjectEnd(s, i);
-    if (end < 0) continue;
+    if (end < 0) return null;
     try {
       const obj = asObject(JSON.parse(s.slice(i, end)));
       if (obj) return obj;
     } catch {
-      /* try the next "{" */
+      /* a balanced but invalid {...} (e.g. "{name}" in prose): skip past it, not into it */
     }
+    i = s.indexOf("{", end);
   }
   return null;
 }

@@ -1,5 +1,5 @@
 /** Tool definition shape for the built-in registry. */
-import type { AgentTier } from "../../../../packages/shared/src/index.ts";
+import type { Agent, AgentTier } from "../../../../packages/shared/src/index.ts";
 import type { SpanHandle, ToolCallContext, ToolEffect, ToolResult } from "../contracts.ts";
 import type { AppConfig } from "../config.ts";
 import type { MemoryServiceImpl } from "../memory/service.ts";
@@ -24,6 +24,8 @@ export interface ToolServices {
   tracer: TracerImpl;
   /** The specialist catalog (catalog_search, hire_agent with catalogId); optional for test wiring. */
   catalog?: Catalog;
+  /** The company handbook for an agent (company_handbook); optional for test wiring. */
+  handbook?: (agent: Agent | null) => string;
 }
 
 export interface ToolRunContext extends ToolCallContext {

@@ -124,6 +124,7 @@ export const api = {
   pauseCompany: () => post<unknown>("/api/company/pause"),
   resumeCompany: () => post<unknown>("/api/company/resume"),
   resetMood: () => post<{ reset: number }>("/api/company/reset-mood"),
+  handbook: (agentId?: string) => get<{ text: string }>("/api/handbook", agentId ? { agentId } : undefined),
   org: () => get<OrgResponse>("/api/org"),
   roles: () => get<RoleTemplate[]>("/api/roles"),
   models: () => get<ModelsInfo>("/api/models"),
@@ -168,7 +169,7 @@ export const api = {
 /** Every route the console calls — kept here so the backend can be checked against it. */
 export const ROUTES_USED = [
   "GET /api/health",
-  "GET /api/company", "PATCH /api/company", "POST /api/company/pause", "POST /api/company/resume", "POST /api/company/reset-mood",
+  "GET /api/company", "PATCH /api/company", "POST /api/company/pause", "POST /api/company/resume", "POST /api/company/reset-mood", "GET /api/handbook",
   "GET /api/org", "GET /api/roles", "GET /api/models",
   "GET /api/agents", "POST /api/agents", "GET /api/agents/:id", "PATCH /api/agents/:id",
   "POST /api/agents/:id/pause", "POST /api/agents/:id/resume", "DELETE /api/agents/:id", "GET /api/agents/:id/memory",

@@ -10,6 +10,10 @@ versioning: [SemVer](https://semver.org/).
   position from the OLDEST events and replayed days-old updates over the current state.
   `/api/events` without `since` now returns the newest events, and the console ignores updates
   older than what it holds.
+- Plans cut off mid-reply lost every subprocess (the leader then did everything itself): the JSON
+  extractor returned the first nested object of a truncated reply; it now returns nothing, so the
+  stage is repaired and retried, and planning gets more output room. Cross-department work is
+  delegated one part per owning report.
 - Agents now know today's date and time (TZ); a department or role named in the request ("have
   Finance…") decides who gets the work.
 - Overview: "Spend today" / "Spend this month" and the daily budget bar stayed at the value
@@ -47,6 +51,9 @@ versioning: [SemVer](https://semver.org/).
   and limit Board questions to irreversible, external or out-of-mandate decisions.
 
 ### Added
+- Onboarding: a company handbook generated from live data (mission, who's who with ids, how work
+  flows, budgets, open objectives, key knowledge). Every new hire gets it from its manager on day
+  one; any agent can re-read it (`company_handbook`); the Board sees it on the Org page.
 - Company directory: every agent can look colleagues up (`company_directory`, granted to all) and
   address them by id, name, title, role word ("cfo") or "manager" in `send_message` and
   `delegate_task`; each charter lists the agent's manager, the CEO and its reports with ids.

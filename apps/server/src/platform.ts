@@ -5,7 +5,7 @@
  *   createPlatform(config, overrides) is the only place concrete classes meet;
  *   tests inject fake engines / a fake model router through `overrides`.
  */
-import type { CognitionKind, CompanySnapshot, ModelsInfo } from "../../../packages/shared/src/index.ts";
+import type { Agent, CognitionKind, CompanySnapshot, ModelsInfo } from "../../../packages/shared/src/index.ts";
 import type { AppConfig } from "./config.ts";
 import type { CognitiveEngine, ModelProvider, ModelRouter, ModelRouterDeps, PlatformServices } from "./contracts.ts";
 import { openDatabase, type Db } from "./db/index.ts";
@@ -33,6 +33,7 @@ import { TaskService } from "./tasks/service.ts";
 import { ToolExecutorImpl } from "./tools/registry.ts";
 import { Workspaces } from "./tools/workspace.ts";
 import { join } from "node:path";
+import { buildHandbook, type HandbookSource } from "./org/handbook.ts";
 
 export interface PlatformOverrides {
   /** Defaults to createEngines() from ./cognition/index.ts. */
@@ -114,7 +115,26 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const tasks = new TaskService({ repos, bus, tracer, org, conversations, now, redactor });
   org.attachTaskReassigner((taskId, assigneeId, reason) => tasks.reassign(taskId, assigneeId, reason));
   const approvals = new ApprovalService({ repos, bus, org, tasks, company, now, redactor });
-  tools.bind({ config, org, tasks, approvals, conversations, memory, workspaces, company, tracer, catalog });
+  // The company handbook (org/handbook.ts): generated from live data, for agents (tool, welcome) and the console.
+  const handbookSource: HandbookSource = {
+    settings: () => company.settings(),
+    org,
+    openObjectives: (limit) =>
+      repos.tasks
+        .list({ archived: "exclude", limit: 1000 })
+        .filter((t) => !t.parentTaskId && !["done", "failed", "cancelled"].includes(t.status))
+        .sort((a, b) => b.priority - a.priority || b.number - a.number)
+        .slice(0, limit),
+    keyKnowledge: (limit) =>
+      repos.memories
+        .recent({ agentId: null, scopes: ["global"], kinds: ["semantic", "procedural"] }, limit * 4)
+        .sort((a, b) => b.importance - a.importance || b.accessCount - a.accessCount)
+        .slice(0, limit),
+    blackboardKeys: () => repos.blackboard.list().map((b) => b.key),
+    now,
+  };
+  const handbook = (agent: Agent | null) => buildHandbook(handbookSource, agent);
+  tools.bind({ config, org, tasks, approvals, conversations, memory, workspaces, company, tracer, catalog, handbook });
 
   const modelConfig = overrides.createRouter && overrides.modelsInfo ? null : loadModelConfig(env);
   const routerDeps: ModelRouterDeps = { config: modelConfig, tracer, budget, getAgent: (id) => org.getAgent(id) };
@@ -124,7 +144,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const modelsInfo = overrides.modelsInfo ?? (() => buildModelsInfo(modelConfig ?? loadModelConfig(env)));
 
   const metrics = new MetricsService(repos, now);
-  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, now };
+  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, now };
   const engines = overrides.engines ?? (await loadEngines(config));
   const governor = new ContextGovernor(repos.settings, { dataDir: config.dataDir, triggerPct: config.contextTriggerPct, carryTurns: config.contextCarryTurns }, now);
   const runs = new RunService({
@@ -144,6 +164,20 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   if (bootstrapResult && !bootstrapResult.created) org.backfillCatalog();
   // An explicit MANAGER_MODEL_TIER also re-tiers managers created before it was set (like company env overrides).
   if (config.explicitKeys.has("MANAGER_MODEL_TIER")) org.applyManagerModelTier(config.managerModelTier);
+
+  // Onboarding: every agent hired from now on finds the handbook in its inbox, from its manager, on day one.
+  bus.subscribe((ev) => {
+    if (ev.type !== "agent.created" || !ev.agentId) return;
+    try {
+      const hire = org.getAgent(ev.agentId);
+      if (!hire || hire.status === "terminated") return;
+      const from = (hire.managerId ? org.getAgent(hire.managerId) : null) ?? org.listActiveAgents().find((a) => !a.managerId && a.id !== hire.id) ?? null;
+      if (!from) return;
+      conversations.sendAgentMessage(from, hire, `Welcome to ${company.settings().name}, ${hire.name}! Here is how we work — re-read it any time with company_handbook.\n\n${handbook(hire)}`);
+    } catch (error) {
+      console.error("[onboarding] welcome message failed:", error instanceof Error ? error.message : error);
+    }
+  });
 
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let lastBeat = now().getTime();
