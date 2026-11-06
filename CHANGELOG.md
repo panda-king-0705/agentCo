@@ -19,12 +19,17 @@ versioning: [SemVer](https://semver.org/).
 - Low confidence alone no longer escalates: on a first, reversible attempt with no outside
   blocker the agent proceeds on stated assumptions; escalations ask for the named blocker.
   The confidence step now sees the agent's tools (agents claimed "no memory_write tool").
+- Anthropic JSON calls: no `response_format: json_object` (its endpoint only accepts
+  `json_schema`); any provider rejecting `response_format` is retried without it.
+- The task-OOD insight no longer tells leaders to delegate everything new.
 - Leaders do quick own-tool tasks themselves (mode "direct") and answer reports' escalations
   directly instead of fanning them out.
 - Leaders' charters name the company's own stores (knowledge base, blackboard, workspace)
   and limit Board questions to irreversible, external or out-of-mandate decisions.
 
 ### Added
+- `scripts/maintenance/archive-stale-memory.mjs`: reversibly archive memories, blackboard entries
+  and workspace files that teach a stalled habit (docs/DEPLOY.md › Maintenance).
 - Approvals: answer or dismiss all open questions at once (`POST /api/approvals/decide-many`).
 - Overview: "Reset moods" when agents are frustrated (`POST /api/company/reset-mood`).
 

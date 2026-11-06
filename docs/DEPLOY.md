@@ -258,6 +258,24 @@ Rules: HTTPS only (a TLS reverse proxy in front), the token always required, por
 5. Open `https://agentco.example.com` and paste the token. Back up and update exactly as in (b), using the same
    two `-f` files for `up`.
 
+## Maintenance: archiving stale company memory
+
+Agents learn from what they did: lessons, episodes, blackboard notes and workspace files are recalled
+into every new task. After a bad stretch (for example the question loop of 2026-11-06) that memory keeps
+teaching the old habit. `scripts/maintenance/archive-stale-memory.mjs` moves it out of the agents' reach
+without deleting anything. Pause the company first, then from the repo folder:
+
+```powershell
+docker cp scripts/maintenance/archive-stale-memory.mjs agentco-agentco-1:/tmp/archive.mjs
+docker exec agentco-agentco-1 node /tmp/archive.mjs            # dry run: what would move, and why
+docker exec agentco-agentco-1 node /tmp/archive.mjs --apply    # archive; prints the stamp
+docker exec agentco-agentco-1 node /tmp/archive.mjs --restore <stamp>   # undo
+```
+
+Archived memories and blackboard entries go to the `memories_archive` / `blackboard_archive` tables of
+the same database; files go to `/data/archive/<stamp>/` with a `manifest.json`. All of it stays in the
+`agentco-data` volume and its backups.
+
 ## Costs
 
 Hosting is small and fixed: the founder's PC (electricity) for (b), or roughly $6.5–€16 a month for a VPS in (c).
