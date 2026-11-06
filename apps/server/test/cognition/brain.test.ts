@@ -430,6 +430,27 @@ test("brain: TODO list interrupt → yielded with checkpoint; the next run resum
   assert.equal((resumed.taskState as Record<string, unknown>).checkpoint, null);
 });
 
+test("brain: low confidence on a fresh, reversible task with no outside blocker proceeds on stated assumptions (no question)", async () => {
+  const provider = withOverrides({ "metacognition.confidence": () => ({ confidence: 0.05, uncertainty: 0.9, risks: ["target record unknown"], blocker: null, irreversible: false }) });
+  const { p, ceo } = company({ providers: { mock: provider } });
+  const task = rootTask(p, ceo.id, "Record my custodian ID U123 in the knowledge base", "Record it.");
+  const r = await brain().run(p.context(ceo, taskInput(task)));
+  assert.notEqual(r.outcome, "blocked");
+  assert.equal(p.approvals.length, 0, "no Board question");
+  assert.ok(p.tracer.spans.some((s) => s.attributes["agentco.early_stop.proceed_on_assumptions"] === true));
+});
+
+test("brain: low confidence still stops for an irreversible action or a named outside blocker — and asks for exactly that", async () => {
+  for (const extra of [{ blocker: null, irreversible: true }, { blocker: "the brokerage account number", irreversible: false }]) {
+    const provider = withOverrides({ "metacognition.confidence": () => ({ confidence: 0.05, uncertainty: 0.9, risks: ["r1"], ...extra }) });
+    const { p, ceo } = company({ providers: { mock: provider } });
+    const task = rootTask(p, ceo.id);
+    const r = await brain().run(p.context(ceo, taskInput(task)));
+    assert.equal(r.outcome, "blocked", JSON.stringify(extra));
+    if (extra.blocker) assert.match(String(p.approvals[0]!.payload.question), /Needed: the brokerage account number/);
+  }
+});
+
 test("brain: human_answer resumes with the answer in local working memory; Board approval overrides a low-confidence stop", async () => {
   const provider = withOverrides({ "metacognition.confidence": () => ({ confidence: 0.1, uncertainty: 0.8 }) });
   const { p, ceo } = company({ providers: { mock: provider } });

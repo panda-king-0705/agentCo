@@ -136,7 +136,8 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
             ? `Your direct reports:\n${reports.map((r) => `- ${r.id}: ${r.title} — ${oneLine(r.identity.mission, 120)}`).join("\n")}\n` +
               `Decompose into at most ${max} subprocesses, each for ONE report (assigneeId), with value 0-1000, estCostUsd and acceptanceCriteria; mode "delegate". ` +
               (a.preferDelegation ? "Prefer delegating: your own competence is limited here. " : "") +
-              `Use mode "direct" with no subprocesses only if you can do it yourself quickly.\n`
+              `Use mode "direct" (no subprocesses) when you can do it yourself quickly with your own tools — e.g. recording a fact, a short note or decision, a lookup — never split such a task across reports.\n` +
+              (task.state.kind === "escalation" ? 'This is a report\'s escalation: answer it yourself (mode "direct") with a decision or guidance unless the fix needs another report\'s work.\n' : "")
             : `You have no one to delegate to: mode "direct", subprocesses are your own steps (at most ${max}).\n`) +
           (a.feedback.length ? `Address this feedback: ${a.feedback.join("; ")}\n` : "") +
           (a.lessons.length ? `From past runs:\n${a.lessons.slice(0, 5).map((l) => `- ${l}`).join("\n")}\n` : "") +

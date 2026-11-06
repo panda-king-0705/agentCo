@@ -23,7 +23,7 @@ import { oneLine, truncate } from "../text.ts";
 import { canEscalate, escalationSettled, readEscalation } from "./escalation.ts";
 import { writeReport } from "./global-memory.ts";
 import { CANDIDATE_NAMES, Q2_OOD, Q3_FALLBACK, Q4_CONTROL, Q8_HUMAN_NATURE, type CandidateName } from "./interpretation.ts";
-import { assessConfidence, fallbackTarget, shouldEarlyStop, type ConfidenceAssessment, type FallbackTarget } from "./metacognition/confidence.ts";
+import { assessConfidence, fallbackTarget, proceedOnAssumptions, shouldEarlyStop, type ConfidenceAssessment, type FallbackTarget } from "./metacognition/confidence.ts";
 import { cognitiveControl, type ControlOutput, type Subprocess } from "./metacognition/cognitive-control.ts";
 import { oodMonitoring, reverseThinking, updateCalibration, type OodReport } from "./metacognition/monitoring.ts";
 import {
@@ -435,13 +435,19 @@ export class BrainEngine implements CognitiveEngine {
     const setbacks = taskSetbacks(run, state);
     const drives = setbacks ? run.drives : { ...run.drives, frustrationGate: false };
     if (run.drives.frustrationGate && !setbacks) run.ctx.span.setAttributes({ "agentco.frustration_gate.fresh_task": true });
-    const stop = shouldEarlyStop(u.confidence.calibrated, drives);
+    let stop = shouldEarlyStop(u.confidence.calibrated, drives);
+    if (stop.stop && !drives.frustrationGate && proceedOnAssumptions(u.confidence, setbacks)) {
+      run.ctx.span.setAttributes({ "agentco.early_stop.proceed_on_assumptions": true, "agentco.early_stop.skipped_reason": stop.reason });
+      run.wm.assumptions = u.confidence.risks.slice(0, 3);
+      stop = { stop: false, reason: "" };
+    }
     // A manager's or the Board's answer to this task settles it even through the frustration gate,
     // and so does a spent escalation budget: proceed with the guidance (no re-escalation loop).
     const answered = state.managerAnswered || run.escalation?.answered === true;
     if (stop.stop && !(answered || (state.boardApproved && !drives.frustrationGate))) {
       if (!escalationSettled(run)) {
-        return this.escalateOutcome(run, `Early stop on T-${task.number}: ${stop.reason}. Risks: ${u.confidence.risks.join("; ") || "unclear"}`, u.confidence.calibrated);
+        const need = u.confidence.blocker ? `Needed: ${u.confidence.blocker}` : `Risks: ${u.confidence.risks.join("; ") || "unclear"}`;
+        return this.escalateOutcome(run, `Early stop on T-${task.number}: ${stop.reason}. ${need}`, u.confidence.calibrated);
       }
     }
     if (stop.stop) run.ctx.span.setAttributes({ "agentco.early_stop.settled": true });
@@ -474,7 +480,9 @@ export class BrainEngine implements CognitiveEngine {
           mode: planned.control.mode,
           subprocesses: planned.control.subprocesses,
           candidate: planned.chosen,
-          problem: u.problem.problem,
+          problem: Array.isArray(run.wm.assumptions) && run.wm.assumptions.length
+            ? `${u.problem.problem}\nProceed on reasonable assumptions and state them in your result (open points: ${(run.wm.assumptions as string[]).join("; ")}).`
+            : u.problem.problem,
           successCriteria: u.problem.successCriteria,
           memory: u.literature,
           existingTitles,

@@ -30,6 +30,13 @@ export interface ConfidenceAssessment {
   understandingEval: Evaluation;
   competenceEval: Evaluation;
   pressurePenalty: number;
+  /**
+   * The one fact or decision only someone else can supply. `null` = a reasonable, stated
+   * assumption lets the agent proceed; `undefined` = the model did not say (treated as a blocker).
+   */
+  blocker: string | null | undefined;
+  /** Acting wrongly could not be undone inside the company (money, outside accounts, deletion, commitments). */
+  irreversible: boolean;
 }
 
 function coerceEval(v: unknown, defaultScore: number, defaultGaps: string[]): Evaluation {
@@ -56,6 +63,8 @@ export function coerceConfidence(
     understandingEval: coerceEval(json.understandingEval, defaults.understanding.score, defaults.understanding.gaps),
     competenceEval: coerceEval(json.competenceEval, defaults.competence.score, defaults.competence.gaps),
     pressurePenalty,
+    blocker: json.blocker === null ? null : typeof json.blocker === "string" && json.blocker.trim() ? truncate(json.blocker.trim(), 300) : json.blocker === "" ? null : undefined,
+    irreversible: json.irreversible === true,
   };
 }
 
@@ -76,8 +85,13 @@ export async function assessConfidence(
         `Competence (${competence.score.toFixed(2)}); gaps: ${competence.gaps.join("; ") || "none"}\nUnknowns: ${problem.unknowns.join("; ") || "none"}\n` +
         (ood.taskOod ? "This is new territory for you (no similar past episodes).\n" : "") +
         (pressure.length ? `Constraint pressure: ${pressure.join("; ")}\n` : "") +
+        `Tools you can use when solving: ${competence.tools.join(", ") || "none"}.\n` +
+        "Confidence = the chance that your best attempt, with these tools and clearly stated assumptions, meets the success criteria — not certainty. " +
+        "Missing context you can fill with a reasonable assumption, or by looking it up / recording it with your tools, does not make it low. " +
+        "blocker = the ONE fact or decision only the Board or another person can give (null if you can proceed on assumptions); " +
+        "irreversible = true only if a wrong action could not be undone inside the company (real money, outside accounts, deleting data, external commitments).\n" +
         "Estimate confidence of success and uncertainty (0-1), the top risks, and evaluate your understanding and your competence for this task: each {score 0-1, gaps[] = what is missing}.",
-      shape: '{"confidence":number,"uncertainty":number,"risks":string[],"understandingEval":{"score":number,"gaps":string[]},"competenceEval":{"score":number,"gaps":string[]}}',
+      shape: '{"confidence":number,"uncertainty":number,"risks":string[],"blocker":string|null,"irreversible":boolean,"understandingEval":{"score":number,"gaps":string[]},"competenceEval":{"score":number,"gaps":string[]}}',
       context: { mode: "task", ood: ood.taskOod, pressure: ood.pressure.map((p) => p.kind), task: run.task ? { title: run.task.title } : undefined },
       maxOutputTokens: 350,
     });
@@ -94,6 +108,8 @@ export async function assessConfidence(
       "agentco.eval.understanding": c.understandingEval.score,
       "agentco.eval.competence": c.competenceEval.score,
       "agentco.pressure_penalty": c.pressurePenalty,
+      "agentco.irreversible": c.irreversible,
+      ...(c.blocker === undefined ? {} : { "agentco.blocker": c.blocker ?? "none" }),
     });
     return { ...c, calibrated };
   });
@@ -106,6 +122,16 @@ export function fallbackTarget(a: Pick<ConfidenceAssessment, "understandingEval"
   if (a.understandingEval.score < Q3_FALLBACK.evaluationBelow && !used.has("target_understanding")) return "target_understanding";
   if (a.competenceEval.score < Q3_FALLBACK.evaluationBelow && !used.has("self_ability")) return "self_ability";
   return null;
+}
+
+/**
+ * Low confidence alone is not worth a question: on a first attempt at a reversible task with no
+ * outside blocker the agent proceeds on stated assumptions (live models rate any unknown near 0
+ * and every early stop became a Board question). Frustration, setbacks, an irreversible action or a
+ * blocker only someone else can resolve keep the early stop.
+ */
+export function proceedOnAssumptions(a: Pick<ConfidenceAssessment, "blocker" | "irreversible">, setbacks: boolean): boolean {
+  return !setbacks && !a.irreversible && a.blocker === null;
 }
 
 /** Early Stop?: calibrated confidence below the threshold, or frustration over the limit. */
