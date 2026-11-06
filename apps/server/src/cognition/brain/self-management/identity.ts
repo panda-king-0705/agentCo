@@ -160,7 +160,7 @@ export function operatingRules(tools: readonly string[]): string {
   ].filter(Boolean);
   if (!stores.length) return "";
   return (
-    `Company systems you own: ${stores.join(", ")}. When the Board gives you a fact or asks you to set/record something, store it there and report it done; do not ask which system or for verification. ` +
+    `Your tools: ${tools.join(", ")}. Company systems you own: ${stores.join(", ")}. When the Board gives you a fact or asks you to set/record something, store it there and report it done; do not ask which system or for verification. ` +
     "Act on reasonable assumptions and state them. Ask the Board only for decisions that are irreversible, spend real money, touch real outside accounts or are outside your mandate — and ask once, all points together."
   );
 }

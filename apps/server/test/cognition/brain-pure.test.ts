@@ -209,3 +209,18 @@ test("OKRs, insights recall and recovery inspection", () => {
   assert.equal(r.open.length, 1);
   assert.deepEqual(r.existingTitles, ["a", "b"]);
 });
+
+test("confidence: blocker / irreversible parsing (missing blocker = treated as a blocker) and the proceed rule", async () => {
+  const { coerceConfidence, proceedOnAssumptions } = await import("../../src/cognition/brain/metacognition/confidence.ts");
+  const d = { understanding: { score: 0.5, gaps: [] }, competence: { score: 0.5, gaps: [] } };
+  const o = { taskOod: false, pressureSignals: 0 };
+  assert.equal(coerceConfidence({ confidence: 0.1 }, d, o).blocker, undefined);
+  assert.equal(coerceConfidence({ confidence: 0.1, blocker: null }, d, o).blocker, null);
+  assert.equal(coerceConfidence({ confidence: 0.1, blocker: "" }, d, o).blocker, null);
+  assert.equal(coerceConfidence({ confidence: 0.1, blocker: "the account" }, d, o).blocker, "the account");
+  assert.equal(coerceConfidence({ confidence: 0.1, irreversible: "yes" }, d, o).irreversible, false, "only a real true counts");
+  assert.equal(proceedOnAssumptions({ blocker: null, irreversible: false }, false), true);
+  assert.equal(proceedOnAssumptions({ blocker: null, irreversible: false }, true), false, "setbacks keep the stop");
+  assert.equal(proceedOnAssumptions({ blocker: undefined, irreversible: false }, false), false);
+  assert.equal(proceedOnAssumptions({ blocker: null, irreversible: true }, false), false);
+});

@@ -16,6 +16,11 @@ versioning: [SemVer](https://semver.org/).
   tree's pending approvals.
 - Board questions raised under a chat objective are posted in that chat, and the Board's
   reply there answers them (the blocked work resumes) instead of starting an unrelated run.
+- Low confidence alone no longer escalates: on a first, reversible attempt with no outside
+  blocker the agent proceeds on stated assumptions; escalations ask for the named blocker.
+  The confidence step now sees the agent's tools (agents claimed "no memory_write tool").
+- Leaders do quick own-tool tasks themselves (mode "direct") and answer reports' escalations
+  directly instead of fanning them out.
 - Leaders' charters name the company's own stores (knowledge base, blackboard, workspace)
   and limit Board questions to irreversible, external or out-of-mandate decisions.
 
