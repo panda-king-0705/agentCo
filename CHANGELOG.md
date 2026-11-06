@@ -21,6 +21,9 @@ versioning: [SemVer](https://semver.org/).
   The confidence step now sees the agent's tools (agents claimed "no memory_write tool").
 - Anthropic JSON calls: no `response_format: json_object` (its endpoint only accepts
   `json_schema`); any provider rejecting `response_format` is retried without it.
+- Escalations carry the stuck task's own text (and the original request): a manager answering one
+  no longer concludes "the ID was not supplied" when it was in the very task that escalated. Board
+  questions show what their objective is about.
 - The task-OOD insight no longer tells leaders to delegate everything new.
 - Out of tool steps, Solving (and a worker on its last model tier) gets one final no-tools call
   for the result from what it gathered, instead of discarding the run as "no result".
