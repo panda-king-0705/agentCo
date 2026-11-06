@@ -4,7 +4,7 @@ import type {
   CreateAgentInput, CreateTaskInput, DecideApprovalInput, DecideManyInput, DestroyAgentResult, MemoryItem, MemoryKind, Message,
   MetricsOverview, ModelsInfo, OrgResponse, PostMessageResult, RoleTemplate, Run, RunDetail, Task, TaskDetail,
   TaskStatus, AgentStatus, TimeseriesPoint, TraceDetail, TraceSummary, UpdateAgentInput, ApprovalStatus,
-  CatalogAgentDetail, CatalogListResponse,
+  CatalogAgentDetail, CatalogListResponse, ArchiveResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -139,11 +139,13 @@ export const api = {
   openConversation: (agentId: string) => post<Conversation>("/api/conversations", { agentId }),
   messages: (conversationId: string, after?: string) => get<Message[]>(`/api/conversations/${id(conversationId)}/messages`, { after }),
   postMessage: (conversationId: string, content: string) => post<PostMessageResult>(`/api/conversations/${id(conversationId)}/messages`, { content }),
-  tasks: (q?: { status?: TaskStatus; assigneeId?: string; rootTaskId?: string; traceId?: string }) => get<Task[]>("/api/tasks", q),
+  tasks: (q?: { status?: TaskStatus; assigneeId?: string; rootTaskId?: string; traceId?: string; archived?: "exclude" | "include" | "only" }) => get<Task[]>("/api/tasks", q),
   createTask: (input: CreateTaskInput) => post<Task>("/api/tasks", input),
   task: (taskId: string) => get<TaskDetail>(`/api/tasks/${id(taskId)}`),
   cancelTask: (taskId: string) => post<Task>(`/api/tasks/${id(taskId)}/cancel`),
   retryTask: (taskId: string) => post<Task>(`/api/tasks/${id(taskId)}/retry`),
+  archiveFinished: () => post<ArchiveResult>("/api/tasks/archive-finished"),
+  unarchiveTasks: (batch: string | null) => post<ArchiveResult>("/api/tasks/unarchive", batch ? { batch } : {}),
   runs: (q?: { agentId?: string; taskId?: string; limit?: number }) => get<Run[]>("/api/runs", q),
   run: (runId: string) => get<RunDetail>(`/api/runs/${id(runId)}`),
   cancelRun: (runId: string) => post<Run>(`/api/runs/${id(runId)}/cancel`),
@@ -171,7 +173,7 @@ export const ROUTES_USED = [
   "GET /api/agents", "POST /api/agents", "GET /api/agents/:id", "PATCH /api/agents/:id",
   "POST /api/agents/:id/pause", "POST /api/agents/:id/resume", "DELETE /api/agents/:id", "GET /api/agents/:id/memory",
   "GET /api/conversations", "POST /api/conversations", "GET /api/conversations/:id/messages", "POST /api/conversations/:id/messages",
-  "GET /api/tasks", "POST /api/tasks", "GET /api/tasks/:id", "POST /api/tasks/:id/cancel", "POST /api/tasks/:id/retry",
+  "GET /api/tasks", "POST /api/tasks", "GET /api/tasks/:id", "POST /api/tasks/:id/cancel", "POST /api/tasks/:id/retry", "POST /api/tasks/archive-finished", "POST /api/tasks/unarchive",
   "GET /api/runs", "GET /api/runs/:id", "POST /api/runs/:id/cancel",
   "GET /api/traces", "GET /api/traces/:traceId",
   "GET /api/approvals", "POST /api/approvals/:id/decide", "POST /api/approvals/decide-many",

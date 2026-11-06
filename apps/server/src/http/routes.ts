@@ -160,8 +160,16 @@ export function buildRouter(platform: Platform): Router {
       ...opt("rootTaskId", query.get("rootTaskId")),
       ...opt("traceId", query.get("traceId")),
       ...(query.get("limit") ? { limit: intParam(query, "limit", 500) } : {}),
+      // Cleared (archived) trees are hidden from the board unless asked for.
+      archived: archivedParam(query.get("archived")),
     }),
   );
+  router.post("/api/tasks/archive-finished", () => tasks.archiveFinished());
+  router.post("/api/tasks/unarchive", ({ body }) => {
+    const input = body === undefined || body === null ? {} : object(body);
+    if (input.batch !== undefined && input.batch !== null && typeof input.batch !== "string") throw badRequest("batch must be a string");
+    return tasks.unarchive(typeof input.batch === "string" ? input.batch : null);
+  });
   router.post("/api/tasks", ({ body }) => created(tasks.createRoot(object(body) as unknown as CreateTaskInput, "human")));
   router.get("/api/tasks/:id", ({ params }): TaskDetail => {
     const task = tasks.require(param(params, "id"));
@@ -268,6 +276,12 @@ function param(params: RouteContext["params"], name: string): string {
 /** `{ key: value }` when the query value is non-empty, else `{}` (exactly-optional filters). */
 function opt<K extends string>(key: K, value: string | null): { [P in K]?: string } {
   return value ? ({ [key]: value } as { [P in K]?: string }) : {};
+}
+
+function archivedParam(raw: string | null): "include" | "exclude" | "only" {
+  if (raw === null || raw === "" || raw === "exclude") return "exclude";
+  if (raw === "include" || raw === "only") return raw;
+  throw badRequest('archived must be "exclude", "include" or "only"');
 }
 
 function intParam(query: URLSearchParams, name: string, fallback: number): number {

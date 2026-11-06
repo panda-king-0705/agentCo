@@ -76,6 +76,8 @@ export const seed = {
   agents: (list: Agent[]) => set({ agents: byId(list, state.agents) }),
   agent: (a: Agent) => set({ agents: { ...state.agents, [a.id]: a } }),
   tasks: (list: Task[]) => set({ tasks: byId(list, state.tasks) }),
+  /** Replace (not merge) the task list — after clearing finished work the archived ones must go. */
+  replaceTasks: (list: Task[]) => set({ tasks: byId(list) }),
   runs: (list: Run[]) => set({ runs: byId(list, state.runs) }),
   spans: (list: Span[]) => set({ spans: byId(list, state.spans) }),
   approvals: (list: Approval[]) => set({ approvals: byId(list, state.approvals) }),

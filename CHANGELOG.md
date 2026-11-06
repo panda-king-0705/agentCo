@@ -6,6 +6,12 @@ versioning: [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Console showed cancelled tasks "In progress" and stale agent states: on load it seeded its event
+  position from the OLDEST events and replayed days-old updates over the current state.
+  `/api/events` without `since` now returns the newest events, and the console ignores updates
+  older than what it holds.
+- Agents now know today's date and time (TZ); a department or role named in the request ("have
+  Finance…") decides who gets the work.
 - Overview: "Spend today" / "Spend this month" and the daily budget bar stayed at the value
   loaded with the page; the console now refreshes the company snapshot after model calls,
   runs and approvals; and "today" / "this month" (budgets included) start at local midnight
@@ -41,6 +47,11 @@ versioning: [SemVer](https://semver.org/).
   and limit Board questions to irreversible, external or out-of-mandate decisions.
 
 ### Added
+- Company directory: every agent can look colleagues up (`company_directory`, granted to all) and
+  address them by id, name, title, role word ("cfo") or "manager" in `send_message` and
+  `delegate_task`; each charter lists the agent's manager, the CEO and its reports with ids.
+- Tasks: "Clear finished" archives every fully finished objective tree (nothing is deleted;
+  undo, an Archived list with restore, and retry brings a tree back). Migration v3.
 - `scripts/audit/company-audit.mjs`: read-only weekly audit data (docs/DEPLOY.md › Weekly audit).
 - `scripts/maintenance/archive-stale-memory.mjs`: reversibly archive memories, blackboard entries
   and workspace files that teach a stalled habit (docs/DEPLOY.md › Maintenance).

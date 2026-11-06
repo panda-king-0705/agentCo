@@ -1,5 +1,5 @@
 // Tasks: kanban by status (terminal ones collapsed), filters, detail drawer, new task form.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { dateTime, duration, money } from "../format";
 import { href, navigate } from "../router";
@@ -35,9 +35,107 @@ function TaskCard({ t, subCount }: { t: Task; subCount: number }) {
   );
 }
 
+const TERMINAL = new Set<TaskStatus>(["done", "failed", "cancelled"]);
+
+/** Objectives whose whole tree is finished — what "Clear finished" will archive. */
+function finishedObjectives(tasks: Record<string, Task>): number {
+  const open = new Set<string>();
+  for (const t of Object.values(tasks)) if (!TERMINAL.has(t.status)) open.add(t.rootTaskId);
+  return Object.values(tasks).filter((t) => !t.parentTaskId && TERMINAL.has(t.status) && !open.has(t.id)).length;
+}
+
+/** "Clear finished", like archiving an inbox: finished trees leave the board; traces, costs and memory stay. */
+function ClearFinished() {
+  const tasks = useLive((s) => s.tasks);
+  const { busy, run } = useAction();
+  const [confirm, setConfirm] = useState(false);
+  const [undo, setUndo] = useState<{ batch: string; objectives: number } | null>(null);
+  const finished = useMemo(() => finishedObjectives(tasks), [tasks]);
+  const reload = async () => seed.replaceTasks(await api.tasks());
+  const clear = async () => {
+    setConfirm(false);
+    const r = await run(() => api.archiveFinished(), "Finished work cleared");
+    if (r) {
+      await reload();
+      if (r.batch) setUndo({ batch: r.batch, objectives: r.objectives });
+    }
+  };
+  const restore = async () => {
+    if (!undo) return;
+    const r = await run(() => api.unarchiveTasks(undo.batch), "Restored");
+    if (r) {
+      await reload();
+      setUndo(null);
+    }
+  };
+  return (
+    <>
+      <Button icon="check" onClick={() => setConfirm(true)} disabled={busy || finished === 0} title="Archive every objective whose tasks are all done, failed or cancelled">
+        Clear finished{finished ? ` (${finished})` : ""}
+      </Button>
+      {undo ? (
+        <span className="row small" role="status">
+          <span className="muted">Cleared {undo.objectives} objective{undo.objectives === 1 ? "" : "s"}.</span>
+          <Button size="sm" variant="ghost" onClick={restore} disabled={busy}>Undo</Button>
+        </span>
+      ) : null}
+      {confirm ? (
+        <ConfirmDialog
+          title={`Clear ${finished} finished objective${finished === 1 ? "" : "s"}?`}
+          confirmLabel="Clear finished"
+          onConfirm={clear}
+          onClose={() => setConfirm(false)}
+          busy={busy}
+        >
+          Objectives whose tasks are all done, failed or cancelled leave the board, with their subtasks. Nothing is deleted: traces, costs and company memory stay, and you can restore them from Archived.
+        </ConfirmDialog>
+      ) : null}
+    </>
+  );
+}
+
+/** The archived (cleared) objectives, with restore. */
+function ArchivedPanel({ onClose }: { onClose: () => void }) {
+  const [list, setList] = useState<Task[] | null>(null);
+  const { busy, run } = useAction();
+  useEffect(() => {
+    let live = true;
+    api.tasks({ archived: "only" }).then((l) => live && setList(l), () => live && setList([]));
+    return () => {
+      live = false;
+    };
+  }, []);
+  const roots = (list ?? []).filter((t) => !t.parentTaskId).sort((a, b) => b.number - a.number);
+  const restoreAll = async () => {
+    const r = await run(() => api.unarchiveTasks(null), "All archived work restored");
+    if (r) {
+      seed.replaceTasks(await api.tasks());
+      onClose();
+    }
+  };
+  return (
+    <Modal title="Archived objectives" onClose={onClose}>
+      {!list ? <Skeleton rows={4} height={16} /> : !roots.length ? <Empty title="Nothing archived" icon="tasks">Cleared objectives show up here.</Empty> : (
+        <div className="stack tight">
+          <span className="muted small">{roots.length} objective{roots.length === 1 ? "" : "s"}, {list.length} task{list.length === 1 ? "" : "s"} in all. Retrying any of them brings its objective back.</span>
+          <ul className="subtree">
+            {roots.map((t) => (
+              <li key={t.id}>
+                <a href={href(`/tasks/${t.id}`)} className="row" onClick={onClose}><span className="task-ref">T-{t.number}</span><span className="grow ellipsis">{t.title}</span><TaskStatusBadge status={t.status} /></a>
+              </li>
+            ))}
+          </ul>
+          <div className="row"><Button onClick={restoreAll} disabled={busy}>Restore all to the board</Button></div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 export function TasksView({ taskId }: { taskId: string | null }) {
   const tasks = useLive((s) => s.tasks);
   const agents = useLive((s) => s.agents);
+  const [showArchived, setShowArchived] = useState(false);
   const [q, setQ] = useState("");
   const [assignee, setAssignee] = useState("");
   const [rootsOnly, setRootsOnly] = useState(false);
@@ -69,10 +167,12 @@ export function TasksView({ taskId }: { taskId: string | null }) {
         </select>
         <button type="button" className="chip" aria-pressed={rootsOnly} onClick={() => setRootsOnly((r) => !r)}>Objectives only</button>
         <SearchInput value={q} onChange={setQ} placeholder="Search tasks" width={200} />
+        <ClearFinished />
+        <button type="button" className="chip" onClick={() => setShowArchived(true)}>Archived</button>
         <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>New task</Button>
       </PageHead>
       {!total ? (
-        <Empty title="No tasks yet" icon="tasks" action={<Button variant="primary" icon="plus" onClick={() => setCreating(true)}>Create the first task</Button>}>Tasks created here go to the CEO unless you pick someone else.</Empty>
+        <Empty title="Nothing on the board" icon="tasks" action={<Button variant="primary" icon="plus" onClick={() => setCreating(true)}>New task</Button>}>New tasks go to the CEO unless you pick someone else. Cleared work is under Archived.</Empty>
       ) : (
         <>
           <div className="kanban">
@@ -101,6 +201,7 @@ export function TasksView({ taskId }: { taskId: string | null }) {
       )}
       {taskId ? <TaskDrawer taskId={taskId} /> : null}
       {creating ? <NewTaskModal onClose={() => setCreating(false)} /> : null}
+      {showArchived ? <ArchivedPanel onClose={() => setShowArchived(false)} /> : null}
     </>
   );
 }

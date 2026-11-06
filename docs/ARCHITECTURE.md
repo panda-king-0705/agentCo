@@ -361,7 +361,9 @@ POST   /api/conversations/:id/messages    {content} → PostMessageResult (a rep
 GET    /api/tasks                         Task[] (?status=&assigneeId=&rootTaskId=&traceId=)
 POST   /api/tasks                         CreateTaskInput → Task
 GET    /api/tasks/:id                     TaskDetail
-POST   /api/tasks/:id/cancel | /retry     Task (cancel cascades and closes the tree's pending approvals)
+POST   /api/tasks/:id/cancel | /retry     Task (cancel cascades and closes the tree's pending approvals; retry restores an archived tree)
+POST   /api/tasks/archive-finished        ArchiveResult (hides every fully finished tree; GET /api/tasks?archived=exclude|include|only)
+POST   /api/tasks/unarchive               {batch?} → ArchiveResult (undo one clear, or restore all)
 GET    /api/runs                          Run[] (?agentId=&taskId=&limit=)
 GET    /api/runs/:id                      RunDetail
 POST   /api/runs/:id/cancel               Run   (interrupt)
@@ -375,7 +377,7 @@ PUT    /api/blackboard/:key               {value} → BlackboardEntry
 GET    /api/memory                        MemoryItem[] global (?q=&kind=)
 GET    /api/metrics/overview              MetricsOverview
 GET    /api/metrics/timeseries            TimeseriesPoint[] (?metric=cost|runs|tokens&hours=24)
-GET    /api/events                        CompanyEvent[] (?since=<seq>&limit=)
+GET    /api/events                        CompanyEvent[] (?since=<seq>&limit= → after seq; without since → the newest `limit`, oldest first)
 GET    /api/events/stream                 SSE: `id: <seq>`, `event: <type>`, `data: <CompanyEvent json>`; heartbeat comment every 15 s; `event: resync` = refetch state
 GET    /*                                 console (apps/web/dist), SPA fallback to index.html
 ```

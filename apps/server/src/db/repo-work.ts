@@ -14,7 +14,11 @@ export interface TaskFilter {
   traceId?: string;
   parentTaskId?: string | null;
   limit?: number;
+  /** Archived ("cleared") tasks: include (default), exclude, or only them. */
+  archived?: "include" | "exclude" | "only";
 }
+
+const TERMINAL_SQL = "('done','failed','cancelled')";
 
 export class TaskRepo {
   private readonly db: Db;
@@ -44,7 +48,39 @@ export class TaskRepo {
       parent_task_id: filter.parentTaskId,
     });
     const limit = Math.min(Math.max(filter.limit ?? 500, 1), 5000);
-    return all(this.db, `SELECT * FROM tasks ${where.sql} ORDER BY created_at DESC, number DESC LIMIT ${limit}`, ...where.params).map(toTask);
+    const archived = filter.archived === "exclude" ? "archived_at IS NULL" : filter.archived === "only" ? "archived_at IS NOT NULL" : "";
+    const sql = archived ? (where.sql ? `${where.sql} AND ${archived}` : `WHERE ${archived}`) : where.sql;
+    return all(this.db, `SELECT * FROM tasks ${sql} ORDER BY created_at DESC, number DESC LIMIT ${limit}`, ...where.params).map(toTask);
+  }
+
+  /**
+   * Archives every finished tree: roots that are terminal and have no open task anywhere below them
+   * (an objective whose subtask is still running stays on the board). Returns the tasks touched.
+   */
+  archiveFinished(at: string): { count: number; objectives: number } {
+    const roots = all(
+      this.db,
+      `SELECT id FROM tasks r WHERE r.parent_task_id IS NULL AND r.archived_at IS NULL AND r.status IN ${TERMINAL_SQL}
+         AND NOT EXISTS (SELECT 1 FROM tasks c WHERE c.root_task_id = r.id AND c.status NOT IN ${TERMINAL_SQL})`,
+    ).map((r) => String(r.id));
+    if (!roots.length) return { count: 0, objectives: 0 };
+    const marks = roots.map(() => "?").join(",");
+    const res = this.db.prepare(`UPDATE tasks SET archived_at = ? WHERE archived_at IS NULL AND root_task_id IN (${marks})`).run(at, ...roots);
+    return { count: Number(res.changes), objectives: roots.length };
+  }
+
+  /** Restores one archive batch (its stamp), or every archived task when no batch is given. */
+  unarchive(batch: string | null): { count: number; objectives: number } {
+    const where = batch ? "archived_at = ?" : "archived_at IS NOT NULL";
+    const params = batch ? [batch] : [];
+    const objectives = Number(one(this.db, `SELECT COUNT(*) AS n FROM tasks WHERE ${where} AND parent_task_id IS NULL`, ...params)?.n ?? 0);
+    const res = this.db.prepare(`UPDATE tasks SET archived_at = NULL WHERE ${where}`).run(...params);
+    return { count: Number(res.changes), objectives };
+  }
+
+  /** Un-archives a whole tree (a retried task brings its objective back to the board). */
+  unarchiveTree(rootTaskId: string): void {
+    this.db.prepare("UPDATE tasks SET archived_at = NULL WHERE root_task_id = ? AND archived_at IS NOT NULL").run(rootTaskId);
   }
 
   children(parentId: string): Task[] {

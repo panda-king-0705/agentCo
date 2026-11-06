@@ -111,4 +111,8 @@ export const MIGRATIONS: readonly string[] = [
   /* v2 — catalog specialists (docs/CATALOG.md): the agency-agents id an agent is staffed from */ `
   ALTER TABLE agents ADD COLUMN catalog_id TEXT;
   `,
+  /* v3 — "clear finished" on the Tasks board: archived task trees are hidden, never deleted */ `
+  ALTER TABLE tasks ADD COLUMN archived_at TEXT;
+  CREATE INDEX tasks_archived ON tasks(archived_at);
+  `,
 ];
