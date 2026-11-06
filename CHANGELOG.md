@@ -8,7 +8,8 @@ versioning: [SemVer](https://semver.org/).
 ### Fixed
 - Overview: "Spend today" / "Spend this month" and the daily budget bar stayed at the value
   loaded with the page; the console now refreshes the company snapshot after model calls,
-  runs and approvals.
+  runs and approvals; and "today" / "this month" (budgets included) start at local midnight
+  of `TZ` (e.g. `TZ=Asia/Singapore`) instead of UTC midnight.
 - Question loop with live models: frustration from other work no longer early-stops a fresh
   task, and it decays over reports and idle time; an objective has at most one open Board
   question (later askers wait on it, one answer wakes them all); cancelling a task closes its

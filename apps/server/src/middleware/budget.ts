@@ -47,12 +47,23 @@ export function isBudgetExceeded(error: unknown): error is Error & BudgetExceede
   return error instanceof Error && error.name === "BudgetExceededError";
 }
 
+/**
+ * Budget windows start at local midnight of the server's time zone (the TZ environment
+ * variable, e.g. TZ=Asia/Singapore; UTC when unset), returned as a UTC ISO instant to compare
+ * with the stored `at` timestamps. UTC days put a Singapore morning's spend in "yesterday".
+ */
 export function dayStart(now: Date): string {
-  return now.toISOString().slice(0, 10) + "T00:00:00.000Z";
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 }
 
 export function monthStart(now: Date): string {
-  return now.toISOString().slice(0, 7) + "-01T00:00:00.000Z";
+  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+}
+
+/** The local calendar day (YYYY-MM-DD) in the server's time zone, for per-day keys. */
+export function localDay(now: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
 export interface BudgetDeps {
@@ -186,7 +197,7 @@ export class BudgetService implements BudgetGate {
     const settings = this.deps.settings();
     const spent = this.companySpent(dayStart(now));
     if (settings.dailyBudgetUsd <= 0 || spent < 0.8 * settings.dailyBudgetUsd) return;
-    const key = `budget.alert.${dayStart(now).slice(0, 10)}`;
+    const key = `budget.alert.${localDay(now)}`;
     if (this.deps.repos.settings.has(key)) return;
     this.deps.repos.settings.set(key, { at: now.toISOString(), spent });
     this.deps.bus.emit("budget.alert", {

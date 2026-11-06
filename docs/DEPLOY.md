@@ -51,6 +51,8 @@ excluded from the Docker image (`.dockerignore`).
 - First-run budgets are deliberately small: `DAILY_BUDGET_USD=5`, `MONTHLY_BUDGET_USD=50` — hard stops for
   all model spend. Raise them once you trust the spend. Budget variables set in `.env` win over the console at
   every boot, so change them in `.env` (or delete the lines and manage them in the console).
+- Set `TZ` in `.env` (e.g. `TZ=Asia/Singapore`) so the daily budget and "Spend today" reset at your
+  local midnight; unset means UTC.
 
 ## (a) Local PC — `npm start`
 

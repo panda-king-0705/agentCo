@@ -149,3 +149,21 @@ test("charter grounding names the company's own stores and when to ask the Board
   assert.match(rules, /irreversible/);
   assert.equal(operatingRules(["send_message"]), "");
 });
+
+test("budget windows start at local midnight of TZ (a Singapore morning is today, not yesterday)", async () => {
+  const { dayStart, localDay, monthStart } = await import("../../src/middleware/budget.ts");
+  const saved = process.env.TZ;
+  try {
+    process.env.TZ = "Asia/Singapore";
+    const morning = new Date("2026-11-05T22:00:00.000Z"); // 06:00 on 6 Nov in Singapore
+    assert.equal(dayStart(morning), "2026-11-05T16:00:00.000Z");
+    assert.equal(monthStart(morning), "2026-10-31T16:00:00.000Z");
+    assert.equal(localDay(morning), "2026-11-06");
+    process.env.TZ = "UTC";
+    assert.equal(dayStart(morning), "2026-11-05T00:00:00.000Z");
+    assert.equal(monthStart(morning), "2026-11-01T00:00:00.000Z");
+  } finally {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
+  }
+});
