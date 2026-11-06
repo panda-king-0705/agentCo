@@ -82,13 +82,36 @@ test("reflex: cascades economy → standard once after a failure", async () => {
   assert.equal(run.attributes["agentco.cascade"], "economy→standard");
 });
 
-test("reflex: exhausting steps on both tiers fails", async () => {
+test("reflex: out of steps on both tiers, the last tier wraps up with an answer instead of failing", async () => {
   const { platform, worker, task } = setup();
+  const result = await new ReflexEngine({ maxSteps: 1 }).run(platform.context(worker, taskInput(task)));
+  assert.equal(result.outcome, "completed");
+  assert.ok(result.output.trim().length > 0);
+  const tiers = platform.tracer.byKind("llm").map((s) => s.attributes["agentco.tier"]);
+  assert.deepEqual(tiers, ["economy", "standard", "standard"], "cascade first, then one wrap-up call on the last tier");
+  assert.ok(platform.tracer.spans.some((s) => s.attributes["agentco.wrapped_up"] === true));
+});
+
+/** A model that never stops calling tools, even when none are offered. */
+function restlessProvider(): ModelProvider {
+  return {
+    name: "mock",
+    complete: async () => ({
+      content: "",
+      toolCalls: [{ id: `c${Math.random()}`, name: "memory_search", arguments: { query: "more context" } }],
+      usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 },
+      finishReason: "tool_calls",
+    }),
+  };
+}
+
+test("reflex: a model that never answers still fails after the cascade and the wrap-up", async () => {
+  const { platform, worker, task } = setup({ providers: { mock: restlessProvider() } });
   const result = await new ReflexEngine({ maxSteps: 1 }).run(platform.context(worker, taskInput(task)));
   assert.equal(result.outcome, "failed");
   assert.match(result.error ?? "", /after cascade/);
   const tiers = platform.tracer.byKind("llm").map((s) => s.attributes["agentco.tier"]);
-  assert.deepEqual(tiers, ["economy", "standard"]);
+  assert.deepEqual(tiers, ["economy", "standard", "standard"]);
 });
 
 function blockerProvider(): ModelProvider {

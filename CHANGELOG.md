@@ -22,6 +22,8 @@ versioning: [SemVer](https://semver.org/).
 - Anthropic JSON calls: no `response_format: json_object` (its endpoint only accepts
   `json_schema`); any provider rejecting `response_format` is retried without it.
 - The task-OOD insight no longer tells leaders to delegate everything new.
+- Out of tool steps, Solving (and a worker on its last model tier) gets one final no-tools call
+  for the result from what it gathered, instead of discarding the run as "no result".
 - Leaders do quick own-tool tasks themselves (mode "direct") and answer reports' escalations
   directly instead of fanning them out.
 - Leaders' charters name the company's own stores (knowledge base, blackboard, workspace)

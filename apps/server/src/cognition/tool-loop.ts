@@ -43,6 +43,12 @@ export interface ToolLoopOptions {
   maxOutputTokens?: number;
   /** Called after every model response with its measured latency (OOD profiling). */
   onResponse?: (response: ChatResponse, latencyMs: number) => void;
+  /**
+   * Out of steps: warn on the last step, then make one final call WITHOUT tools for the result from
+   * what was gathered (status completed, wrappedUp) instead of returning "exhausted". Live models
+   * kept reading files until the limit and the whole run was thrown away.
+   */
+  wrapUp?: boolean;
 }
 
 export const ESCALATION_TOOLS: ReadonlySet<string> = new Set(["escalate", "ask_human"]);
@@ -55,6 +61,8 @@ export interface ToolLoopResult {
   status: "completed" | "blocked" | "waiting" | "exhausted";
   result: string;
   reason: string;
+  /** Completed by the final no-tools call after the step limit (ToolLoopOptions.wrapUp). */
+  wrappedUp?: boolean;
   /** The escalation subtask an `escalate` call created (status waiting). */
   escalationTaskId?: string;
   /** The approval an `ask_human` / CEO `escalate` call opened (status blocked). */
@@ -150,6 +158,9 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
   for (let step = 1; step <= o.maxSteps; step++) {
     if (ctx.signal.aborted) throw abortErrorFrom(ctx.signal);
     out.steps = step;
+    if (o.wrapUp && step === o.maxSteps && step > 1) {
+      messages.push({ role: "user", content: o.terminal.complete ? "Last step: finish now with complete_task (or report_blocker)." : "Last step: give your answer now." });
+    }
     ctx.platform.agents.setActivity(agent.id, "thinking", `${o.activityLabel} (step ${step})`, o.block ?? null);
     const started = Date.now();
     const response = await ctx.platform.models.chat(
@@ -239,6 +250,23 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
         }
       }
     }
+  }
+  if (!o.wrapUp) return out;
+  if (ctx.signal.aborted) throw abortErrorFrom(ctx.signal);
+  messages.push({ role: "user", content: "You are out of tool steps. Give your result now from what you have: what is done (and where it was recorded) and what is still open." });
+  ctx.platform.agents.setActivity(agent.id, "thinking", `${o.activityLabel} (wrapping up)`, o.block ?? null);
+  const started = Date.now();
+  const wrap = await ctx.platform.models.chat(
+    { tier: o.tier, modelOverride: agent.modelOverride, messages, maxOutputTokens: o.maxOutputTokens ?? 2000 },
+    { agentId: agent.id, runId: ctx.run.id, traceId: ctx.run.traceId, parentSpanId: o.parentSpan.spanId, taskId: o.taskId, stage: o.stage, signal: ctx.signal },
+  );
+  out.costUsd += wrap.costUsd;
+  o.onResponse?.(wrap, Date.now() - started);
+  const text = wrap.toolCalls.length === 0 ? wrap.content.trim() : "";
+  if (text) {
+    out.status = "completed";
+    out.result = text;
+    out.wrappedUp = true;
   }
   return out;
 }

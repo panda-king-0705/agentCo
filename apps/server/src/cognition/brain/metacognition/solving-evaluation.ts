@@ -132,8 +132,9 @@ export async function solving(
         activityLabel: `Solving T-${task.number}`,
         block: "metacognition.solving_evaluation.solving",
         onResponse: (response, latencyMs) => recordCall(run, "metacognition.solving_evaluation.solving", response, latencyMs, null),
+        wrapUp: true,
       });
-      span.setAttributes({ "agentco.solve.steps": loop.steps, "agentco.solve.status": loop.status, "agentco.solve.tier": tier, "agentco.candidate": plan.candidate });
+      span.setAttributes({ "agentco.solve.steps": loop.steps, "agentco.solve.status": loop.status, "agentco.solve.tier": tier, "agentco.candidate": plan.candidate, "agentco.solve.wrapped_up": loop.wrappedUp === true });
       if (loop.status === "completed") return { kind: "solution" as const, text: loop.result, delegated: [], effects: loop.effects };
       if (loop.status === "waiting" || (loop.status === "blocked" && loop.approvalId)) {
         return {
