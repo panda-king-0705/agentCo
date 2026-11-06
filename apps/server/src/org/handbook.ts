@@ -13,6 +13,8 @@ export interface HandbookSource {
   /** The company's most important shared knowledge (global semantic/procedural memories). */
   keyKnowledge(limit: number): MemoryItem[];
   blackboardKeys(): string[];
+  /** What is left of an agent's own monthly budget (null = no per-agent cap). */
+  agentMonthlyLeftUsd(agentId: string): number | null;
   now(): Date;
 }
 
@@ -43,7 +45,12 @@ export function buildHandbook(src: HandbookSource, agent: Agent | null): string 
       `${agent.name}, ${agent.title} in ${org.departmentName(agent.departmentId)} (id ${agent.id}).` +
         (manager ? ` You report to ${manager.name}, ${manager.title} (id ${manager.id}).` : " You report to the Board.") +
         (reports.length ? ` Your reports: ${reports.map((r) => `${r.name} (${r.title}, id ${r.id})`).join(", ")}.` : ""),
-      `Your monthly budget: $${org.budgetRemainingUsd(agent.id).toFixed(2)} left of $${agent.monthlyBudgetUsd.toFixed(2)}.`,
+      (() => {
+        const left = src.agentMonthlyLeftUsd(agent.id);
+        const h = org.budgetHeadroom?.(agent.id);
+        const own = left === null ? "No personal monthly cap." : `Your monthly budget: $${left.toFixed(2)} left of $${agent.monthlyBudgetUsd.toFixed(2)}.`;
+        return h && h.label !== "your monthly budget" && h.share < 1 ? `${own} Tightest limit right now: the ${h.label}, $${h.remainingUsd.toFixed(2)} of $${h.limitUsd.toFixed(2)} left.` : own;
+      })(),
     );
   }
 

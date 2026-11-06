@@ -14,6 +14,10 @@ versioning: [SemVer](https://semver.org/).
   extractor returned the first nested object of a truncated reply; it now returns nothing, so the
   stage is repaired and retried, and planning gets more output room. Cross-department work is
   delegated one part per owning report.
+- False "budget pressure": the remaining amount under the TIGHTEST cap (often the company's daily
+  $10) was divided by the agent's MONTHLY budget, so a CEO with $54 of $60 unspent read "10% left"
+  and rationed every plan (no High Cost, cheapest candidate). Each cap is now compared with its own
+  limit, and the symptom names the binding cap. The handbook shows the agent's own monthly remainder.
 - Costs: "Budget vs spend, per department" showed "/ $0.00" in red for every department. A $0
   department cap means "no department cap"; the meter now uses the sum of its agents' monthly
   budgets (marked "agents") or says "no cap".

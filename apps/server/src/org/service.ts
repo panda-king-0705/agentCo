@@ -162,6 +162,18 @@ export class OrgService implements OrgView, AgentStateWriter {
     return this.deps.budget.remainingFor(agentId);
   }
 
+  /** Headroom against the binding cap, as a share of that cap (see BudgetService.headroom). */
+  budgetHeadroom(agentId: string): { share: number; label: string; remainingUsd: number; limitUsd: number } {
+    return this.deps.budget.headroom(agentId);
+  }
+
+  /** What is left of the agent's OWN monthly budget (null = no per-agent cap). */
+  agentMonthlyLeftUsd(agentId: string): number | null {
+    const agent = this.getAgent(agentId);
+    if (!agent || agent.monthlyBudgetUsd <= 0) return null;
+    return Math.max(0, agent.monthlyBudgetUsd - this.stats(agentId).spentMonthUsd);
+  }
+
   stats(agentId: string): AgentStats {
     const { repos, budget, now } = this.deps;
     const at = now();
