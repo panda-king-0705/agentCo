@@ -125,7 +125,10 @@ export class ReflexEngine implements CognitiveEngine {
           taskId: task?.id ?? null,
           conversationId: input.trigger === "message" ? input.history.conversation.id : null,
           activityLabel: label,
+          // The tier cascade comes first; on the last tier, wrap up instead of failing the task.
+          wrapUp: attempt === 1 || !NEXT_TIER[tier],
         });
+        if (loop.wrappedUp) ctx.span.setAttributes({ "agentco.wrapped_up": true });
         if (loop.status !== "exhausted") break;
         lastError = `no result after ${loop.steps} steps`;
       } catch (err) {
