@@ -183,6 +183,33 @@ export class BudgetService implements BudgetGate {
     return Math.max(0, Math.min(...caps));
   }
 
+  /**
+   * Headroom against EACH cap that applies, as a share of that cap's own limit; the binding one is the
+   * lowest share. ("$6 of the company's $10 today" used to be divided by the agent's $60 MONTHLY budget
+   * and read as "10% of your budget left" — a CEO with $54 of her month unspent rationed every plan.)
+   */
+  headroom(agentId: string): { share: number; label: string; remainingUsd: number; limitUsd: number } {
+    const now = this.deps.now();
+    const settings = this.deps.settings();
+    const companyReserved = this.reserved(() => true);
+    const caps: { label: string; limit: number; remaining: number }[] = [
+      { label: "company daily budget", limit: settings.dailyBudgetUsd, remaining: settings.dailyBudgetUsd - this.companySpent(dayStart(now)) - companyReserved },
+      { label: "company monthly budget", limit: settings.monthlyBudgetUsd, remaining: settings.monthlyBudgetUsd - this.companySpent(monthStart(now)) - companyReserved },
+    ];
+    const agent = this.deps.repos.agents.get(agentId);
+    if (agent && agent.monthlyBudgetUsd > 0) {
+      caps.push({ label: "your monthly budget", limit: agent.monthlyBudgetUsd, remaining: agent.monthlyBudgetUsd - this.agentSpent(agentId, monthStart(now)) - this.reserved((r) => r.agentId === agentId) });
+    }
+    const department = agent ? this.deps.repos.departments.get(agent.departmentId) : null;
+    if (department && department.monthlyBudgetUsd > 0) {
+      caps.push({ label: "department monthly budget", limit: department.monthlyBudgetUsd, remaining: department.monthlyBudgetUsd - this.departmentSpent(department.id, monthStart(now)) - this.reserved((r) => r.departmentId === department.id) });
+    }
+    const live = caps.filter((c) => c.limit > 0);
+    if (!live.length) return { share: 1, label: "no budget cap", remainingUsd: Infinity, limitUsd: 0 };
+    const tightest = live.map((c) => ({ ...c, share: Math.max(0, c.remaining) / c.limit })).sort((a, b) => a.share - b.share)[0]!;
+    return { share: tightest.share, label: tightest.label, remainingUsd: Math.max(0, tightest.remaining), limitUsd: tightest.limit };
+  }
+
   /** The cap the remaining figure is measured against (for headroom ratios). */
   limitFor(agentId: string): number {
     const settings = this.deps.settings();

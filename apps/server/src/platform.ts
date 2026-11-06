@@ -131,6 +131,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
         .sort((a, b) => b.importance - a.importance || b.accessCount - a.accessCount)
         .slice(0, limit),
     blackboardKeys: () => repos.blackboard.list().map((b) => b.key),
+    agentMonthlyLeftUsd: (agentId) => org.agentMonthlyLeftUsd(agentId),
     now,
   };
   const handbook = (agent: Agent | null) => buildHandbook(handbookSource, agent);

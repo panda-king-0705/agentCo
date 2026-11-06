@@ -247,8 +247,10 @@ export interface OrgView {
   departmentName(departmentId: string): string;
   department(departmentId: string): Department | null;
   needs(agentId: string): NeedsState;
-  /** Remaining monthly budget for the agent (USD), considering the company cap too. */
+  /** Remaining spend allowed now (USD): the tightest of the company daily/monthly, agent and department caps. */
   budgetRemainingUsd(agentId: string): number;
+  /** Headroom against the binding cap as a share OF THAT CAP (optional for test fakes). */
+  budgetHeadroom?(agentId: string): { share: number; label: string; remainingUsd: number; limitUsd: number };
 }
 
 export interface CreateObjectiveInput {

@@ -192,3 +192,34 @@ test("memory_write within one task upserts: the same scope, kind and tags replac
     await t.close();
   }
 });
+
+test("budget pressure compares each cap with ITS OWN limit (a $6-left day is not '10% of a $60 month')", async () => {
+  const { constraintPressure } = await import("../../src/cognition/brain/metacognition/monitoring.ts");
+  const t = await createTestApp({});
+  try {
+    const { platform } = t.app;
+    const ceo = t.agentByRole("ceo");
+    platform.repos.agents.update(ceo.id, { monthlyBudgetUsd: 60 });
+    platform.company.update({ dailyBudgetUsd: 10, monthlyBudgetUsd: 100 });
+    const spend = (usd: number) =>
+      platform.repos.spend.insert({
+        agentId: ceo.id, departmentId: ceo.departmentId, runId: null, traceId: null, spanId: null, taskId: null, provider: "anthropic", model: "m", profileId: "p",
+        tier: "frontier", stage: "reflex", inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: usd, frontierCostUsd: usd, at: platform.services.now().toISOString(),
+      } as never);
+    spend(4);
+    const h = platform.org.budgetHeadroom(ceo.id);
+    assert.equal(h.label, "company daily budget");
+    assert.ok(Math.abs(h.share - 0.6) < 1e-9);
+    const base = { maxContextShare: 0, elapsedMs: 0, runTimeoutMs: 300_000, monthlyBudgetUsd: 60, budgetRemainingUsd: platform.org.budgetRemainingUsd(ceo.id) };
+    assert.equal(constraintPressure({ ...base, budgetHeadroom: h }).length, 0, "60% of today's company budget left: no pressure");
+    assert.equal(constraintPressure(base).length, 1, "the old ratio ($6 / $60 monthly) cried wolf");
+    spend(5);
+    const tight = platform.org.budgetHeadroom(ceo.id);
+    const p = constraintPressure({ ...base, budgetHeadroom: tight });
+    assert.equal(p.length, 1);
+    assert.match(p[0]!.symptom, /^company daily budget: 10% left$/);
+    assert.equal(platform.org.agentMonthlyLeftUsd(ceo.id), 51);
+  } finally {
+    await t.close();
+  }
+});

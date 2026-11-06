@@ -77,6 +77,8 @@ export interface PressureInputs {
   maxContextShare: number; // max over calls of inputTokens / contextWindow (0 when unknown)
   budgetRemainingUsd: number;
   monthlyBudgetUsd: number;
+  /** Preferred: headroom against the binding cap as a share of that cap (budget.headroom). */
+  budgetHeadroom?: { share: number; label: string } | undefined;
   elapsedMs: number;
   runTimeoutMs: number;
 }
@@ -91,7 +93,10 @@ export function constraintPressure(i: PressureInputs): PressureSignal[] {
   const out: PressureSignal[] = [];
   if (i.maxContextShare > Q2_OOD.contextShare)
     out.push({ kind: "context", symptom: `prompt uses ${Math.round(i.maxContextShare * 100)}% of the context window`, remedy: "decompose finer and compact the context" });
-  if (i.monthlyBudgetUsd > 0 && i.budgetRemainingUsd / i.monthlyBudgetUsd < Q2_OOD.budgetShare)
+  if (i.budgetHeadroom) {
+    if (i.budgetHeadroom.share < Q2_OOD.budgetShare)
+      out.push({ kind: "budget", symptom: `${i.budgetHeadroom.label}: ${Math.round(i.budgetHeadroom.share * 100)}% left`, remedy: "conservation: prefer Low Cost / Low Effort candidates" });
+  } else if (i.monthlyBudgetUsd > 0 && i.budgetRemainingUsd / i.monthlyBudgetUsd < Q2_OOD.budgetShare)
     out.push({ kind: "budget", symptom: `budget left ${Math.round((i.budgetRemainingUsd / i.monthlyBudgetUsd) * 100)}%`, remedy: "conservation: prefer Low Cost / Low Effort candidates" });
   if (i.runTimeoutMs > 0 && (i.runTimeoutMs - i.elapsedMs) / i.runTimeoutMs < Q2_OOD.timeShare)
     out.push({ kind: "time", symptom: `${Math.max(0, Math.round((i.runTimeoutMs - i.elapsedMs) / 1000))}s of run time left`, remedy: "fewer solving steps; delegate or checkpoint" });
@@ -159,6 +164,7 @@ export async function oodMonitoring(run: BrainRun, problem: string | null): Prom
       maxContextShare,
       budgetRemainingUsd: run.platform.org.budgetRemainingUsd(run.agent.id),
       monthlyBudgetUsd: run.agent.monthlyBudgetUsd,
+      budgetHeadroom: run.platform.org.budgetHeadroom?.(run.agent.id),
       elapsedMs: Number.isNaN(started) ? 0 : Math.max(0, run.platform.now().getTime() - started),
       runTimeoutMs: run.runTimeoutMs,
     });
