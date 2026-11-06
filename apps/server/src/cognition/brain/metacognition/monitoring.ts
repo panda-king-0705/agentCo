@@ -136,7 +136,7 @@ export async function oodMonitoring(run: BrainRun, problem: string | null): Prom
     if (problem !== null) {
       similar = run.platform.memory.search({ query: problem, agentId: run.agent.id, scopes: ["agent"], kinds: ["episodic"], limit: 3 }).length;
       taskOod = similar < Q2_OOD.minSimilarEpisodes;
-      if (taskOod) addInsight(run, { block: "metacognition.target_understanding", tier: run.routingAgent.modelTier, symptom: "task OOD: no similar past episode", remedy: "wider literature review; delegate to a report with matching skills" });
+      if (taskOod) addInsight(run, { block: "metacognition.target_understanding", tier: run.routingAgent.modelTier, symptom: "task OOD: no similar past episode", remedy: "wider literature review; delegate only the parts that need a report's specialty" });
     }
     const performance: PerformanceEvent[] = [];
     const profiles = new Map<string, BlockProfile>();
