@@ -81,6 +81,8 @@ export const seed = {
   runs: (list: Run[]) => set({ runs: byId(list, state.runs) }),
   spans: (list: Span[]) => set({ spans: byId(list, state.spans) }),
   approvals: (list: Approval[]) => set({ approvals: byId(list, state.approvals) }),
+  /** Replace (not merge) — after clearing history the hidden ones must go. */
+  replaceApprovals: (list: Approval[]) => set({ approvals: byId(list) }),
   messages: (conversationId: string, list: Message[]) => {
     const merged = mergeMessages(state.messages[conversationId] ?? [], list);
     set({ messages: { ...state.messages, [conversationId]: merged } });

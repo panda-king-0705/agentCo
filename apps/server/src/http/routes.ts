@@ -221,7 +221,14 @@ export function buildRouter(platform: Platform): Router {
   router.get("/api/traces/:traceId", ({ params }) => traces.detail(param(params, "traceId")));
 
   // ───────────── approvals, blackboard, memory ─────────────
-  router.get("/api/approvals", ({ query }) => approvals.list(query.get("status") || undefined));
+  // Cleared history is hidden unless asked for (?archived=include|only).
+  router.get("/api/approvals", ({ query }) => approvals.list(query.get("status") || undefined, archivedParam(query.get("archived"))));
+  router.post("/api/approvals/archive-decided", () => approvals.archiveDecided());
+  router.post("/api/approvals/unarchive", ({ body }) => {
+    const input = body === undefined || body === null ? {} : object(body);
+    if (input.batch !== undefined && input.batch !== null && typeof input.batch !== "string") throw badRequest("batch must be a string");
+    return approvals.unarchive(typeof input.batch === "string" ? input.batch : null);
+  });
   router.post("/api/approvals/:id/decide", ({ params, body }) => {
     const input = object(body);
     if (input.decision !== "approved" && input.decision !== "rejected") throw badRequest('decision must be "approved" or "rejected"');

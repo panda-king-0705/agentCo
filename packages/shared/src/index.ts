@@ -439,6 +439,8 @@ export interface Approval {
   note: string | null; // the human's answer for kind=question
   createdAt: string;
   decidedAt: string | null;
+  /** Set when the Board cleared it from the Approvals history (hidden, not deleted). */
+  archivedAt?: string | null;
 }
 
 export interface CompanySettings {

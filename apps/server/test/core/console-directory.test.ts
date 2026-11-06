@@ -211,3 +211,38 @@ test("role arrangement: the leader's pick wins unless another mandate fits clear
     await t.close();
   }
 });
+
+test("Clear history on Approvals hides decided approvals only; undo and restore bring them back", async () => {
+  const t = await createTestApp({
+    listen: true,
+    brain: async (ctx) => {
+      if (ctx.input.trigger !== "task") return done("ok");
+      await callTool(ctx, "ask_human", { question: `About ${ctx.input.task.title}?` });
+      return done("asked");
+    },
+  });
+  try {
+    const { platform } = t.app;
+    const ceo = t.agentByRole("ceo");
+    rootTask(t, ceo.id, "First");
+    rootTask(t, ceo.id, "Second");
+    rootTask(t, ceo.id, "Third");
+    await t.drain();
+    const [a, b] = platform.approvals.list("pending");
+    platform.approvals.decide(a!.id, { decision: "approved", note: "yes" });
+    platform.approvals.decide(b!.id, { decision: "rejected" });
+    const cleared = (await api<{ count: number; batch: string }>(t.url, "/api/approvals/archive-decided", { method: "POST" })).body;
+    assert.equal(cleared.count, 2);
+    const visible = (await api<{ id: string; status: string }[]>(t.url, "/api/approvals")).body;
+    assert.deepEqual(visible.map((x) => x.status), ["pending"], "the pending one stays; history is cleared");
+    assert.equal((await api<unknown[]>(t.url, "/api/approvals?archived=only")).body.length, 2);
+    const undone = (await api<{ count: number }>(t.url, "/api/approvals/unarchive", { method: "POST", body: { batch: cleared.batch } })).body;
+    assert.equal(undone.count, 2);
+    assert.equal((await api<unknown[]>(t.url, "/api/approvals")).body.length, 3);
+    await api(t.url, "/api/approvals/archive-decided", { method: "POST" });
+    assert.equal((await api<{ count: number }>(t.url, "/api/approvals/unarchive", { method: "POST" })).body.count, 2, "restore all");
+    assert.equal(platform.approvals.list("pending").length, 1, "internal views still see everything");
+  } finally {
+    await t.close();
+  }
+});

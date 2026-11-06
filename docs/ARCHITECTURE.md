@@ -372,6 +372,8 @@ GET    /api/traces                        TraceSummary[] (?limit=)
 GET    /api/traces/:traceId               TraceDetail
 GET    /api/approvals                     Approval[] (?status=)
 POST   /api/approvals/:id/decide          DecideApprovalInput → Approval
+POST   /api/approvals/archive-decided     {count, batch} (Clear history; GET /api/approvals?archived=exclude|include|only)
+POST   /api/approvals/unarchive           {batch?} → {count} (undo one clear, or restore all)
 POST   /api/approvals/decide-many         DecideManyInput {ids?|kind?, decision, note?} → Approval[]
 GET    /api/blackboard                    BlackboardEntry[]
 PUT    /api/blackboard/:key               {value} → BlackboardEntry

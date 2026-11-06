@@ -227,6 +227,7 @@ export function toApproval(r: Row): Approval {
     note: strOrNull(r.note),
     createdAt: str(r.created_at),
     decidedAt: strOrNull(r.decided_at),
+    archivedAt: strOrNull(r.archived_at),
   };
 }
 
