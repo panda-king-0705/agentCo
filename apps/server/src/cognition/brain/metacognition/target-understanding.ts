@@ -41,7 +41,8 @@ export function requestText(run: BrainRun): string {
   }
   const t = input.task;
   return (
-    `T-${t.number}: ${t.title}\n${truncate(t.description, 1500)}${t.acceptanceCriteria ? `\nAcceptance criteria: ${truncate(t.acceptanceCriteria, 400)}` : ""}` +
+    // An escalation carries the stuck task's text and the original request below its question: read more of it.
+    `T-${t.number}: ${t.title}\n${truncate(t.description, t.state.kind === "escalation" ? 3500 : 1500)}${t.acceptanceCriteria ? `\nAcceptance criteria: ${truncate(t.acceptanceCriteria, 400)}` : ""}` +
     (input.recoveryNotice ? `\nRECOVERY NOTICE: ${input.recoveryNotice}` : "")
   );
 }

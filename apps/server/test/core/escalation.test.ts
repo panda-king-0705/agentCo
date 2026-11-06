@@ -104,3 +104,53 @@ test("updateCognitiveState persists assets and resourceConnections", async () =>
     await t.close();
   }
 });
+
+test("escalate: the escalation carries the stuck task's own text and the original request (nothing is lost on the way up)", async () => {
+  const t = await createTestApp({
+    reflex: async (ctx) => {
+      if (ctx.input.trigger === "subtasks_completed") return done("ok");
+      await callTool(ctx, "escalate", { reason: "write access unclear", question: "Where do I store it?" });
+      return { outcome: "waiting", output: "waiting for my manager" };
+    },
+    brain: async () => done("Store it in the knowledge base."),
+  });
+  try {
+    const { platform } = t.app;
+    const ceo = t.agentByRole("ceo");
+    const worker = t.agentByRole("backend-engineer");
+    const root = platform.tasks.createRoot({ title: "Record custodian ID", description: "Board: record my custodian ID U2522199H in the company knowledge base.", assigneeId: ceo.id });
+    const sub = platform.tasks.createSubtask({
+      parent: root, title: "Persist the ID", description: "Save custodian ID U2522199H as a global semantic memory and confirm.", acceptanceCriteria: "Memory id returned",
+      assigneeId: worker.id, traceId: root.traceId, createdBy: ceo.id,
+    });
+    await t.drain();
+    const esc = platform.tasks.children(sub.id).find((c) => c.state.kind === "escalation");
+    assert.ok(esc, "escalation subtask exists");
+    assert.match(esc.description, /What T-\d+ asks \(as assigned to [^)]+\):\nSave custodian ID U2522199H/);
+    assert.match(esc.description, /Acceptance criteria: Memory id returned/);
+    assert.match(esc.description, /Original request T-\d+ "Record custodian ID":\nBoard: record my custodian ID U2522199H/);
+    assert.match(esc.description, /Why: write access unclear/);
+  } finally {
+    await t.close();
+  }
+});
+
+test("ask_human: the Board's question shows what the objective is about (payload.context)", async () => {
+  const t = await createTestApp({
+    brain: async (ctx) => {
+      if (ctx.input.trigger !== "task") return done("hi");
+      await callTool(ctx, "ask_human", { question: "Which market first?" });
+      return done();
+    },
+  });
+  try {
+    const ceo = t.agentByRole("ceo");
+    rootTask(t, ceo.id, "Pick a launch market");
+    await t.drain();
+    const [q] = t.app.platform.approvals.list("pending");
+    assert.ok(q);
+    assert.match(String(q.payload.context), /^On T-\d+ "Pick a launch market": Description of Pick a launch market/);
+  } finally {
+    await t.close();
+  }
+});
