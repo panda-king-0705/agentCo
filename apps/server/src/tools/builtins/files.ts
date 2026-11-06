@@ -22,7 +22,15 @@ export const workspaceReadFile: ToolDefinition = {
   parameters: { type: "object", properties: { path: { type: "string", maxLength: 300 } }, required: ["path"] },
   tiers: ALL_TIERS,
   run(args, ctx) {
-    const { content, truncated } = ctx.services.workspaces.read(ctx.agent.id, String(args.path));
+    const path = String(args.path);
+    const ws = ctx.services.workspaces;
+    if (!ws.exists(ctx.agent.id, path)) {
+      // Not there (yet): say what IS there instead of a red error — often a sibling's file still being written.
+      const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+      const near = ws.list(ctx.agent.id, dir);
+      return ok(`No file "${path}" yet. ${near.length ? `In ${dir || "your workspace"}: ${near.slice(0, 40).join(", ")}.` : `${dir || "Your workspace"} is empty.`}`, [], { found: false });
+    }
+    const { content, truncated } = ws.read(ctx.agent.id, path);
     return ok(truncated ? content + "\n[truncated]" : content);
   },
 };

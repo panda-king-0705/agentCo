@@ -174,8 +174,12 @@ export const Q9_ROLE = {
   mbti: 0.25,
   /** candidates within this of the best fit are tied; the tie goes to the best elementFit. */
   tieMargin: 0.05,
-  /** The LLM's proposed assignee is one input (tuning): a small bonus, never decisive alone. */
-  llmSuggestionBonus: 0.04,
+  /**
+   * The leader's own choice of assignee (tuning). It was a 0.04 nudge, so keyword overlap overrode a
+   * live leader's sensible pick ("verify and assemble the plan": Chief of Staff → CTO). Now it decides
+   * unless another report's mandate fits clearly better.
+   */
+  llmSuggestionBonus: 0.3,
   /** Spread the load: penalty per subprocess already given to the same assignee in this plan (tuning). */
   repeatAssigneePenalty: 0.2,
   /** The request explicitly names the candidate's department or role: decisive over keyword fit (tuning). */
