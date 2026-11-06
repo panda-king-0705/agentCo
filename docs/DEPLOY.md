@@ -276,6 +276,22 @@ Archived memories and blackboard entries go to the `memories_archive` / `blackbo
 the same database; files go to `/data/archive/<stamp>/` with a `manifest.json`. All of it stays in the
 `agentco-data` volume and its backups.
 
+## Weekly audit
+
+`scripts/audit/company-audit.mjs` prints a read-only JSON audit of the running company: work and stuck
+tasks, escalations, the Board's queue, runs and model errors, spend by tier/model/agent/day, agents that
+need attention (frustration, mood, calibration drift), and company-memory hygiene (stall lessons,
+blocked-outcome episodes, blackboard). It changes nothing and never prints keys or the API token.
+
+```powershell
+docker cp scripts/audit/company-audit.mjs agentco-agentco-1:/tmp/company-audit.mjs
+docker exec agentco-agentco-1 node /tmp/company-audit.mjs --days 7
+```
+
+A scheduled Claude task runs it every Monday on the PC and writes the report to
+`Documents\agentco-audits\audit-<date>.md` (plus a copy in the conversation). The task only reports and
+recommends; acting on a recommendation is the Board's call.
+
 ## Costs
 
 Hosting is small and fixed: the founder's PC (electricity) for (b), or roughly $6.5–€16 a month for a VPS in (c).
