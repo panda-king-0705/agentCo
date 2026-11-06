@@ -24,13 +24,25 @@ export const sendMessage: ToolDefinition = {
 };
 
 function askBoard(ctx: ToolRunContext, question: string, reason: string | null) {
+  // One open Board question per objective: further questions from the same objective wait on it
+  // (its answer wakes every task blocked on it) instead of piling up in the Board's queue.
+  const task = ctx.taskId ? ctx.services.tasks.get(ctx.taskId) : null;
+  const rootTaskId = task?.rootTaskId ?? null;
+  const open = rootTaskId ? ctx.services.approvals.pendingQuestionFor(rootTaskId) : null;
+  if (open) {
+    return ok(
+      `The Board already has an open question for this objective (approval ${open.id}): "${oneLine(String(open.payload.question ?? open.summary), 200)}". Stop here and report the task as blocked; you will be resumed with their answer.`,
+      [{ kind: "approval_requested", approvalId: open.id }],
+      { approvalId: open.id, deduped: true },
+    );
+  }
   const approval = ctx.services.approvals.create({
     kind: "question",
     requestedBy: ctx.agent.id,
     taskId: ctx.taskId,
     traceId: ctx.traceId,
     summary: `${ctx.agent.name} asks: ${oneLine(question, 300)}`,
-    payload: { question, reason },
+    payload: { question, reason, rootTaskId },
   });
   return ok(
     `Question sent to the Board (approval ${approval.id}). Stop here and report the task as blocked; you will be resumed with their answer.`,

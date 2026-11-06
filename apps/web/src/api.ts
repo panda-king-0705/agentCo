@@ -1,7 +1,7 @@
 // Typed fetch wrapper for every console route (same origin). Errors surface as toasts via setErrorHandler.
 import type {
   Agent, AgentDetail, Approval, BlackboardEntry, CompanyEvent, CompanySettings, CompanySnapshot, Conversation,
-  CreateAgentInput, CreateTaskInput, DecideApprovalInput, DestroyAgentResult, MemoryItem, MemoryKind, Message,
+  CreateAgentInput, CreateTaskInput, DecideApprovalInput, DecideManyInput, DestroyAgentResult, MemoryItem, MemoryKind, Message,
   MetricsOverview, ModelsInfo, OrgResponse, PostMessageResult, RoleTemplate, Run, RunDetail, Task, TaskDetail,
   TaskStatus, AgentStatus, TimeseriesPoint, TraceDetail, TraceSummary, UpdateAgentInput, ApprovalStatus,
   CatalogAgentDetail, CatalogListResponse,
@@ -123,6 +123,7 @@ export const api = {
   updateCompany: (patch: Partial<CompanySettings>) => request<unknown>("PATCH", "/api/company", patch),
   pauseCompany: () => post<unknown>("/api/company/pause"),
   resumeCompany: () => post<unknown>("/api/company/resume"),
+  resetMood: () => post<{ reset: number }>("/api/company/reset-mood"),
   org: () => get<OrgResponse>("/api/org"),
   roles: () => get<RoleTemplate[]>("/api/roles"),
   models: () => get<ModelsInfo>("/api/models"),
@@ -150,6 +151,7 @@ export const api = {
   trace: (traceId: string) => get<TraceDetail>(`/api/traces/${id(traceId)}`),
   approvals: (status?: ApprovalStatus) => get<Approval[]>("/api/approvals", { status }),
   decideApproval: (approvalId: string, input: DecideApprovalInput) => post<Approval>(`/api/approvals/${id(approvalId)}/decide`, input),
+  decideMany: (input: DecideManyInput) => post<Approval[]>("/api/approvals/decide-many", input),
   blackboard: () => get<BlackboardEntry[]>("/api/blackboard"),
   putBlackboard: (key: string, value: string) => request<BlackboardEntry>("PUT", `/api/blackboard/${id(key)}`, { value }),
   memory: (q?: { q?: string; kind?: MemoryKind | "" }) => get<MemoryItem[]>("/api/memory", q),
@@ -164,7 +166,7 @@ export const api = {
 /** Every route the console calls — kept here so the backend can be checked against it. */
 export const ROUTES_USED = [
   "GET /api/health",
-  "GET /api/company", "PATCH /api/company", "POST /api/company/pause", "POST /api/company/resume",
+  "GET /api/company", "PATCH /api/company", "POST /api/company/pause", "POST /api/company/resume", "POST /api/company/reset-mood",
   "GET /api/org", "GET /api/roles", "GET /api/models",
   "GET /api/agents", "POST /api/agents", "GET /api/agents/:id", "PATCH /api/agents/:id",
   "POST /api/agents/:id/pause", "POST /api/agents/:id/resume", "DELETE /api/agents/:id", "GET /api/agents/:id/memory",
@@ -172,7 +174,7 @@ export const ROUTES_USED = [
   "GET /api/tasks", "POST /api/tasks", "GET /api/tasks/:id", "POST /api/tasks/:id/cancel", "POST /api/tasks/:id/retry",
   "GET /api/runs", "GET /api/runs/:id", "POST /api/runs/:id/cancel",
   "GET /api/traces", "GET /api/traces/:traceId",
-  "GET /api/approvals", "POST /api/approvals/:id/decide",
+  "GET /api/approvals", "POST /api/approvals/:id/decide", "POST /api/approvals/decide-many",
   "GET /api/blackboard", "PUT /api/blackboard/:key", "GET /api/memory",
   "GET /api/metrics/overview", "GET /api/metrics/timeseries",
   "GET /api/events", "GET /api/events/stream (SSE)",

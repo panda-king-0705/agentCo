@@ -106,6 +106,36 @@ function PendingCard({ a }: { a: Approval }) {
   );
 }
 
+/** Bulk triage: answer every open question at once, or dismiss them (the tasks then proceed on their own judgement). */
+function BulkQuestions({ count }: { count: number }) {
+  const [note, setNote] = useState("");
+  const { busy, run } = useAction();
+  if (count < 2) return null;
+  const decide = async (decision: "approved" | "rejected") => {
+    const res = await run(
+      () => api.decideMany({ kind: "question", decision, note: note.trim() || (decision === "rejected" ? "Dismissed by the Board: use your judgement and proceed, or stop if it cannot be done safely." : undefined) }),
+      decision === "approved" ? `Answered ${count} questions` : `Dismissed ${count} questions`,
+    );
+    if (res) {
+      seed.approvals(res);
+      setNote("");
+    }
+  };
+  return (
+    <Panel>
+      <div className="stack tight pad">
+        <strong>{count} open questions</strong>
+        <span className="muted small">Answer them all with one reply, or dismiss them all. Cancelling a stuck objective in Tasks also closes its questions.</span>
+        <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="One answer for every open question (optional when dismissing)" />
+        <div className="row">
+          <Button variant="primary" icon="check" onClick={() => decide("approved")} disabled={busy || !note.trim()}>Answer all</Button>
+          <Button variant="danger" onClick={() => decide("rejected")} disabled={busy}>Dismiss all</Button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 export function ApprovalsView() {
   const approvals = useLive((s) => s.approvals);
   const all = Object.values(approvals);
@@ -115,6 +145,7 @@ export function ApprovalsView() {
     <>
       <PageHead title="Approvals" sub="Hires, budget increases, risky actions and questions that need a human decision" />
       <h2 className="section-title" style={{ fontSize: 13 }}>Pending ({pending.length})</h2>
+      <BulkQuestions count={pending.filter((a) => a.kind === "question").length} />
       {pending.length ? (
         <div className="apr-grid">{pending.map((a) => <PendingCard key={a.id} a={a} />)}</div>
       ) : (

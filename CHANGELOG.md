@@ -5,6 +5,23 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Overview: "Spend today" / "Spend this month" and the daily budget bar stayed at the value
+  loaded with the page; the console now refreshes the company snapshot after model calls,
+  runs and approvals.
+- Question loop with live models: frustration from other work no longer early-stops a fresh
+  task, and it decays over reports and idle time; an objective has at most one open Board
+  question (later askers wait on it, one answer wakes them all); cancelling a task closes its
+  tree's pending approvals.
+- Board questions raised under a chat objective are posted in that chat, and the Board's
+  reply there answers them (the blocked work resumes) instead of starting an unrelated run.
+- Leaders' charters name the company's own stores (knowledge base, blackboard, workspace)
+  and limit Board questions to irreversible, external or out-of-mandate decisions.
+
+### Added
+- Approvals: answer or dismiss all open questions at once (`POST /api/approvals/decide-many`).
+- Overview: "Reset moods" when agents are frustrated (`POST /api/company/reset-mood`).
+
 ## [0.2.0] - 2026-11-06
 
 ### Added

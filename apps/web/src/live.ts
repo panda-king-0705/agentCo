@@ -97,6 +97,17 @@ function mergeMessages(prev: Message[], add: Message[]): Message[] {
 }
 
 let departmentsTimer: number | null = null;
+let companyTimer: number | null = null;
+/** Spend changes don't carry the totals: refetch the company snapshot (throttled to one GET per ~2 s). */
+export function refreshCompany(): void {
+  if (companyTimer != null) return;
+  companyTimer = window.setTimeout(() => {
+    companyTimer = null;
+    api.company().then((c) => seed.company(c), () => undefined);
+  }, 2000);
+}
+/** Events after which spend, open-task or approval counts in the company snapshot may have moved. */
+const COMPANY_REFRESH: ReadonlySet<CompanyEventType> = new Set<CompanyEventType>(["run.completed", "span.ended", "approval.created", "approval.decided", "budget.alert"]);
 /** Refetches the departments (throttled): a hire can create one on demand (docs/CATALOG.md). */
 export function refreshDepartments(): void {
   if (departmentsTimer != null) return;
@@ -173,6 +184,7 @@ export function applyEvent(ev: CompanyEvent): void {
       break;
   }
   set(patch);
+  if (COMPANY_REFRESH.has(ev.type) && (ev.type !== "span.ended" || (isObj(d) && d.kind === "llm"))) refreshCompany();
   for (const fn of eventListeners) fn(ev);
 }
 

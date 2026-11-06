@@ -95,7 +95,7 @@ test("F1 decide: with no revision, rollback or escalation left the rule settles 
 test("F1 brain: once the Board answered, a frustrated CEO proceeds instead of asking the Board again", async () => {
   const { p, ceo } = company({ mock: provider({}) });
   ceo.affect = { valence: -0.4, arousal: 0.5, frustration: 0.9 }; // frustration gate forces the early stop
-  const task = p.addTask(makeTask({ id: "tsk_f", number: 9, title: "Pick a market", description: "Pick our launch market.", assigneeId: ceo.id, value: 800, estCostUsd: 0.5 }));
+  const task = p.addTask(makeTask({ id: "tsk_f", number: 9, title: "Pick a market", description: "Pick our launch market.", assigneeId: ceo.id, value: 800, estCostUsd: 0.5, attempts: 2 })); // a retry: frustration gates tasks with setbacks
   const brain = new BrainEngine({ maxRevisions: 1, runTimeoutMs: 300_000 });
   const first = await brain.run(p.context(ceo, taskInput({ ...task })));
   assert.equal(first.outcome, "blocked");

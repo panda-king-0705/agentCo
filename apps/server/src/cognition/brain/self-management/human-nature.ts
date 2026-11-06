@@ -11,8 +11,8 @@
  * - recognition: acceptance by the manager or the Board moves valence 2× self-acceptance — the
  *   worker counts its own acceptance at its Report (1×) and the manager's Feedback (or the Board's
  *   go-ahead) tops it up through `recognition()`;
- * - decay: valence relaxes toward 0 on every Report and over idle time, so a past streak of
- *   success (or failure) does not modulate Motivation forever.
+ * - decay: valence and frustration relax toward 0 on every Report and over idle time, so a past
+ *   streak of success (or failure) does not modulate Motivation — or force early stops — forever.
  */
 import type { AffectState, Task } from "../../../../../../packages/shared/src/index.ts";
 import { clamp, round } from "../../coerce.ts";
@@ -85,8 +85,14 @@ function applyOne(a: AffectState, e: ProcessEvent): AffectState {
   return { valence: clamp(a.valence + delta * w, -1, 1), arousal: a.arousal, frustration: clamp(frustration, 0, 1) };
 }
 
+/** Frustration relaxes too: one Report's worth, plus the idle time before the run (half-life). */
+export function decayFrustration(frustration: number, idleMs = 0): number {
+  const idle = Math.max(0, idleMs) / H.frustrationHalfLifeMs;
+  return frustration * (1 - H.frustrationDecayPerRun) * Math.pow(0.5, idle);
+}
+
 export function updateAffect(affect: AffectState, events: ProcessEvent[], workload: Workload): AffectState {
-  let a = { ...affect, valence: decayValence(affect.valence, workload.idleMs) };
+  let a = { ...affect, valence: decayValence(affect.valence, workload.idleMs), frustration: decayFrustration(affect.frustration, workload.idleMs) };
   for (const e of events) a = applyOne(a, e);
   const target = H.arousalBase + H.arousalPerOpenItem * workload.openItems + H.arousalPerRun * workload.consecutiveRuns;
   const arousal = workload.openItems === 0 ? a.arousal - H.arousalIdleDecay * (a.arousal - H.arousalBase) : (a.arousal + target) / 2;

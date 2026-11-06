@@ -58,8 +58,8 @@ function company(options: { providers?: Record<string, ModelProvider> } = {}) {
 
 const LAUNCH = "Plan and prepare the launch of our first product, an AI meeting-notes app. Write a launch plan with marketing, engineering and finance input.";
 
-function rootTask(p: FakePlatform, assigneeId: string, title = "Launch plan for the AI meeting-notes app", description = LAUNCH): Task {
-  return p.addTask(makeTask({ id: `tsk_${Math.random().toString(36).slice(2, 8)}`, number: 7, title, description, assigneeId, value: 800, estCostUsd: 0.5 }));
+function rootTask(p: FakePlatform, assigneeId: string, title = "Launch plan for the AI meeting-notes app", description = LAUNCH, attempts?: number): Task {
+  return p.addTask(makeTask({ id: `tsk_${Math.random().toString(36).slice(2, 8)}`, number: 7, title, description, assigneeId, value: 800, estCostUsd: 0.5, ...(attempts !== undefined ? { attempts } : {}) }));
 }
 
 function apply(task: Task, r: EngineResult): void {
@@ -202,7 +202,8 @@ test("brain: low calibrated confidence → early stop → blocked with the Board
 test("brain: high frustration forces the early stop; a manager escalates up the chain and waits (outcome waiting)", async () => {
   const { p, cmo, ceo } = company();
   cmo.affect = { valence: -0.4, arousal: 0.5, frustration: 0.8 };
-  const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.");
+  // A second attempt: frustration only gates a task that has had setbacks of its own.
+  const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.", 2);
   const r = await brain().run(p.context(cmo, taskInput(task)));
   assert.equal(r.outcome, "waiting");
   assert.equal(r.approvalId, undefined, "no Board approval for a manager");
@@ -216,10 +217,23 @@ test("brain: high frustration forces the early stop; a manager escalates up the 
   assert.ok(cp && cp.block === "metacognition.confidence", "checkpointed at the Confidence block");
 });
 
+test("brain: frustration from other work does not early-stop a fresh task (no Board/manager question)", async () => {
+  const { p, cmo } = company();
+  cmo.affect = { valence: -0.4, arousal: 0.5, frustration: 1 };
+  const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.");
+  const r = await brain().run(p.context(cmo, taskInput(task)));
+  assert.equal(p.tasks.children(task.id).filter((c) => c.state.kind === "escalation").length, 0, "no escalation subtask");
+  assert.equal(p.approvals.length, 0, "no Board question");
+  assert.notEqual(r.outcome, "failed");
+  assert.ok(p.tracer.spans.some((s) => s.attributes["agentco.frustration_gate.fresh_task"] === true), "the bypass is traced");
+  assert.equal(p.tracer.spans.some((s) => s.attributes["agentco.early_stop"] === true), false);
+});
+
 test("brain: escalation answered (subtasks_completed) resumes at the checkpoint with the answer in working memory", async () => {
   const { p, cmo } = company();
   cmo.affect = { valence: -0.4, arousal: 0.5, frustration: 0.8 };
-  const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.");
+  // A second attempt: frustration only gates a task that has had setbacks of its own.
+  const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.", 2);
   const first = await brain().run(p.context(cmo, taskInput(task)));
   assert.equal(first.outcome, "waiting");
   p.tasks.patchState(task.id, first.taskState as Record<string, unknown>);
@@ -239,7 +253,8 @@ test("brain: escalation answered (subtasks_completed) resumes at the checkpoint 
 test("brain: a failed escalation fails the task with the reason instead of looping", async () => {
   const { p, cmo } = company();
   cmo.affect = { valence: -0.4, arousal: 0.5, frustration: 0.8 };
-  const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.");
+  // A second attempt: frustration only gates a task that has had setbacks of its own.
+  const task = rootTask(p, cmo.id, "Launch campaign", "Prepare the launch campaign.", 2);
   const first = await brain().run(p.context(cmo, taskInput(task)));
   p.tasks.patchState(task.id, first.taskState as Record<string, unknown>);
   const esc = p.tasks.children(task.id)[0]!;

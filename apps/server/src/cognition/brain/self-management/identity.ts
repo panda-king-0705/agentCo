@@ -142,8 +142,27 @@ export function renderCharter(agent: Agent, facts: AgentFacts): string {
     // Catalog specialist as optional domain expertise (docs/CATALOG.md); short, it is paid on every stage.
     facts.expertise ? truncate(facts.expertise, 600) : "",
     `Style: ${truncate(agent.persona.style || "clear and direct", 100)}${toneFor(agent.persona.personalityType)}`,
+    operatingRules(agent.tools),
   ];
   return lines.filter(Boolean).join("\n");
+}
+
+/**
+ * Grounding: the company's own systems and when to ask the Board. Without it, live models treat
+ * every plain request ("set my custodian ID to …") as an unknown external system to verify and
+ * escalate it, and each answer spawns more questions.
+ */
+export function operatingRules(tools: readonly string[]): string {
+  const stores = [
+    tools.includes("memory_write") ? "knowledge base (memory_write/memory_search)" : "",
+    tools.includes("blackboard_write") || tools.includes("blackboard_read") ? "blackboard (shared working memory)" : "",
+    tools.includes("workspace_write_file") ? "shared workspace files" : "",
+  ].filter(Boolean);
+  if (!stores.length) return "";
+  return (
+    `Company systems you own: ${stores.join(", ")}. When the Board gives you a fact or asks you to set/record something, store it there and report it done; do not ask which system or for verification. ` +
+    "Act on reasonable assumptions and state them. Ask the Board only for decisions that are irreversible, spend real money, touch real outside accounts or are outside your mandate — and ask once, all points together."
+  );
 }
 
 // ── Maslow › Belonging: who to reach out to, and why belonging is low.
