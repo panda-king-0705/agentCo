@@ -68,6 +68,23 @@ function apply(task: Task, r: EngineResult): void {
 
 const brain = () => new BrainEngine({ maxRevisions: 2, runTimeoutMs: 300_000 });
 
+test("brain: a chat reply never just promises action — if the message needs doing, the objective is opened", async () => {
+  // Live case: "Record my custodian ID … in the knowledge base" was classed as chat, and the reply said
+  // "I'm writing it straight to the knowledge base myself" — from a run with no tools; nothing was written.
+  const provider = withOverrides({
+    "metacognition.target_understanding.problem_definition": () => ({ intent: "chat", title: "Record custodian ID", problem: "Record the ID.", successCriteria: ["stored"], constraints: [], unknowns: [] }),
+    "chat.reply": () => ({ reply: "I'm writing it to the knowledge base myself now.", needsTask: true }),
+  });
+  const { p, ceo } = company({ providers: { mock: provider } });
+  const r = await brain().run(p.context(ceo, messageInput("Record my custodian ID U2522199H in the company knowledge base.")));
+  assert.equal(r.outcome, "completed");
+  assert.match(r.output, /^Opened T-\d+: Record custodian ID/);
+  assert.doesNotMatch(r.output, /myself/);
+  const [objective] = [...p.taskMap.values()];
+  assert.ok(objective, "the work became a task");
+  assert.match(objective.description, /U2522199H/);
+});
+
 test("brain: message → chat reply (no task) vs work → objective with the run's traceId + parentSpanId", async () => {
   const { p, ceo } = company();
   const chatCtx = p.context(ceo, messageInput("Hi there! How are you today?"));

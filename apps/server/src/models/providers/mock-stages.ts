@@ -179,6 +179,8 @@ function focusFor(report: { title?: string; department?: string }): string {
 export function mockStageJson(stage: string, ctx: MockContext): Record<string, unknown> {
   const t = title(ctx);
   switch (stage) {
+    case "chat.reply":
+      return { reply: chatReply(ctx), needsTask: false };
     case "metacognition.target_understanding.problem_definition": {
       const intent = ctx.mode === "message" ? classifyIntent(ctx.message ?? "") : "work";
       return {

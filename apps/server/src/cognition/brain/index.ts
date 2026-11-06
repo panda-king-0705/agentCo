@@ -38,7 +38,7 @@ import {
 import { selfAbility, type Competence } from "./metacognition/self-ability.ts";
 import { feedback, integrateResults, solving, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
 import { analysis, literatureReview, problemDefinition, requestText, type ProblemDefinition, type Understanding } from "./metacognition/target-understanding.ts";
-import { block, llmText, mustPropagate, phase, toolContext, YieldSignal, type BrainRun } from "./runtime.ts";
+import { block, llmJson, mustPropagate, phase, toolContext, YieldSignal, type BrainRun } from "./runtime.ts";
 import { feedbackUpdate } from "./self-management/emotion.ts";
 import { eventsFromSubtasks, recognition, type ProcessEvent } from "./self-management/human-nature.ts";
 import { computeDrives, selfManagementPass } from "./self-management/identity.ts";
@@ -187,10 +187,10 @@ export class BrainEngine implements CognitiveEngine {
       return { problem, literature };
     });
 
-    if (problem.intent === "work") {
-      const task = await block(run, "todo_list", "Adding the request to my TODO list", (span) => {
+    const openObjective = (title: string) =>
+      block(run, "todo_list", "Adding the request to my TODO list", (span) => {
         const t = run.platform.tasks.createObjective({
-          title: problem.title,
+          title,
           description: `${input.message.content.trim()}\n\nProblem as understood: ${problem.problem}`,
           assigneeId: run.agent.id,
           createdBy: run.agent.id,
@@ -202,20 +202,35 @@ export class BrainEngine implements CognitiveEngine {
         span.setAttributes({ "agentco.task.id": t.id, "agentco.task.number": t.number });
         return t;
       });
-      return { outcome: "completed", output: `Opened T-${task.number}: ${task.title}. I'll work it through with the team and report back here when it's done.` };
+
+    if (problem.intent === "work") {
+      const task = await openObjective(problem.title);
+      return { outcome: "completed", output: `Opened T-${task.number}: ${task.title}. I'll work it through and report back here when it's done.` };
     }
 
-    const reply = await block(run, "metacognition.solving_evaluation.solving", "Writing a reply", (span) =>
-      llmText(run, {
+    // A chat reply has no tools: it cannot act. The reply model also says whether the message asks
+    // for action after all — then the objective is opened instead of a reply that only PROMISES to act
+    // ("I'm writing it to the knowledge base myself…" with nothing ever written).
+    const out = await block(run, "metacognition.solving_evaluation.solving", "Writing a reply", (span) =>
+      llmJson(run, {
         stage: "chat.reply",
         span,
         instructions:
           `${requestText(run)}\n\nWhat you know:\n${literature.slice(0, 6).join("\n") || "(nothing specific)"}\n\n` +
-          "Reply to the latest message in your own voice: brief, specific, honest about what you don't know. If they want work done, say you'll open a task.",
+          "Reply to the latest message in your own voice: brief, specific, honest about what you don't know. " +
+          "You cannot take any action in this reply (no tools): never say you are doing, have done or will do something yourself. " +
+          "needsTask = true if the message asks for anything to be done or changed (even a small action such as recording or saving something); the task is then opened for you.",
+        shape: '{"reply":string,"needsTask":boolean}',
         context: { mode: "message", message: input.message.content, agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department } },
-        maxOutputTokens: 400,
+        maxOutputTokens: 500,
       }),
     );
+    if (out.needsTask === true) {
+      run.ctx.span.setAttributes({ "agentco.chat.needs_task": true });
+      const task = await openObjective(problem.title);
+      return { outcome: "completed", output: `Opened T-${task.number}: ${task.title}. I'll work it through and report back here when it's done.` };
+    }
+    const reply = typeof out.reply === "string" ? out.reply.trim() : "";
     return { outcome: "completed", output: reply || "Noted — I'll follow up." };
   }
 

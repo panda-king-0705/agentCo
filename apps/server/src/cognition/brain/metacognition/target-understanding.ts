@@ -73,7 +73,9 @@ export async function problemDefinition(run: BrainRun, gaps: string[] = []): Pro
       instructions:
         `${requestText(run)}\n\nDefine the problem.` +
         (gaps.length ? ` Your previous understanding was evaluated as insufficient; re-define the problem around these gaps: ${gaps.join("; ")}.` : "") +
-        (isMessage ? ' intent = "work" only if the message asks for work to be done (build, plan, write, research, …); greetings, questions and chat = "chat".' : ""),
+        (isMessage
+          ? ' intent = "work" if the message asks for anything to be done or changed — including small actions such as recording, saving, setting, updating, sending or deleting something — not only big projects (build, plan, write, research, …); greetings, questions and chat = "chat".'
+          : ""),
       shape: '{"intent":"chat"|"work","title":string,"problem":string,"successCriteria":string[],"constraints":string[],"unknowns":string[]}',
       context: {
         mode: isMessage ? "message" : "task",
