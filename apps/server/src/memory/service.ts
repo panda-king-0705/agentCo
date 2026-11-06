@@ -56,6 +56,11 @@ export class MemoryServiceImpl implements MemoryService {
 
   /** Stores a memory (content redacted) and emits memory.written. */
   write(input: MemoryWriteInput): MemoryItem {
+    return this.upsert(input).item;
+  }
+
+  /** write(), also saying whether an earlier memory of the same task was replaced (upsertWithinTask). */
+  upsert(input: MemoryWriteInput): { item: MemoryItem; updated: boolean } {
     if (!MEMORY_KINDS.includes(input.kind)) throw badRequest(`kind must be one of ${MEMORY_KINDS.join(", ")}`);
     if (!MEMORY_SCOPES.includes(input.scope)) throw badRequest("scope must be agent or global");
     if (input.scope === "agent" && !input.agentId) throw badRequest("agent-scoped memories need an agentId");
@@ -75,9 +80,18 @@ export class MemoryServiceImpl implements MemoryService {
       createdAt: this.now().toISOString(),
       lastAccessedAt: null,
     };
+    if (input.upsertWithinTask) {
+      const twin = this.repos.memories.findTaskTwin(item);
+      if (twin) {
+        this.repos.memories.replaceContent(twin.id, { content: item.content, tags: item.tags, importance: item.importance });
+        const updated = { ...twin, content: item.content, tags: item.tags, importance: item.importance };
+        this.bus.emit("memory.written", { agentId: updated.agentId, taskId: updated.sourceTaskId, runId: item.sourceRunId, summary: `${updated.scope} ${updated.kind} memory updated: ${oneLine(updated.content, 100)}`, data: updated });
+        return { item: updated, updated: true };
+      }
+    }
     this.repos.memories.insert(item);
     this.bus.emit("memory.written", { agentId: item.agentId, taskId: item.sourceTaskId, runId: item.sourceRunId, summary: `${item.scope} ${item.kind} memory: ${oneLine(item.content, 100)}`, data: item });
-    return item;
+    return { item, updated: false };
   }
 
   blackboardList(): BlackboardEntry[] {

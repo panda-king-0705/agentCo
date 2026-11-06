@@ -224,10 +224,14 @@ export async function feedback(
       maxOutputTokens: 500,
     });
     const nonEmpty = results.length ? results.some((r) => (r.result ?? "").trim()) : !!(o.solution ?? "").trim();
-    const score = unit(json.score, nonEmpty ? 0.5 : 0.1);
-    const truthfulScore = unit(json.truthful, score);
-    const modelDecision: Decision = oneOf(json.decision, ["accept", "revise", "rollback", "escalate"] as const, score >= 0.6 ? "accept" : "revise");
     const threshold = acceptThreshold(o.controlLevel, run.drives.strictSelfEvaluation);
+    // No readable verdict (even after llmJson's repair attempt): don't default to "revise" — that
+    // re-ran finished work with its side effects (the same memory written three times). A non-empty
+    // result is accepted at the bar, with the gap reported; an empty one is still revised.
+    const degraded = Object.keys(json).length === 0;
+    const score = unit(json.score, nonEmpty ? (degraded ? threshold : 0.5) : 0.1);
+    const truthfulScore = unit(json.truthful, degraded && nonEmpty ? Math.max(score, run.drives.truthfulGate) : score);
+    const modelDecision: Decision = oneOf(json.decision, ["accept", "revise", "rollback", "escalate"] as const, (degraded && nonEmpty) || score >= 0.6 ? "accept" : "revise");
     const goodFromModel = typeof json.good === "boolean" ? json.good : modelDecision === "accept";
     const teg = await truthfulEfficientGood(run, {
       truthfulScore,
@@ -239,10 +243,11 @@ export async function feedback(
       acceptThreshold: threshold,
     });
     const issues = strArr(json.issues, 6, 240);
+    if (degraded) issues.push("self-evaluation unavailable: the model's verdict could not be read");
     if (!teg.efficient) issues.push(`cost $${o.actualCostUsd.toFixed(4)} exceeded 1.5× the estimate $${o.estimateUsd.toFixed(4)}`);
     const decision = decide({ modelDecision, score, teg, revisionsLeft: o.revisionsLeft, rollbackAvailable: o.rollbackAvailable, canEscalate: o.canEscalate });
     const summary = str(json.summary, results.length ? `${results.filter((r) => r.status === "done").length}/${results.length} parts delivered.` : truncate(o.solution ?? "", 300), 1200);
-    span.setAttributes({ "agentco.score": score, "agentco.decision": decision, "agentco.decision.model": modelDecision, "agentco.accept_threshold": threshold });
+    span.setAttributes({ "agentco.score": score, "agentco.decision": decision, "agentco.decision.model": modelDecision, "agentco.accept_threshold": threshold, "agentco.feedback.degraded": degraded });
     return { score, truthfulScore, issues, modelDecision, decision, summary, teg, acceptThreshold: threshold };
   });
 }

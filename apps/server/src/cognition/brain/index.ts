@@ -16,7 +16,7 @@
  * brain.confidence, brain.planning, brain.solving, brain.evaluation, brain.report).
  */
 import type { Approval, CalibrationStats, Okr, Task } from "../../../../../packages/shared/src/index.ts";
-import type { CognitiveEngine, CognitiveStatePatch, EngineContext, EngineResult, SpanHandle } from "../../contracts.ts";
+import type { CognitiveEngine, CognitiveStatePatch, EngineContext, EngineResult, SpanHandle, ToolEffect } from "../../contracts.ts";
 import { arr, num, obj, str, strArr } from "../coerce.ts";
 import { agentFacts } from "../prompt.ts";
 import { oneLine, truncate } from "../text.ts";
@@ -545,7 +545,8 @@ export class BrainEngine implements CognitiveEngine {
         rejected = [...rejected, planned.chosen];
         const next = nextCandidate(planned.chosen, rejected);
         if (!next) break;
-        feedbackIssues = fb.issues;
+        const done = describeEffects(solution.effects);
+        feedbackIssues = done ? [done, ...fb.issues].slice(0, 8) : fb.issues;
         this.patch(run, { plan: { ...persisted, revision, rejected, feedback: feedbackIssues.slice(-8) } });
         continue;
       }
@@ -553,6 +554,9 @@ export class BrainEngine implements CognitiveEngine {
       revision++;
       this.patch(run, { plan: { ...persisted, revision, rejected, feedback: fb.issues.slice(-8) } });
       feedbackIssues = await reflectionReplanning(run, fb.issues, fb.summary);
+      // What the attempt already changed stays changed: the next attempt builds on it, never repeats it.
+      const done = describeEffects(solution.effects);
+      if (done) feedbackIssues = [done, ...feedbackIssues].slice(0, 8);
       // The verdict is persisted before re-planning: a later checkpoint keeps the revise budget.
       this.patch(run, { plan: { ...persisted, revision, rejected, feedback: feedbackIssues.slice(-8) } });
     }
@@ -903,4 +907,29 @@ export function taskSetbacks(run: BrainRun, state: { feedback: string[]; rejecte
   if (task.attempts > 1 || (run.escalation?.count ?? 0) > 0) return true;
   if (state.feedback.length > 0 || state.rejected.length > 0 || state.revision > 0) return true;
   return run.platform.tasks.children(task.id).some((c) => c.status === "failed" || c.status === "blocked" || c.status === "cancelled");
+}
+
+/**
+ * The side effects an attempt already made, as feedback for the next one ("do not repeat"):
+ * a revise used to re-run Solving from scratch and re-write the same memory, file or message.
+ */
+export function describeEffects(effects: readonly ToolEffect[]): string | null {
+  const parts = effects.flatMap((e) => {
+    switch (e.kind) {
+      case "memory_written":
+        return [`memory ${e.memoryId} written`];
+      case "file_written":
+        return [`file ${e.path} written`];
+      case "message_sent":
+        return ["a message sent"];
+      case "task_created":
+        return [`task ${e.taskId} created`];
+      case "agent_hired":
+        return [`agent ${e.agentId} hired`];
+      default:
+        return [];
+    }
+  });
+  if (!parts.length) return null;
+  return truncate(`Already done by an earlier attempt — do not repeat it; update or build on it instead: ${[...new Set(parts)].join("; ")}.`, 240);
 }
