@@ -471,6 +471,17 @@ export class FakePlatform implements PlatformServices {
         .slice(0, q.limit ?? 6)
         .map((x) => x.m);
     },
+    upsert: (input: MemoryWriteInput) => {
+      const key = [...(input.tags ?? [])].sort().join("|");
+      const twin = input.upsertWithinTask && input.sourceTaskId
+        ? this.memories.find((m) => m.sourceTaskId === input.sourceTaskId && m.scope === input.scope && m.kind === input.kind && m.agentId === input.agentId && [...m.tags].sort().join("|") === key)
+        : undefined;
+      if (twin) {
+        twin.content = input.content;
+        return { item: twin, updated: true };
+      }
+      return { item: this.memory.write(input), updated: false };
+    },
     write: (input: MemoryWriteInput) => {
       const item: MemoryItem = {
         id: nextId("mem"),

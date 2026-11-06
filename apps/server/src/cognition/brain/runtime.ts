@@ -4,11 +4,12 @@
  * JSON/text model-call helpers that put the identity charter in every prompt.
  */
 import type { Agent, BrainBlockId, ModelTier, Task } from "../../../../../packages/shared/src/index.ts";
-import type { ChatResponse, EngineContext, PlatformServices, SpanHandle } from "../../contracts.ts";
+import type { ChatMessage, ChatResponse, EngineContext, PlatformServices, SpanHandle } from "../../contracts.ts";
 import type { SpanAttributes } from "../../../../../packages/shared/src/index.ts";
 import { isAbortError, isBudgetError } from "../../models/router.ts";
 import { obj, type Json } from "../coerce.ts";
 import { jsonContract, systemPrompt, type AgentFacts } from "../prompt.ts";
+import { truncate } from "../text.ts";
 import type { EscalationState } from "./escalation.ts";
 import type { Drives } from "./self-management/identity.ts";
 
@@ -187,22 +188,39 @@ function tierFor(run: BrainRun, stage: string): ModelTier {
  */
 export async function llmJson(run: BrainRun, o: LlmOptions): Promise<Json> {
   const tier = o.tier ?? tierFor(run, o.stage);
-  const started = Date.now();
-  const response = await run.platform.models.chat(
-    {
-      tier,
-      modelOverride: run.routingAgent.modelOverride,
-      messages: [
-        { role: "system", content: systemPrompt(o.stage, [run.charter, o.instructions, jsonContract(o.shape)], o.context) },
-        { role: "user", content: o.user ?? "Go." },
-      ],
-      responseFormat: "json",
-      maxOutputTokens: o.maxOutputTokens ?? 700,
-      temperature: 0.2,
-    },
+  const maxOutputTokens = o.maxOutputTokens ?? 700;
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemPrompt(o.stage, [run.charter, o.instructions, jsonContract(o.shape)], o.context) },
+    { role: "user", content: o.user ?? "Go." },
+  ];
+  let started = Date.now();
+  let response = await run.platform.models.chat(
+    { tier, modelOverride: run.routingAgent.modelOverride, messages, responseFormat: "json", maxOutputTokens, temperature: 0.2 },
     callContext(run, o.span, o.stage),
   );
   recordCall(run, o.stage, response, Date.now() - started, response.json !== null);
+  if (!response.json) {
+    // One repair attempt: unparseable output (cut off, or prose around it) silently became defaults
+    // downstream — e.g. Feedback's "revise", which re-ran finished work.
+    o.span.setAttributes({ "agentco.json_retry": true });
+    started = Date.now();
+    response = await run.platform.models.chat(
+      {
+        tier,
+        modelOverride: run.routingAgent.modelOverride,
+        messages: [
+          ...messages,
+          { role: "assistant", content: truncate(response.content || "(empty)", 2000) },
+          { role: "user", content: "That was not one complete JSON object (it may have been cut off). Reply with ONLY the JSON object, keeping strings short." },
+        ],
+        responseFormat: "json",
+        maxOutputTokens: Math.max(1200, maxOutputTokens * 2),
+        temperature: 0.2,
+      },
+      callContext(run, o.span, o.stage),
+    );
+    recordCall(run, o.stage, response, Date.now() - started, response.json !== null);
+  }
   if (!response.json) o.span.setAttributes({ "agentco.degraded": true });
   return obj(response.json);
 }

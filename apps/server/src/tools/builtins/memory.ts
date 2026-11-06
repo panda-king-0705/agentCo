@@ -54,7 +54,7 @@ export const memoryWrite: ToolDefinition = {
     if (scope === "global" && ctx.agent.tier === "worker" && kind !== "episodic" && kind !== "working") {
       return fail("Workers may only write global episodic memories; ask your manager to record semantic/procedural knowledge.");
     }
-    const item = ctx.services.memory.write({
+    const { item, updated } = ctx.services.memory.upsert({
       scope,
       agentId: ctx.agent.id,
       kind,
@@ -63,8 +63,15 @@ export const memoryWrite: ToolDefinition = {
       ...(typeof args.importance === "number" ? { importance: args.importance } : {}),
       sourceRunId: ctx.runId,
       sourceTaskId: ctx.taskId,
+      upsertWithinTask: true,
     });
-    return ok(`Stored ${scope} ${kind} memory ${item.id}.`, [{ kind: "memory_written", memoryId: item.id }], { id: item.id });
+    return ok(
+      updated
+        ? `Updated ${scope} ${kind} memory ${item.id} (this task had already written one with the same tags; it now holds this content — no duplicate).`
+        : `Stored ${scope} ${kind} memory ${item.id}.`,
+      [{ kind: "memory_written", memoryId: item.id }],
+      { id: item.id, updated },
+    );
   },
 };
 

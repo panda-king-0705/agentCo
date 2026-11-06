@@ -126,6 +126,24 @@ export class MemoryRepo {
     return row ? toMemory(row) : null;
   }
 
+  /** This agent's earlier memory for the same task with the same scope, kind and tag set (upsert target). */
+  findTaskTwin(item: Pick<MemoryItem, "scope" | "agentId" | "kind" | "tags" | "sourceTaskId">): MemoryItem | null {
+    if (!item.sourceTaskId) return null;
+    const key = [...item.tags].sort().join("\u0000");
+    const rows = this.db
+      .prepare("SELECT * FROM memories WHERE source_task_id = ? AND scope = ? AND kind = ? AND agent_id IS ? ORDER BY created_at DESC")
+      .all(item.sourceTaskId, item.scope, item.kind, item.agentId) as Row[];
+    const twin = rows.map(toMemory).find((m) => [...m.tags].sort().join("\u0000") === key);
+    return twin ?? null;
+  }
+
+  /** Replace a memory's content (and tags/importance), keeping its id; the FTS row follows. */
+  replaceContent(id: string, patch: { content: string; tags: string[]; importance: number }): void {
+    this.db.prepare("UPDATE memories SET content = ?, tags = ?, importance = ? WHERE id = ?").run(patch.content, JSON.stringify(patch.tags), patch.importance, id);
+    this.db.prepare("DELETE FROM memories_fts WHERE memory_id = ?").run(id);
+    this.db.prepare("INSERT INTO memories_fts (content, tags, memory_id) VALUES (?, ?, ?)").run(patch.content, patch.tags.join(" "), id);
+  }
+
   /** FTS5 match → rows with bm25 score (lower is better), filtered by visibility. */
   match(ftsQuery: string, visibility: { agentId: string | null; scopes: string[]; kinds: string[] | null }, limit: number): Row[] {
     const { clause, params } = visibilityClause(visibility);

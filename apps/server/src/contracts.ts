@@ -215,12 +215,19 @@ export interface MemoryWriteInput {
   importance?: number;
   sourceRunId?: string | null;
   sourceTaskId?: string | null;
+  /**
+   * Upsert: if this agent already wrote a memory of the same scope, kind and tags for the same task,
+   * replace its content instead of adding another (a revised attempt re-writing the same fact).
+   */
+  upsertWithinTask?: boolean;
 }
 
 export interface MemoryService {
   /** FTS5/BM25 ranked, blended with importance and recency. Bumps accessCount. */
   search(query: MemorySearchQuery): MemoryItem[];
   write(input: MemoryWriteInput): MemoryItem;
+  /** write(), saying whether an earlier memory of the same task was replaced (upsertWithinTask). */
+  upsert(input: MemoryWriteInput): { item: MemoryItem; updated: boolean };
   blackboardList(): BlackboardEntry[];
   blackboardGet(key: string): BlackboardEntry | null;
   blackboardSet(key: string, value: string, updatedBy: string): BlackboardEntry;

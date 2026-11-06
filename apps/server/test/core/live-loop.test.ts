@@ -167,3 +167,28 @@ test("budget windows start at local midnight of TZ (a Singapore morning is today
     else process.env.TZ = saved;
   }
 });
+
+test("memory_write within one task upserts: the same scope, kind and tags replace the earlier entry (no duplicates)", async () => {
+  const t = await createTestApp({});
+  try {
+    const { platform } = t.app;
+    const ceo = t.agentByRole("ceo");
+    const task = rootTask(t, ceo.id, "Record custodian ID");
+    const base = { scope: "global" as const, agentId: ceo.id, kind: "semantic" as const, tags: ["custodian-id", "board"], sourceTaskId: task.id, upsertWithinTask: true };
+    const first = platform.memory.upsert({ ...base, content: "Board custodian ID: U2522199H (first wording)." });
+    const second = platform.memory.upsert({ ...base, tags: ["board", "custodian-id"], content: "Board custodian ID: U2522199H (second wording)." });
+    assert.equal(first.updated, false);
+    assert.equal(second.updated, true);
+    assert.equal(second.item.id, first.item.id, "same entry");
+    const hits = platform.memory.search({ query: "custodian U2522199H", agentId: ceo.id, scopes: ["global"], limit: 10 });
+    assert.equal(hits.filter((m) => /U2522199H/.test(m.content)).length, 1, "one entry, and search finds the new wording");
+    assert.match(hits[0]!.content, /second wording/);
+    // Other tags, or another task, are different facts: stored separately.
+    const other = platform.memory.upsert({ ...base, tags: ["custodian-id"], content: "Custodian ID format note." });
+    assert.equal(other.updated, false);
+    const plain = platform.memory.write({ ...base, upsertWithinTask: false, content: "Board custodian ID: U2522199H (explicit second copy)." });
+    assert.notEqual(plain.id, first.item.id, "write() without upsert keeps appending (episodes, reports)");
+  } finally {
+    await t.close();
+  }
+});

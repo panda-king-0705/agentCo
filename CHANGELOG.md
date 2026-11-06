@@ -21,6 +21,11 @@ versioning: [SemVer](https://semver.org/).
   The confidence step now sees the agent's tools (agents claimed "no memory_write tool").
 - Anthropic JSON calls: no `response_format: json_object` (its endpoint only accepts
   `json_schema`); any provider rejecting `response_format` is retried without it.
+- Revisions no longer repeat finished work (the custodian ID was written three times): an
+  unreadable Feedback verdict is repaired once and, failing that, a non-empty result is accepted
+  instead of defaulting to "revise"; a revision is told what the earlier attempt already changed;
+  `memory_write` within one task upserts (same scope, kind and tags replace the earlier entry).
+  Any unparseable stage JSON gets one repair attempt.
 - Chat: a request for any action (even "record X") opens a task; a chat reply has no tools and may
   no longer promise to do something itself ("I'm writing it to the knowledge base…" with nothing
   written). The reply step can still open the task if the intent check missed it.
