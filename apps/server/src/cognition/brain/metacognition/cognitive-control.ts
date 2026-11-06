@@ -192,7 +192,8 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
     const namedInRequest = task ? namedCandidates(`${task.title} ${task.description}`, candidates) : new Set<string>();
     for (const s of subprocesses) {
       if (candidates.length === 0) break;
-      const own = namedCandidates(`${s.title} ${s.description}`, candidates);
+      // The part's TITLE says whose it is ("Engineering scope…"); descriptions mention other departments in passing.
+      const own = namedCandidates(s.title, candidates);
       const namedIds = own.size ? own : namedInRequest.size === 1 ? namedInRequest : undefined;
       const scores = scoreCandidates(`${s.title} ${s.description}`, candidates, { suggestedId: s.suggestedAssigneeId, usedCounts: used, fallbackDepartment: run.facts.department, ...(namedIds ? { namedIds } : {}) });
       const best = scores[0]!;

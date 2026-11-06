@@ -84,7 +84,10 @@ export const blackboardRead: ToolDefinition = {
     const memory = ctx.services.memory;
     if (typeof args.key === "string" && args.key) {
       const entry = memory.blackboardGet(args.key);
-      return entry ? ok(`${entry.key} = ${entry.value}`, [], entry) : fail(`No blackboard entry "${args.key}".`);
+      if (entry) return ok(`${entry.key} = ${entry.value}`, [], entry);
+      // A miss is an answer, not a failure (it showed as a red error in every trace).
+      const keys = memory.blackboardList().map((e) => e.key);
+      return ok(`No blackboard entry "${args.key}" (nobody has written it yet). ${keys.length ? `Existing keys: ${keys.slice(0, 30).join(", ")}.` : "The blackboard is empty."}`, [], { entry: null, keys });
     }
     const entries = memory.blackboardList();
     return ok(entries.length ? entries.map((e) => `- ${e.key}: ${oneLine(e.value, 300)}`).join("\n") : "The blackboard is empty.", [], { entries });

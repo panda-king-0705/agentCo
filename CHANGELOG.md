@@ -14,6 +14,11 @@ versioning: [SemVer](https://semver.org/).
   extractor returned the first nested object of a truncated reply; it now returns nothing, so the
   stage is repaired and retried, and planning gets more output room. Cross-department work is
   delegated one part per owning report.
+- Role arrangement trusts the leader's choice of assignee (keyword overlap overrode a sensible
+  pick: "verify and assemble the plan" went from the Chief of Staff to the CTO); a department
+  counts as named only in a part's title, not anywhere in its description.
+- A blackboard key nobody wrote yet, or a workspace file not written yet, is an answer listing what
+  exists, not a red tool error in the trace.
 - Agents now know today's date and time (TZ); a department or role named in the request ("have
   Finance…") decides who gets the work.
 - Overview: "Spend today" / "Spend this month" and the daily budget bar stayed at the value

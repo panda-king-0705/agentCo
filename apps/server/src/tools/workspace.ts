@@ -66,6 +66,12 @@ export class Workspaces {
     return target.display;
   }
 
+  /** Whether a file exists at the path (an invalid path throws, as for read). */
+  exists(agentId: string, path: string): boolean {
+    const target = this.resolve(agentId, path);
+    return existsSync(target.absolute) && statSync(target.absolute).isFile();
+  }
+
   read(agentId: string, path: string): { content: string; truncated: boolean } {
     const target = this.resolve(agentId, path);
     if (!existsSync(target.absolute) || !statSync(target.absolute).isFile()) throw new WorkspaceError(`no such file: ${path}`);

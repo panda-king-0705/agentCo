@@ -171,3 +171,43 @@ test("onboarding: a new hire finds the handbook in its inbox from its manager; c
     await t.close();
   }
 });
+
+test("expected misses are answers, not errors: blackboard_read of an unwritten key, workspace_read_file of a file not there yet", async () => {
+  const t = await createTestApp({
+    reflex: async (ctx) => {
+      const bb = await callTool(ctx, "blackboard_read", { key: "objective:T-999" });
+      const file = await callTool(ctx, "workspace_read_file", { path: "shared/engineering/not-yet.md" });
+      return done(`${bb.ok}|${bb.content}\n${file.ok}|${file.content}`);
+    },
+  });
+  try {
+    const { platform } = t.app;
+    platform.memory.blackboardSet("office_hours", "9-6 SGT", "system");
+    const worker = t.agentByRole("backend-engineer");
+    const task = rootTask(t, worker.id, "Look things up");
+    await t.drain();
+    const [bb, file] = (platform.tasks.require(task.id).result ?? "").split("\n");
+    assert.match(bb!, /^true\|No blackboard entry "objective:T-999" \(nobody has written it yet\)\. Existing keys: .*office_hours/);
+    assert.match(file!, /^true\|No file "shared\/engineering\/not-yet\.md" yet\./);
+  } finally {
+    await t.close();
+  }
+});
+
+test("role arrangement: the leader's pick wins unless another mandate fits clearly better; a department named in the TITLE decides", async () => {
+  const { scoreCandidates } = await import("../../src/cognition/brain/self-management/role-arrangement.ts");
+  const t = await createTestApp({});
+  try {
+    const { platform } = t.app;
+    const cands = platform.org.directReports(t.agentByRole("ceo").id).map((agent) => ({ agent, departmentName: platform.org.departmentName(agent.departmentId) }));
+    const cos = t.agentByRole("chief-of-staff");
+    const cto = t.agentByRole("cto");
+    const text = "Independently verify figures and assemble final one-page plan (engineering scope, pricing, marketing)";
+    const ranked = scoreCandidates(text, cands, { suggestedId: cos.id, fallbackDepartment: "Executive Office" });
+    assert.equal(ranked[0]!.agentId, cos.id, "the leader's pick (Chief of Staff) is kept");
+    const titled = scoreCandidates("Engineering scope for the chosen pricing lever", cands, { suggestedId: cos.id, fallbackDepartment: "Executive Office", namedIds: namedCandidates("Engineering scope for the chosen pricing lever", cands) });
+    assert.equal(titled[0]!.agentId, cto.id, "a part titled for Engineering goes to Engineering");
+  } finally {
+    await t.close();
+  }
+});
