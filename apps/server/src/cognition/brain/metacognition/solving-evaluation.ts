@@ -11,6 +11,7 @@
  * or fail once nothing is left to try (no revision, rollback or escalation).
  */
 import { limitsLine } from "../../../org/capabilities.ts";
+import { EDIT_IN_PLACE_RULE, OUTSIDE_DOC_RULE } from "../../../org/rules.ts";
 import type { ModelTier, Task } from "../../../../../../packages/shared/src/index.ts";
 import type { SpanHandle, ToolEffect } from "../../../contracts.ts";
 import { oneOf, str, strArr, unit } from "../../coerce.ts";
@@ -178,7 +179,7 @@ export async function solving(
         hiring
           ? "You are making a hire: call hire_agent with the recommended catalogId, monthlyBudgetUsd and firstTask (their first piece of work, with the exact file path). Give that work to the new hire as their first task — do not do it yourself first."
           : "",
-        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file. Credit work to whoever actually did it: never write a colleague's name on work they did not do (\"recommended by\", \"written by\", in files, messages or requests to the Board) — if a step meant for someone else ended up with you, say you did it. " + limitsLine(capabilities(run).company, capabilities(run).mine, capabilities(run).services),
+        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file. Credit work to whoever actually did it: never write a colleague's name on work they did not do (\"recommended by\", \"written by\", in files, messages or requests to the Board) — if a step meant for someone else ended up with you, say you did it. " + OUTSIDE_DOC_RULE + " " + EDIT_IN_PLACE_RULE + " " + limitsLine(capabilities(run).company, capabilities(run).mine, capabilities(run).services),
         `[[context:${JSON.stringify({
           mode: "task",
           agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },
@@ -328,6 +329,7 @@ export async function feedback(
         // 2026-11-07 (test 6): legal review went round four times over who signed, a dated
         // confirmation and "6,386 characters, but the file is 6,432".
         `Never count paperwork against the work: signatures or sign-offs, dated confirmations, who saved a file, or small differences in word or character counts (only a length limit the request itself set counts). ${limitsLine(capabilities(run).company)} ` +
+        "openPoints are for the Board: each one a decision it must make or information only it can give, in one plain sentence — no task numbers, review codes or notes about file versions (those are issues for the team). " +
         "If you escalate, write boardQuestion: one question for the Board — first what is done and where it is saved, then the single decision you need, with two or three options (under 90 words).",
       shape: '{"score":number,"truthful":number,"good":boolean,"issues":string[],"openPoints":string[],"decision":"accept"|"revise"|"rollback"|"escalate","summary":string,"boardQuestion":string}',
       context: { mode: "task", task: { title: run.task?.title }, results, solution: o.solution ?? "", files: files.map((f) => f.display) },
@@ -375,7 +377,7 @@ export function integrateResults(
   summary: string,
   subtasks: Task[],
   agentName: string,
-  extras: { openPoints?: string[]; files?: ReviewFile[]; names?: (agentId: string | null) => string } = {},
+  extras: { openPoints?: string[]; unfinished?: string[]; files?: ReviewFile[]; names?: (agentId: string | null) => string } = {},
 ): string {
   const parts = subtasks
     .filter((s) => s.status === "done" && s.result && s.state.kind !== "escalation")
@@ -387,6 +389,7 @@ export function integrateResults(
     `# ${title}`,
     `${summary}`,
     points.length ? `## Open points for the Board\n${points.map((p) => `- ${p}`).join("\n")}` : "",
+    extras.unfinished?.length ? unfinishedSection(extras.unfinished) : "",
     files.length ? `## Files\n${files.map((f) => `- ${f.display} (${f.by}, ${f.words} words)`).join("\n")}` : "",
     parts.length ? `## Contributions\n${parts.join("\n")}` : "",
     missing.length ? `## Not delivered\n${missing.join("\n")}` : "",
@@ -394,6 +397,24 @@ export function integrateResults(
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/**
+ * Notes the platform adds to a review's issues for its own decisions (cost over the estimate, an
+ * unreadable verdict): never shown to the Board (2026-11-08, trc_4469…: "cost $0.6999 exceeded 1.5×
+ * the estimate $0.0600" was listed as an open point for the Board).
+ */
+export function internalIssue(issue: string): boolean {
+  return /^cost \$[\d.]+ exceeded 1\.5× the estimate/.test(issue) || issue.startsWith("self-evaluation unavailable");
+}
+
+/** What was still short after the one round of fixes, for the report: a few lines, the platform's own notes left out. */
+export function unfinishedPoints(issues: readonly string[]): string[] {
+  return issues.filter((i) => !internalIssue(i)).slice(0, 4).map((i) => oneLine(i, 220));
+}
+
+export function unfinishedSection(items: readonly string[]): string {
+  return `## Not finished after one round of fixes\n${items.map((p) => `- ${p}`).join("\n")}`;
 }
 
 /** A contribution's first point: its own heading and any nested "Contributions" section dropped, one line. */

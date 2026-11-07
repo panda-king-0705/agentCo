@@ -8,7 +8,8 @@
  * T-171: the assembler searched for sections his colleagues had saved where only they could see).
  */
 import type { FileWrite } from "../../db/repo-trace.ts";
-import { ALL_TIERS, ok, type ToolDefinition, type ToolRunContext } from "../types.ts";
+import { droppedSections } from "../workspace.ts";
+import { ALL_TIERS, fail, ok, type ToolDefinition, type ToolRunContext } from "../types.ts";
 
 const MAX_LISTED = 12;
 
@@ -17,7 +18,7 @@ export const workspaceWriteFile: ToolDefinition = {
   description:
     "Save a text file on the company drive, where colleagues can read it (use the exact path your brief names, e.g. launch-plan/finance.md — if a file is already there, it is replaced and the old version kept; never save a second copy of the same document under another name). " +
     "Start the path with private/ only for scratch notes nobody else needs. Saving over a file keeps the previous version. The result confirms the save and gives the word, line and character counts. " +
-    "A long document (more than about 1,500 words) is saved in parts: the first part normally, each next part with append: true.",
+    "A long document (more than about 1,500 words) is saved in parts: the first part normally, each next part with append: true. To change part of an existing document, use workspace_edit_file instead of rewriting it.",
   parameters: {
     type: "object",
     properties: {
@@ -45,8 +46,14 @@ export const workspaceWriteFile: ToolDefinition = {
     ctx.span.setAttributes({ "agentco.file.path": w.display, "agentco.file.area": w.area });
     const where = w.area === "private" ? " Private: only you can read it." : " Colleagues can read it at this path.";
     const m = measure(content);
+    // A rewrite that quietly drops sections (2026-11-08, trc_4469…: 19,845 → 6,385 chars, sections 5–7 gone).
+    const dropped = w.replaced && w.previous ? droppedSections(w.previous, content) : [];
+    if (dropped.length) ctx.span.setAttributes({ "agentco.file.dropped_sections": dropped.length });
+    const warning = dropped.length
+      ? ` WARNING: this version is ${Math.round(100 - (100 * content.length) / w.previous!.length)}% shorter than the one it replaced and leaves out ${dropped.length} section(s) it had: ${dropped.slice(0, 8).map((d) => `"${d}"`).join(", ")}. If you meant to change only part of the file, put them back now: workspace_read_file with version: 1 shows the replaced version, and workspace_edit_file changes one section without rewriting the rest.`
+      : "";
     return ok(
-      `Wrote ${w.display} (${m.chars} chars, ${m.words} words, ${m.lines} lines${w.replaced ? "; previous version kept" : ""}). Saved and verified on disk.${where}`,
+      `Wrote ${w.display} (${m.chars} chars, ${m.words} words, ${m.lines} lines${w.replaced ? "; previous version kept" : ""}). Saved and verified on disk.${where}${warning}`,
       [{ kind: "file_written", path: w.display }],
       { path: w.display, ...m },
     );
@@ -55,12 +62,31 @@ export const workspaceWriteFile: ToolDefinition = {
 
 export const workspaceReadFile: ToolDefinition = {
   name: "workspace_read_file",
-  description: "Read a text file from the company drive (or private/… for your own notes); the result ends with the file's word, line and character counts. If it is not at that path, files with that name saved on this objective are found for you.",
-  parameters: { type: "object", properties: { path: { type: "string", maxLength: 300 } }, required: ["path"] },
+  description:
+    "Read a text file from the company drive (or private/… for your own notes); the result ends with the file's word, line and character counts. If it is not at that path, files with that name saved on this objective are found for you. " +
+    "Saving over a file keeps the old version: version: 1 reads the version the current one replaced, 2 the one before that.",
+  parameters: {
+    type: "object",
+    properties: {
+      path: { type: "string", maxLength: 300 },
+      version: { type: "integer", minimum: 1, maximum: 50, description: "An earlier version: 1 = the one the current file replaced. Omit for the current file." },
+    },
+    required: ["path"],
+  },
   tiers: ALL_TIERS,
   run(args, ctx) {
     const path = String(args.path);
     const ws = ctx.services.workspaces;
+    if (typeof args.version === "number" && ws.exists(ctx.agent.id, path)) {
+      const n = Math.floor(args.version);
+      const v = ws.readVersion(ctx.agent.id, path, n);
+      if (!v) {
+        const count = ws.history(ctx.agent.id, path).length;
+        return ok(`${path} has ${count === 0 ? "no earlier versions" : `only ${count} earlier version${count === 1 ? "" : "s"}`}.`, [], { found: false, versions: count });
+      }
+      const header = `[Earlier version ${n} of ${v.versions} of ${v.display}, saved ${v.at.slice(0, 16).replace("T", " ")} UTC — the current file is newer]\n`;
+      return ok(header + v.content + footer(v.display, v.content, v.truncated), [], { path: v.display, version: n, ...measure(v.content) });
+    }
     if (ws.exists(ctx.agent.id, path)) {
       const { content, truncated, display } = ws.read(ctx.agent.id, path);
       return ok(content + footer(display, content, truncated), [], { path: display, ...measure(content) });
@@ -86,6 +112,46 @@ export const workspaceReadFile: ToolDefinition = {
         (saved.length ? ` Saved on this objective so far: ${saved.join("; ")}.` : " Nothing has been saved on this objective yet."),
       [],
       { found: false },
+    );
+  },
+};
+
+/**
+ * workspace_edit_file: change part of a document without rewriting it (2026-11-08, trc_4469…: an
+ * analyst asked to fix one section rewrote the whole 19,845-character investor update from memory and
+ * saved 6,385 characters — sections 5 to 7 gone, including the one to fix).
+ */
+export const workspaceEditFile: ToolDefinition = {
+  name: "workspace_edit_file",
+  description:
+    "Change part of an existing file on the drive without rewriting it; the rest stays exactly as it is and the previous version is kept. Either replace an exact passage (find: the text copied exactly from the file, replace: the new text; replace \"\" deletes it), " +
+    'or replace a whole section by its heading (section: e.g. "6. Margins", content: the section\'s new text, heading line included; content "" removes the section). Use this for edits to a document; workspace_write_file is for new files or a deliberate full rewrite.',
+  parameters: {
+    type: "object",
+    properties: {
+      path: { type: "string", maxLength: 300 },
+      find: { type: "string", maxLength: 20000, description: "Exact text to change; it must occur once in the file." },
+      replace: { type: "string", maxLength: 100000, description: "The new text for find." },
+      section: { type: "string", maxLength: 300, description: "A heading in the file, with or without the #s." },
+      content: { type: "string", maxLength: 100000, description: "The section's new text, heading line included." },
+    },
+    required: ["path"],
+  },
+  tiers: ALL_TIERS,
+  // Whoever can save files can edit them (no per-agent tool list to update).
+  allowed: (agent) => agent.tools.includes("workspace_write_file"),
+  run(args, ctx) {
+    const path = String(args.path);
+    const byText = typeof args.find === "string" && typeof args.replace === "string";
+    const bySection = typeof args.section === "string" && typeof args.content === "string";
+    if (byText === bySection) return fail('Give either find and replace (an exact passage) or section and content (a whole section) — one of the two.');
+    const e = ctx.services.workspaces.edit(ctx.agent.id, path, byText ? { find: String(args.find), replace: String(args.replace) } : { section: String(args.section), content: String(args.content) });
+    ctx.span.setAttributes({ "agentco.file.path": e.display, "agentco.file.area": e.area, "agentco.file.edit": byText ? "text" : "section" });
+    const m = measure(e.content);
+    return ok(
+      `Edited ${e.display}: ${e.changed}. The file is now ${m.chars} chars, ${m.words} words, ${m.lines} lines (was ${e.previous.length} chars). Saved and verified on disk; previous version kept.${e.area === "private" ? " Private: only you can read it." : " Colleagues can read it at this path."}`,
+      [{ kind: "file_written", path: e.display }],
+      { path: e.display, ...m },
     );
   },
 };

@@ -15,7 +15,7 @@ import { AppError } from "../http/errors.ts";
 import { isAbortError } from "../middleware/tracer.ts";
 import { askHuman, companyDirectory, companyHandbook, escalate, sendMessage } from "./builtins/comms.ts";
 import { delegateTask } from "./builtins/delegation.ts";
-import { workspaceList, workspaceReadFile, workspaceWriteFile } from "./builtins/files.ts";
+import { workspaceEditFile, workspaceList, workspaceReadFile, workspaceWriteFile } from "./builtins/files.ts";
 import { catalogSearch } from "./builtins/catalog.ts";
 import { hireAgent } from "./builtins/hiring.ts";
 import { blackboardRead, blackboardWrite, memorySearch, memoryWrite } from "./builtins/memory.ts";
@@ -36,6 +36,7 @@ export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
   blackboardRead,
   blackboardWrite,
   workspaceWriteFile,
+  workspaceEditFile,
   workspaceReadFile,
   workspaceList,
   hireAgent,

@@ -555,7 +555,9 @@ test("after one round of fixes, what is still open goes to the Board with the wo
   const before = p.taskMap.size;
   const r = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: [fix] })));
   assert.equal(r.outcome, "completed", r.error ?? r.output);
-  assert.match(r.output, /## Open points for the Board\n- Legal wants Elena's own dated sign-off in the confirmation file/);
+  // 2026-11-08: what the work still lacks is listed apart from the Board's own decisions.
+  assert.match(r.output, /## Not finished after one round of fixes\n- Legal wants Elena's own dated sign-off in the confirmation file/);
+  assert.doesNotMatch(r.output, /## Open points for the Board/);
   assert.equal(p.taskMap.size, before, "no new round of fix tasks");
   assert.ok(p.tracer.spans.some((s) => s.attributes["agentco.rework_cap"] === 1));
 });

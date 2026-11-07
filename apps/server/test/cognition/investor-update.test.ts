@@ -192,7 +192,7 @@ test("a fix handed down is the fix round: whoever gets it reports what is still 
   const fix = await run("Fix: apply Legal's eight edits and re-review the saved draft");
   assert.equal(fix.r.outcome, "completed", fix.r.error ?? fix.r.output);
   assert.equal(fix.children, 1, "no second fix round under the fix");
-  assert.match(fix.r.output, /## Open points for the Board\n- the 35% figure has no source/);
+  assert.match(fix.r.output, /## Not finished after one round of fixes\n- the 35% figure has no source/);
   const ordinary = await run("Apply Legal's eight edits and re-review the saved draft");
   assert.equal(ordinary.r.outcome, "waiting", "an ordinary task still gets its one round of fixes");
   assert.equal(ordinary.children, 2);
@@ -249,4 +249,23 @@ test("a connected service is named with who holds it, and never becomes a Board 
     services,
   );
   assert.deepEqual(problem.boardSteps, []);
+});
+
+test("the report to the Board: the platform's own notes stay out, and what the work still lacks is listed apart from Board decisions", async () => {
+  const { internalIssue, unfinishedPoints, integrateResults } = await import("../../src/cognition/brain/metacognition/solving-evaluation.ts");
+  assert.ok(internalIssue("cost $0.6999 exceeded 1.5× the estimate $0.0600"));
+  assert.ok(internalIssue("self-evaluation unavailable: the model's verdict could not be read"));
+  assert.ok(!internalIssue("The legal review still leads with a lapsed approval"));
+  assert.deepEqual(unfinishedPoints(["cost $0.6999 exceeded 1.5× the estimate $0.0600", "Legal's current verdict is not at the top of the review file"]), ["Legal's current verdict is not at the top of the review file"]);
+  const out = integrateResults("Draft the monthly investor update", "Honest and sourced; not ready to send.", [], "Ava Chen", {
+    openPoints: ["Name the recipients."],
+    unfinished: ["Legal's current verdict is not at the top of the review file"],
+  });
+  assert.match(out, /## Open points for the Board\n- Name the recipients\.\n\n## Not finished after one round of fixes\n- Legal's current verdict is not at the top of the review file/);
+});
+
+test("documents for outsiders stay free of internal notes, and parts are edited in place — said to workers and leaders", async () => {
+  const { OUTSIDE_DOC_RULE, EDIT_IN_PLACE_RULE } = await import("../../src/org/rules.ts");
+  assert.match(OUTSIDE_DOC_RULE, /review notes, condition lists, change logs, version notes and task numbers go in the review file or your result — never in that document/);
+  assert.match(EDIT_IN_PLACE_RULE, /workspace_edit_file/);
 });

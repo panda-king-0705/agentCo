@@ -37,7 +37,7 @@ import {
   rollbackRecovery,
 } from "./metacognition/project-management.ts";
 import { selfAbility, type Competence } from "./metacognition/self-ability.ts";
-import { delegateParts, feedback, filesUnderTasks, integrateResults, openFirstTasks, reviewFiles, solving, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
+import { delegateParts, feedback, filesUnderTasks, integrateResults, internalIssue, openFirstTasks, reviewFiles, solving, unfinishedPoints, unfinishedSection, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
 import { analysis, literatureReview, problemDefinition, requestText, type ProblemDefinition, type Understanding } from "./metacognition/target-understanding.ts";
 import { block, llmJson, mustPropagate, phase, toolContext, YieldSignal, type BrainRun } from "./runtime.ts";
 import { feedbackUpdate } from "./self-management/emotion.ts";
@@ -158,9 +158,9 @@ export function uniqueSteps(steps: readonly string[]): string[] {
   return out;
 }
 
-/** Open points that are not just a Board step again (that one is listed under "Left for you"). */
+/** Open points that are not just a Board step again (that one is listed under "Left for you"), nor the platform's own notes. */
 function pointsBesides(points: readonly string[], steps: readonly string[]): string[] {
-  return points.filter((p) => !steps.some((s) => sameStep(s, p)));
+  return points.filter((p) => !internalIssue(p) && !steps.some((s) => sameStep(s, p)));
 }
 
 /** A finished result lists what is left for the Board (steps the company cannot do). */
@@ -682,8 +682,10 @@ export class BrainEngine implements CognitiveEngine {
       const reworkCapped = fb.decision === "revise" && revision >= reworkRounds(run) && solution.kind === "solution" && !!solution.text.trim();
       if (reworkCapped) run.ctx.span.setAttributes({ "agentco.rework_cap": revision });
       if (fb.decision === "accept" || reworkCapped) {
-        const points = pointsBesides(reworkCapped ? [...fb.openPoints, ...fb.issues] : fb.openPoints, persisted.boardSteps);
-        const body = points.length ? `${solution.text}\n\n## Open points for the Board\n${points.map((p) => `- ${p}`).join("\n")}` : solution.text;
+        // Board decisions under "Open points"; what the work still lacks after the fix round under "Not finished".
+        const points = pointsBesides(fb.openPoints, persisted.boardSteps);
+        const unfinished = reworkCapped ? unfinishedPoints(pointsBesides(fb.issues, persisted.boardSteps)) : [];
+        const body = [solution.text, points.length ? `## Open points for the Board\n${points.map((p) => `- ${p}`).join("\n")}` : "", unfinished.length ? unfinishedSection(unfinished) : ""].filter(Boolean).join("\n\n");
         const output = withBoardSteps(body, persisted.boardSteps, !task.parentTaskId);
         return this.report(run, { outcome: "completed", output, score: fb.score, summary: fb.summary, predicted: u.confidence.calibrated, events: [], estimateUsd: persisted.estimateUsd, plan: { ...persisted, feedback: [] } });
       }
@@ -865,7 +867,8 @@ export class BrainEngine implements CognitiveEngine {
     if (fb.decision === "accept" || reworkCapped) {
       await this.recognizeWorkers(run, children);
       const output = integrateResults(task.title, fb.summary, children, run.agent.name, {
-        openPoints: pointsBesides(reworkCapped ? [...fb.openPoints, ...fb.issues] : fb.openPoints, plan.boardSteps),
+        openPoints: pointsBesides(fb.openPoints, plan.boardSteps),
+        unfinished: reworkCapped ? unfinishedPoints(pointsBesides(fb.issues, plan.boardSteps)) : [],
         files: saved,
         names: (id) => run.platform.org.getAgent(id ?? "")?.name ?? "someone",
       });

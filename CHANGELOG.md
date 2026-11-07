@@ -12,6 +12,22 @@ versioning: [SemVer](https://semver.org/).
   as a dashed leaf under that manager instead of a line across the tree; repeat hand-offs show "×n";
   a wide team scrolls sideways instead of shrinking.
 
+### Fixed (trc_4469…, the investor update's third run)
+- **Edit in place.** New `workspace_edit_file`: change one exact passage or one whole section (by its
+  heading) without rewriting the document. An analyst asked to fix section 6 rewrote the whole
+  19,845-character update and saved 6,385 characters, with sections 5–7 gone.
+- **A rewrite that drops sections is flagged.** If a save is much shorter and leaves out sections the
+  replaced version had, the agent is told which ones, and how to put them back, before it finishes.
+- **Earlier versions are readable.** `workspace_read_file` with `version: 1` reads the version the
+  current file replaced. Agents could not open the version Legal had approved, and one searched for it
+  until her run timed out.
+- **Nothing internal in documents for outsiders.** Review notes, condition lists, change logs and
+  version notes go in the review file, never in the investor update itself. It had grown from
+  9.5k to 19.8k characters of Legal's working notes. Briefs no longer ask for them.
+- **A cleaner report to the Board.** "Open points for the Board" lists only decisions and information
+  the Board must give. What the work still lacks after the round of fixes is listed separately under
+  "Not finished", and the platform's own notes ("cost exceeded 1.5× the estimate") are left out.
+
 ### Fixed (trc_6ee6…, the investor update again, and trc_ba61…, the Firecrawl comparison)
 - **No made-up figures.** The CEO quoted "goal attainment 26%", then "35%", to investors. That was
   her own OKR gauge, which the platform moves as she finishes tasks. The gauge is now shown as a
