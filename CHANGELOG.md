@@ -50,6 +50,20 @@ versioning: [SemVer](https://semver.org/).
   - **More room to answer.** Reviews, problem definitions, analyses and plans were often cut off
     and had to be asked again; their output limits are higher. Tool-loop steps get 4,000 tokens,
     so a whole document fits in one save.
+- Test 4, fourth run (a copy of the plan already on the drive; $1.78 and 18 min, unfinished):
+  - **Exact paths, updated in place.** Planning now sees the newest files on the company drive.
+    Leaders name the exact file each part saves to, and reuse a document's path when it already
+    exists. Every agent saves exactly there and never starts a second copy under another name;
+    the previous version is kept automatically. Before, briefs named no path, so each section got
+    a second and third copy, and the conflicting Finance versions caused a correction round
+    (about $0.52 and 8 minutes).
+  - **The assembler's brief carries the section files.** The round-2 brief includes the current
+    versions of the round-1 files, so nothing needs reading and older copies can't creep in.
+  - **Enough steps, used well.** The tool loop states the step budget up front and says to batch
+    reads. The last step may save and call complete_task in one reply. Step allowances went from
+    2/4/6 to 4/6/8 (max 8). The assembler had handed in unsaved pages six times, its four steps
+    spent re-reading files.
+  - `archive-trace-files.mjs --private` also archives an abandoned objective's private drafts.
 - Test 4, third run ($1.03, 5 min 19 s, accepted on the first review). Remaining waste:
   - **Reviewers see the saved files.** Feedback now gets the files the work saved, as they are on
     disk. That includes files from a report's own reports, so a manager reviewing a worker's

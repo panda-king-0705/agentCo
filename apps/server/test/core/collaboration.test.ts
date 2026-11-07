@@ -38,6 +38,7 @@ test("a plain path is the company drive; private/ is your own notes; overwrites 
     assert.deepEqual(ws.list("agt_a", ""), ["launch-plan/", "private/"], "the top level shows the drive plus your private folder");
     assert.deepEqual(ws.list("agt_b", ""), ["launch-plan/"]);
     assert.deepEqual(ws.list("agt_a", "private"), ["notes.md"]);
+    assert.deepEqual(ws.recentShared(10).map((f) => f.rel), ["launch-plan/gtm.md"], "the drive's files for planning (private and .history left out)");
     assert.throws(() => ws.write("agt_a", "../escape.md", "x"), WorkspaceError);
     assert.throws(() => ws.write("agt_a", ".history/x.md", "x"), WorkspaceError);
   } finally {

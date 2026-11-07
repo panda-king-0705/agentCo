@@ -38,6 +38,14 @@ const STEP_OUTPUT_TOKENS = 4000;
  * worker told to "finish with complete_task" in a no-tools call answered "complete_task is not
  * among my tools" instead of giving its result).
  */
+/**
+ * Say the step budget up front (2026-11-07, test 4: the assembler spent every step re-reading files
+ * one round at a time and reached the last step with nothing saved).
+ */
+export function stepBudget(maxSteps: number): string {
+  return `You have ${maxSteps} tool steps; each reply is one step and may call several tools at once. Read everything you need in one reply, save your deliverable well before the last step, and you can save and call complete_task in the same reply.`;
+}
+
 export const PLAIN_TEXT_COMPLETES = "Your plain-text reply then IS your result and completes the task — no complete_task call is needed.";
 
 export interface ToolLoopOptions {
@@ -164,7 +172,7 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
   if (o.terminal.blocker) specs.push(REPORT_BLOCKER);
   const allowed = new Set(o.tools.map((t) => t.name));
   const messages: ChatMessage[] = [
-    { role: "system", content: o.system },
+    { role: "system", content: o.terminal.complete && o.maxSteps > 1 ? `${o.system}\n\n${stepBudget(o.maxSteps)}` : o.system },
     { role: "user", content: o.user },
   ];
   const out: ToolLoopResult = { status: "exhausted", result: "", reason: "", steps: 0, toolCalls: 0, effects: [], costUsd: 0 };
@@ -173,7 +181,12 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
     if (ctx.signal.aborted) throw abortErrorFrom(ctx.signal);
     out.steps = step;
     if (o.wrapUp && step === o.maxSteps && step > 1) {
-      messages.push({ role: "user", content: o.terminal.complete ? `Last step: finish now with complete_task (or report_blocker). After this step your tools switch off; ${PLAIN_TEXT_COMPLETES}` : "Last step: give your answer now." });
+      messages.push({
+        role: "user",
+        content: o.terminal.complete
+          ? `Last step: finish now. If your deliverable is not saved yet, call workspace_write_file AND complete_task together in this one reply (or report_blocker). After this step your tools switch off; ${PLAIN_TEXT_COMPLETES}`
+          : "Last step: give your answer now.",
+      });
     }
     ctx.platform.agents.setActivity(agent.id, "thinking", `${o.activityLabel} (step ${step})`, o.block ?? null);
     const started = Date.now();

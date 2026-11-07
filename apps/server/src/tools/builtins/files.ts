@@ -15,7 +15,7 @@ const MAX_LISTED = 12;
 export const workspaceWriteFile: ToolDefinition = {
   name: "workspace_write_file",
   description:
-    "Save a text file on the company drive, where colleagues can read it (use the exact path your brief names, e.g. launch-plan/finance.md). " +
+    "Save a text file on the company drive, where colleagues can read it (use the exact path your brief names, e.g. launch-plan/finance.md — if a file is already there, it is replaced and the old version kept; never save a second copy of the same document under another name). " +
     "Start the path with private/ only for scratch notes nobody else needs. Saving over a file keeps the previous version. The result confirms the save and gives the word, line and character counts.",
   parameters: {
     type: "object",

@@ -4,10 +4,12 @@
 //
 //   node scripts/maintenance/archive-trace-files.mjs <traceId>...            dry run: what would move
 //   node scripts/maintenance/archive-trace-files.mjs --apply <traceId>...    move + manifest.json
+//   node scripts/maintenance/archive-trace-files.mjs --private ...          also the authors' private drafts
 //   node scripts/maintenance/archive-trace-files.mjs --restore <stamp>       move them back
 //
-// Only shared/ files are moved (private notes stay with their author), and a file that any OTHER
-// trace also wrote is left alone (someone else's work may depend on it).
+// Shared files by default; with --private also the private files those traces wrote (a stale draft
+// is still found by its author's plain-path reads). A file that any OTHER trace also wrote is left
+// alone (someone else's work may depend on it).
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -16,6 +18,8 @@ const DATA = resolve(process.env.DATA_DIR ?? "/data");
 const SHARED = join(DATA, "workspaces", "shared");
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
+const withPrivate = args.includes("--private");
+const WS = join(DATA, "workspaces");
 const restoreAt = args.indexOf("--restore");
 
 function inside(root, path) {
@@ -31,13 +35,14 @@ if (restoreAt >= 0) {
   const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
   let restored = 0;
   for (const f of manifest.files) {
-    const back = inside(SHARED, f.rel);
+    const where = f.agentId ? join(f.agentId, f.rel) : join("shared", f.rel);
+    const back = inside(WS, where);
     if (existsSync(back)) {
-      console.log(`skip (a file is there again): shared/${f.rel}`);
+      console.log(`skip (a file is there again): ${where}`);
       continue;
     }
     mkdirSync(dirname(back), { recursive: true });
-    renameSync(inside(dir, join("shared", f.rel)), back);
+    renameSync(inside(dir, f.agentId ? join("private", f.agentId, f.rel) : join("shared", f.rel)), back);
     restored++;
   }
   console.log(JSON.stringify({ restored, of: manifest.files.length, from: dir }));
@@ -54,36 +59,45 @@ const pathOf = (row) => {
   } catch {}
   return typeof attrs["agentco.file.path"] === "string" ? attrs["agentco.file.path"] : (/^Wrote (\S+) \(/.exec(String(row.output ?? ""))?.[1] ?? "");
 };
+// A location: "shared/<rel>" or "<agentId>/<rel>" (a private file; a path with no area prefix was
+// written before the drive became the default, i.e. privately).
 const writes = db
-  .prepare("SELECT trace_id, output, attributes FROM spans WHERE kind = 'tool' AND name = 'tool.workspace_write_file' AND status = 'ok'")
+  .prepare("SELECT trace_id, agent_id, output, attributes FROM spans WHERE kind = 'tool' AND name = 'tool.workspace_write_file' AND status = 'ok'")
   .all()
-  .map((r) => ({ trace: String(r.trace_id), path: pathOf(r) }))
-  .filter((w) => w.path.startsWith("shared/"));
+  .map((r) => {
+    const path = pathOf(r);
+    if (!path) return null;
+    if (path.startsWith("shared/")) return { trace: String(r.trace_id), key: path, path, rel: path.slice(7), agentId: null };
+    const rel = path.replace(/^private\//, "");
+    return { trace: String(r.trace_id), key: `${r.agent_id}/${rel}`, path: `private/${rel} (${r.agent_id})`, rel, agentId: String(r.agent_id) };
+  })
+  .filter((w) => w && (withPrivate || w.agentId === null));
 const mine = new Set(traces);
-const otherPaths = new Set(writes.filter((w) => !mine.has(w.trace)).map((w) => w.path));
-const candidates = [...new Set(writes.filter((w) => mine.has(w.trace)).map((w) => w.path))].sort();
+const otherKeys = new Set(writes.filter((w) => !mine.has(w.trace)).map((w) => w.key));
+const byKey = new Map(writes.filter((w) => mine.has(w.trace)).map((w) => [w.key, w]));
 const move = [];
 const kept = [];
-for (const path of candidates) {
-  const rel = path.slice("shared/".length);
-  const abs = inside(SHARED, rel);
-  if (!existsSync(abs)) kept.push({ path, why: "already gone" });
-  else if (otherPaths.has(path)) kept.push({ path, why: "another objective also wrote it" });
-  else move.push({ path, rel });
+for (const w of [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key))) {
+  const abs = inside(WS, w.agentId ? join(w.agentId, w.rel) : join("shared", w.rel));
+  if (!existsSync(abs)) kept.push({ path: w.path, why: "already gone" });
+  else if (otherKeys.has(w.key)) kept.push({ path: w.path, why: "another objective also wrote it" });
+  else move.push(w);
 }
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const dir = join(DATA, "archive", `${stamp}-drive`);
 if (apply && move.length > 0) {
   for (const f of move) {
-    const to = inside(dir, join("shared", f.rel));
+    const root = f.agentId ? inside(WS, f.agentId) : SHARED;
+    const from = inside(root, f.rel);
+    const to = inside(dir, f.agentId ? join("private", f.agentId, f.rel) : join("shared", f.rel));
     mkdirSync(dirname(to), { recursive: true });
-    renameSync(inside(SHARED, f.rel), to);
+    renameSync(from, to);
     // Folders the move left empty would still show in listings: remove them (empty only — no data).
-    for (let d = dirname(inside(SHARED, f.rel)); d !== SHARED && d.startsWith(SHARED + sep); d = dirname(d)) {
+    for (let d = dirname(from); d !== root && d.startsWith(root + sep); d = dirname(d)) {
       if (readdirSync(d).length > 0) break;
       rmdirSync(d);
     }
   }
-  writeFileSync(join(dir, "manifest.json"), JSON.stringify({ at: new Date().toISOString(), traces, files: move.map((f) => ({ rel: f.rel })) }, null, 1));
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify({ at: new Date().toISOString(), traces, files: move.map((f) => (f.agentId ? { rel: f.rel, agentId: f.agentId } : { rel: f.rel })) }, null, 1));
 }
 console.log(JSON.stringify({ mode: apply ? "apply" : "dry-run", move: move.map((f) => f.path), kept, archive: apply && move.length ? dir : null, restore: apply && move.length ? `--restore ${stamp}-drive` : null }, null, 1));

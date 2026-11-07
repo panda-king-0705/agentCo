@@ -14,6 +14,7 @@ import { MockProvider } from "../../src/models/providers/mock.ts";
 import { readContext, readStage } from "../../src/models/protocol.ts";
 import type { EngineResult, ModelProvider, SavedFiles } from "../../src/contracts.ts";
 import { gist } from "../../src/cognition/brain/metacognition/solving-evaluation.ts";
+import { Q6_EXECUTION } from "../../src/cognition/brain/interpretation.ts";
 import type { Agent, Task } from "../../../../packages/shared/src/index.ts";
 import { FakePlatform, makeAgent, makeTask, taskInput } from "./fakes.ts";
 
@@ -121,7 +122,7 @@ test("named owners each get a part (even on the Low Effort candidate); assembly 
   const all = p.tasks.children(task.id);
   assert.equal(all.length, 4);
   const r2 = all.find((c) => c.title === "Assemble the one-page plan")!;
-  assert.match(r2.description, /Round-1 results to work from \(their files are on the company drive\):/);
+  assert.match(r2.description, /Round-1 results to work from:\n- T-/);
   for (const c of round1) assert.ok(r2.description.includes(`T-${c.number} "${c.title}"`), `brief includes T-${c.number}`);
   assert.equal((task.state.plan as { subprocesses: { title: string; taskId: string | null }[] }).subprocesses.find((s) => s.title === r2.title)!.taskId, r2.id);
   assert.equal(p.tracer.spans.filter((s) => s.attributes["agentco.brain.block"] === "metacognition.solving_evaluation.feedback").length, 0, "round 1 is not judged on its own");
@@ -322,6 +323,7 @@ test("the reviewer sees the saved files (a report's report's included), lists op
       { agentId: ceo.id, taskId: "tsk_elsewhere", display: "shared/notes/other-objective.md", at: "3" },
     ],
     read: (_agentId, display) => (disk[display] ? { content: disk[display]!, truncated: false } : null),
+    recent: () => [],
   };
   const r = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: [mkt, fin] })));
   assert.equal(r.outcome, "completed", r.error ?? r.output);
@@ -341,4 +343,87 @@ test("gist: a contribution's first point, without its heading or nested contribu
   assert.equal(gist("# Title\nThe point.\n\n## Contributions\n### Inner\nNoise"), "The point.");
   assert.equal(gist("Plain result."), "Plain result.");
   assert.ok(gist("x ".repeat(400)).length <= 320);
+});
+
+// ── Fourth test-4 run (2026-11-07, trc_2f7f…: $1.78, 18 min, unfinished). A copy of the plan was already
+// on the drive: briefs named no paths, so every section got a second and third copy and a correction
+// round; the assembler spent its 4 steps re-reading files and handed in an unsaved page six times.
+
+test("planning sees the drive and names exact paths; the round-2 brief carries the current section files", async () => {
+  const prompts: string[] = [];
+  const plan = {
+    mode: "delegate",
+    subprocesses: [
+      { title: "CMO: GTM section", description: "Update launch-plan/marketing.md.", assigneeId: "agt_cmo", value: 300, estCostUsd: 0.05, acceptanceCriteria: "Saved." },
+      { title: "CFO: pricing section", description: "Update launch-plan/finance.md.", assigneeId: "agt_cfo", value: 300, estCostUsd: 0.05, acceptanceCriteria: "Saved." },
+      { title: "Assemble the one-page plan", description: "Merge the sections into launch-plan/one-page-launch-plan.md.", assigneeId: "agt_cos", value: 300, estCostUsd: 0.05, acceptanceCriteria: "Saved." },
+    ],
+    candidates: CANDIDATES,
+    rationale: "update in place",
+  };
+  const p = new FakePlatform({ providers: { mock: provider({ "metacognition.cognitive_control": (_c, _n, prompt) => (prompts.push(prompt), plan) }) } });
+  const { ceo } = company(p);
+  const task = p.addTask(makeTask({ id: "tsk_400", number: 400, title: "One-page launch plan", description: "Have the CMO and the CFO write their sections; the Chief of Staff assembles the page.", assigneeId: ceo.id, traceId: "trc_400", value: 800, estCostUsd: 0.5 }));
+  const disk: Record<string, string> = {
+    "shared/launch-plan/marketing.md": "## Target segment\nRemote teams of 5–50 (updated).",
+    "shared/launch-plan/finance.md": "## Pricing tiers\nPro $15 [modeled] (updated)",
+    "shared/launch-plan/old-finance-copy.md": "STALE COPY from an earlier objective",
+  };
+  const writes: { agentId: string; taskId: string | null; display: string; at: string }[] = [{ agentId: "agt_cfo", taskId: "tsk_earlier", display: "shared/launch-plan/old-finance-copy.md", at: "0" }];
+  (p as unknown as { drive: SavedFiles }).drive = {
+    written: () => writes,
+    read: (_a, display) => (disk[display] ? { content: disk[display]!, truncated: false } : null),
+    recent: () => [
+      { rel: "launch-plan/finance.md", chars: 1028, modified: "2026-11-07T01:10:00.000Z" },
+      { rel: "launch-plan/one-page-launch-plan.md", chars: 3869, modified: "2026-11-07T01:11:00.000Z" },
+    ],
+  };
+  const first = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task)));
+  assert.equal(first.outcome, "waiting", first.error ?? first.output);
+  apply(task, first);
+  assert.match(prompts[0]!, /Name the exact file path each part saves to in its description .* reuse its path: saving replaces it and keeps the previous version\. Never ask for a second copy/);
+  assert.match(prompts[0]!, /Files on the company drive \(newest first\):\n- launch-plan\/finance\.md \(1028 chars, saved 2026-11-07 01:10 UTC\)\n- launch-plan\/one-page-launch-plan\.md/);
+  const round1 = p.tasks.children(task.id);
+  assert.equal(round1.length, 2);
+  for (const c of round1) {
+    c.status = "done";
+    c.result = `${c.title}: updated in place.`;
+    writes.push({ agentId: c.assigneeId!, taskId: c.id, display: c.assigneeId === "agt_cmo" ? "shared/launch-plan/marketing.md" : "shared/launch-plan/finance.md", at: "1" });
+  }
+  const second = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: round1 })));
+  assert.equal(second.outcome, "waiting", second.error ?? second.output);
+  const r2 = p.tasks.children(task.id).find((c) => c.title === "Assemble the one-page plan")!;
+  assert.match(r2.description, /Current versions of their files — work from these \(older files on the drive are superseded; no need to read these again\):/);
+  assert.match(r2.description, /=== shared\/launch-plan\/finance\.md — by Elena Petrova \(\d+ words\) ===\n## Pricing tiers\nPro \$15 \[modeled\] \(updated\)/);
+  assert.match(r2.description, /=== shared\/launch-plan\/marketing\.md — by Olivia Bennett/);
+  assert.doesNotMatch(r2.description, /STALE COPY/, "only the round-1 parts' files, not older copies");
+  assert.ok(r2.description.length < 20_000, "fits a task description");
+});
+
+test("the tool loop states the step budget up front, and the last step may save and finish in one reply", async () => {
+  const systems: string[] = [];
+  const lasts: string[] = [];
+  const mock = new MockProvider({ latencyMs: 0 });
+  const recording: ModelProvider = {
+    name: "mock",
+    async complete(profile, request, signal) {
+      systems.push(request.messages[0]!.content);
+      const last = request.messages.at(-1)!;
+      if (last.role === "user" && last.content.startsWith("Last step")) lasts.push(last.content);
+      // Keep looking things up until the steps run out, so the last-step message is sent.
+      if (request.tools?.length) return { content: "", toolCalls: [{ id: `c${systems.length}`, name: "memory_search", arguments: { query: "sections" } }], usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 }, finishReason: "tool_calls" as const };
+      return mock.complete(profile, request, signal);
+    },
+  };
+  const p = new FakePlatform({ providers: { mock: recording } });
+  p.addDepartment("dep_exec", "executive", "Executive");
+  const worker = p.addAgent(makeAgent({ id: "agt_w", name: "Noah Patel", title: "Chief of Staff", departmentId: "dep_exec", tools: ["workspace_write_file", "memory_search"] }));
+  const task = p.addTask(makeTask({ id: "tsk_w", title: "Assemble the page", description: "Merge.", assigneeId: worker.id }));
+  await new ReflexEngine({ maxSteps: 3 }).run(p.context(worker, taskInput(task)));
+  assert.match(systems[0]!, /You have 3 tool steps; each reply is one step and may call several tools at once\. Read everything you need in one reply, save your deliverable well before the last step/);
+  assert.match(lasts[0]!, /If your deliverable is not saved yet, call workspace_write_file AND complete_task together in this one reply/);
+});
+
+test("step budgets: room to read, save and finish", () => {
+  assert.deepEqual(Object.fromEntries(Object.entries(Q6_EXECUTION).map(([k, v]) => [k, v.directSteps])), { high_cost: 8, low_cost: 6, low_effort: 4 });
 });
