@@ -18,6 +18,7 @@ import { oneOf, str, strArr, unit } from "../../coerce.ts";
 import { oneLine, overlapRatio, truncate } from "../../text.ts";
 import { contractList, validateContract, validationBrief, validationSection, type Assertion, type Validation } from "./validation.ts";
 import { ESCALATION_TOOLS, runToolLoop } from "../../tool-loop.ts";
+import { earlierWorkNote } from "../../prompt.ts";
 import { canEscalate } from "../escalation.ts";
 import { Q4_CONTROL, Q6_EXECUTION, q6SubprocessCount, type CandidateName } from "../interpretation.ts";
 import { block, capabilities, llmJson, recordCall, toolContext, type BrainRun } from "../runtime.ts";
@@ -163,6 +164,7 @@ export async function solving(
         .specsFor(run.agent)
         .filter((t) => t.name !== "delegate_task" && (t.name !== "hire_agent" || hiring) && (mayEscalate || !ESCALATION_TOOLS.has(t.name)));
       const guidance = guidanceLines(run);
+      const earlier = run.platform.taskWrites?.(task.id, run.ctx.run.id) ?? [];
       const tier = shiftTier(run.platform.models.tierForStage("metacognition.solving_evaluation.solving", run.routingAgent), exec.tierShift);
       const steps = Math.min(run.drives.maxSolveSteps, exec.directSteps);
       const system = [
@@ -171,6 +173,7 @@ export async function solving(
         `Solve: ${plan.problem}\nSuccess criteria: ${plan.successCriteria.join("; ")}\nApproach (${plan.candidate.replace("_", " ")}): ${exec.verify ? "be thorough and verify your claims" : "be efficient"}.`,
         plan.memory.length ? `What you know:\n${plan.memory.slice(0, 10).join("\n")}` : "",
         guidance.length ? `Guidance you asked for (follow it):\n${guidance.join("\n")}` : "",
+        earlier.length ? earlierWorkNote(earlier) : "",
         hires.length ? `Already done on this objective: ${hires.map(describeHire).join("; ")}. Do not hire again — work with them; they report to their manager.` : "",
         hiring
           ? "You are making a hire: call hire_agent with the recommended catalogId, monthlyBudgetUsd and firstTask (their first piece of work, with the exact file path). Give that work to the new hire as their first task — do not do it yourself first."
@@ -294,7 +297,11 @@ export async function feedback(
 ): Promise<FeedbackResult> {
   return block(run, "metacognition.solving_evaluation.feedback", "Evaluating the result", async (span) => {
     const results = summarizeResults(o.subtasks);
-    const files = o.files ?? [];
+    // The drive's files, plus what was committed to repositories on this objective, read back now
+    // (2026-11-08, trc_92d7…: a committed spec was judged missing because only the drive was visible).
+    const outside = (await run.platform.outsideFiles?.(run.ctx.run.traceId).catch(() => [])) ?? [];
+    if (outside.length) span.setAttributes({ "agentco.feedback.repo_files": outside.map((f) => f.display).join(", ") });
+    const files = [...(o.files ?? []), ...outside];
     // The platform's own hire records: the evidence for a hire (2026-11-07, trc_005b…: the hirer and
     // the CEO both reviewed a finished hire as "not evidenced" and the CEO re-did work to prove it).
     const hires = run.task ? objectiveHires(run.platform.tasks, run.platform.tasks.get(run.task.id) ?? run.task) : [];

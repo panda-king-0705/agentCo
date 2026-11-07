@@ -19,6 +19,7 @@ Copy `mcp.example.json` to `mcp.json`, keep the servers you want, add their keys
 | `tools` | Allow-list of the server's tool names (empty = all it lists). Keep it short: every tool costs tokens on every call. |
 | `noApproval` | Tools that change something but may run without your approval. Every other tool that is not read-only goes to Approvals first and runs when you approve it; destructive tools always do. |
 | `dailyCallLimit` | Calls per agent per day to this server (0 = none). |
+| `notes` | A short note agents are told with the service, e.g. `"Our repository: owner/name — never create another"`. |
 | `protectBranches` | A call whose `branch` is one of these goes to Approvals first, even for a `noApproval` tool. Default for a server that grants `git`: `["main", "master"]` (so only you put changes on main, even where GitHub's own branch protection isn't available — private repositories on the free plan). |
 
 Notes on the examples:

@@ -59,6 +59,62 @@ export function isToolsReasoningRejection(status: number, body: string): boolean
   return status === 400 && /reasoning_effort/i.test(body) && /tool/i.test(body);
 }
 
+/**
+ * A 400 refusing `reasoning_effort: "none"` (2026-11-08: gpt-6.1-sol and gpt-6-astra refuse tools on
+ * /v1/chat/completions unless reasoning_effort is "none", and refuse "none" too). Their tool calls go
+ * through /v1/responses instead (buildResponsesBody).
+ */
+export function isNoneEffortRejection(status: number, body: string): boolean {
+  return status === 400 && /reasoning_effort/i.test(body) && /'none'|"none"|\bnone\b/i.test(body) && /not support|unsupported/i.test(body);
+}
+
+/** The same request for OpenAI's Responses API (used for tool calls on models that need it). */
+export function buildResponsesBody(profile: ModelProfile, request: ChatRequest): Record<string, unknown> {
+  const input: Record<string, unknown>[] = [];
+  for (const m of request.messages) {
+    if (m.role === "tool") {
+      input.push({ type: "function_call_output", call_id: m.toolCallId ?? "", output: m.content });
+    } else if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      if (m.content) input.push({ role: "assistant", content: m.content });
+      for (const c of m.toolCalls) input.push({ type: "function_call", call_id: c.id, name: c.name, arguments: JSON.stringify(c.arguments ?? {}) });
+    } else {
+      input.push({ role: m.role, content: m.content });
+    }
+  }
+  const body: Record<string, unknown> = { model: profile.model, input, reasoning: { effort: "low" } };
+  const tools = request.tools ?? [];
+  if (tools.length > 0) {
+    body.tools = tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters }));
+    body.tool_choice = "auto";
+  }
+  if (request.maxOutputTokens) body.max_output_tokens = request.maxOutputTokens;
+  return body;
+}
+
+/** A Responses API reply → the same shape as a chat completion. */
+export function parseResponsesBody(data: unknown): ReturnType<typeof parseResponseBody> {
+  const root = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+  const output = Array.isArray(root.output) ? root.output : [];
+  const toolCalls: ToolCall[] = [];
+  let content = "";
+  output.forEach((raw, i) => {
+    const item = (raw ?? {}) as Record<string, unknown>;
+    if (item.type === "function_call" && typeof item.name === "string" && item.name) {
+      toolCalls.push({ id: typeof item.call_id === "string" && item.call_id ? item.call_id : `call_${i}`, name: item.name, arguments: parseToolArguments(item.arguments) });
+    } else if (item.type === "message") {
+      content += contentText(item.content);
+    }
+  });
+  if (!content && typeof root.output_text === "string") content = root.output_text;
+  const u = (root.usage ?? {}) as Record<string, unknown>;
+  const details = (u.input_tokens_details ?? {}) as Record<string, unknown>;
+  const usage: Usage = { inputTokens: int(u.input_tokens), outputTokens: int(u.output_tokens), cachedInputTokens: int(details.cached_tokens) };
+  const incomplete = (root.incomplete_details ?? {}) as Record<string, unknown>;
+  const finishReason: ChatResponse["finishReason"] =
+    toolCalls.length > 0 ? "tool_calls" : root.status === "incomplete" && /max_output_tokens/i.test(String(incomplete.reason ?? "")) ? "length" : "stop";
+  return { content, toolCalls, usage, finishReason };
+}
+
 export function toOpenAIMessages(messages: ChatMessage[]): Record<string, unknown>[] {
   return messages.map((m) => {
     if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
@@ -160,6 +216,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly noResponseFormat = new Set<string>();
   /** Profiles learned at runtime to need `reasoning_effort: "none"` whenever tools are sent. */
   private readonly toolsWithoutReasoning = new Set<string>();
+  /** Profiles learned at runtime to accept tools only on the Responses API (they refuse "none" too). */
+  private readonly toolsViaResponses = new Set<string>();
 
   /**
    * One chat completion with self-healing retries for live-provider quirks:
@@ -171,8 +229,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
   async complete(profile: ModelProfile, request: ChatRequest, signal: AbortSignal) {
     let req = this.noTemperature.has(profile.id) ? { ...request, temperature: undefined } : request;
     if (this.noResponseFormat.has(profile.id) && req.responseFormat === "json") req = { ...req, responseFormat: "text" };
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const result = await this.send(profile, req, signal, { toolsWithoutReasoning: this.toolsWithoutReasoning.has(profile.id) });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const responses = (req.tools?.length ?? 0) > 0 && this.toolsViaResponses.has(profile.id);
+      const result = await this.send(profile, req, signal, { toolsWithoutReasoning: this.toolsWithoutReasoning.has(profile.id), responses });
       if (result.kind === "ok") {
         const r = result.value;
         const empty = !r.content.trim() && r.toolCalls.length === 0;
@@ -192,7 +251,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
         req = { ...req, responseFormat: "text" };
         continue;
       }
-      if (attempt < 3 && (req.tools?.length ?? 0) > 0 && !this.toolsWithoutReasoning.has(profile.id) && isToolsReasoningRejection(result.status, result.body)) {
+      if (attempt < 4 && (req.tools?.length ?? 0) > 0 && !responses && this.toolsWithoutReasoning.has(profile.id) && isNoneEffortRejection(result.status, result.body)) {
+        this.toolsWithoutReasoning.delete(profile.id);
+        this.toolsViaResponses.add(profile.id);
+        continue;
+      }
+      if (attempt < 3 && (req.tools?.length ?? 0) > 0 && !responses && !this.toolsWithoutReasoning.has(profile.id) && isToolsReasoningRejection(result.status, result.body)) {
         this.toolsWithoutReasoning.add(profile.id);
         continue;
       }
@@ -209,7 +273,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     profile: ModelProfile,
     request: ChatRequest,
     signal: AbortSignal,
-    options: { toolsWithoutReasoning?: boolean } = {},
+    options: { toolsWithoutReasoning?: boolean; responses?: boolean } = {},
   ): Promise<
     | { kind: "ok"; value: ReturnType<typeof parseResponseBody> }
     | { kind: "http"; status: number; body: string; error: Error }
@@ -217,13 +281,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const provider = this.providers[profile.provider];
     if (!provider) throw new Error(`provider "${profile.provider}" is not configured`);
     if (!provider.apiKey) throw new Error(`provider "${profile.provider}" has no API key`);
-    const url = `${provider.baseUrl}/chat/completions`;
+    const url = `${provider.baseUrl}/${options.responses ? "responses" : "chat/completions"}`;
     let response: Response;
     try {
       response = await this.fetchFn(url, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${provider.apiKey}` },
-        body: JSON.stringify(buildRequestBody(profile, request, options)),
+        body: JSON.stringify(options.responses ? buildResponsesBody(profile, request) : buildRequestBody(profile, request, options)),
         signal,
       });
     } catch (err) {
@@ -242,7 +306,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     } catch {
       throw new Error(`${profile.provider} ${profile.model}: HTTP ${response.status} but the body is not JSON`);
     }
-    return { kind: "ok", value: parseResponseBody(data) };
+    return { kind: "ok", value: options.responses ? parseResponsesBody(data) : parseResponseBody(data) };
   }
 }
 

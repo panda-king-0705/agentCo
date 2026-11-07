@@ -1,5 +1,5 @@
 import { test } from "node:test";
-import { isAccountError } from "../../src/models/router.ts";
+import { isAccountError, isTimeoutError } from "../../src/models/router.ts";
 import assert from "node:assert/strict";
 import { loadModelConfig, modelsInfo } from "../../src/models/config.ts";
 import { costUsd, lookupPrice, normalizeModelKey } from "../../src/models/pricing.ts";
@@ -303,6 +303,27 @@ test("router: an ordinary provider error does not take the provider out of rotat
   const second = await platform.models.chat(req(), ctx(platform));
   assert.equal(second.profile.id, "openai:gpt-6.1-sol");
   assert.equal(provider.calls, 3);
+});
+
+test("router: a call that timed out sends that provider's next calls to the fallback for a few minutes (2026-11-08)", async () => {
+  const timeout = Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  const provider = scripted([timeout, { content: "fallback 1" }, { content: "fallback 2" }]);
+  const platform = new FakePlatform({ env: liveEnv, providers: { "openai-compatible": provider } });
+  const warn = console.warn;
+  const warned: string[] = [];
+  console.warn = (m: string) => warned.push(m);
+  try {
+    assert.equal((await platform.models.chat(req(), ctx(platform))).content, "fallback 1");
+    const second = await platform.models.chat(req(), ctx(platform));
+    assert.equal(second.content, "fallback 2");
+    assert.equal(second.profile.id, "deepseek:deepseek-v4-pro", "straight to the fallback: no second two-minute wait");
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(provider.calls, 3);
+  assert.equal(platform.tracer.byKind("llm")[2]!.attributes["agentco.primary_skipped"], "slow: a call timed out");
+  assert.match(warned[0]!, /openai: a call timed out — using fallback models for 3 minutes/);
+  assert.ok(isTimeoutError(timeout) && !isTimeoutError(new Error("HTTP 503 upstream")));
 });
 
 test("isAccountError: credit, quota and rejected keys — not rate limits or outages", () => {

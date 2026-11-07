@@ -40,6 +40,8 @@ export interface ConnectedService {
   grants: readonly Capability[];
   /** Names of the active agents whose tools include it. */
   holders: readonly string[];
+  /** The founder's note for it (mcp.json "notes"), e.g. which repository is ours. */
+  notes?: string;
 }
 
 const label = (c: Capability) => OUTSIDE_STEPS.find((s) => s.capability === c)?.can ?? EXTRA_CAN[c] ?? c;
@@ -53,7 +55,7 @@ const label = (c: Capability) => OUTSIDE_STEPS.find((s) => s.capability === c)?.
 export function servicesLine(services: readonly ConnectedService[]): string {
   const live = services.filter((s) => s.holders.length > 0);
   if (!live.length) return "";
-  const list = live.map((s) => `${s.name}${s.grants.length ? ` (${s.grants.map(label).join("; ")})` : ""} — ${s.holders.slice(0, 6).join(", ")}${s.holders.length > 6 ? ` and ${s.holders.length - 6} more` : ""}`);
+  const list = live.map((s) => `${s.name}${s.grants.length ? ` (${s.grants.map(label).join("; ")})` : ""} — ${s.holders.slice(0, 6).join(", ")}${s.holders.length > 6 ? ` and ${s.holders.length - 6} more` : ""}${s.notes ? ` [${s.notes}]` : ""}`);
   return `Connected services the company already has: ${list.join("; ")}. A request that names one is work the company can do — give that part to someone who has it (or their manager); it is never a Board step.`;
 }
 

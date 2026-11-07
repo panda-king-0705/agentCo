@@ -139,7 +139,9 @@ export class ToolExecutorImpl implements ToolExecutor {
           `your ${call.name} call was cut off before it finished (the reply hit its length limit), so nothing happened. ` +
             (call.name === "workspace_write_file"
               ? "Save the file in parts: write the first part, then add each next part with append: true — or make it shorter."
-              : "Send it again, shorter."),
+              : /push|commit|create_or_update|files/i.test(call.name)
+                ? "Commit fewer files per call — one or two at a time — and keep each file short enough for one reply."
+                : "Send it again, shorter."),
         );
       }
       const invalid = validateArgs(tool.parameters, call.arguments);

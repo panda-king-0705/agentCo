@@ -27,9 +27,9 @@ import { EDIT_IN_PLACE_RULE, OUTSIDE_DOC_RULE } from "../org/rules.ts";
 import { isProviderOutage } from "../models/outage.ts";
 import type { ModelTier, Task } from "../../../../packages/shared/src/index.ts";
 import type { CognitiveEngine, EngineContext, EngineResult, ToolSpec } from "../contracts.ts";
-import { agentFacts, systemPrompt, workerCharter } from "./prompt.ts";
+import { agentFacts, earlierWorkNote, systemPrompt, workerCharter } from "./prompt.ts";
 import { isAbortError, isBudgetError } from "../models/router.ts";
-import { ESCALATION_TOOLS, runToolLoop, type ToolLoopResult } from "./tool-loop.ts";
+import { ASKS_FOR_SAVED_WORK, ESCALATION_TOOLS, runToolLoop, type ToolLoopResult } from "./tool-loop.ts";
 import { oneLine, truncate } from "./text.ts";
 
 const NEXT_TIER: Record<ModelTier, ModelTier | null> = { economy: "standard", standard: "frontier", frontier: null };
@@ -87,6 +87,10 @@ export class ReflexEngine implements CognitiveEngine {
     if (lessons.length) parts.push(`Lessons from past work:\n${lessons.map((m) => `- ${oneLine(m.content, 200)}`).join("\n")}`);
     if (inbox.length) parts.push(`Unread messages:\n${inbox.map((m) => `- ${m.senderId}: ${oneLine(m.content, 200)}`).join("\n")}`);
     if (input.trigger !== "message" && input.recoveryNotice) parts.push(`RECOVERY NOTICE: ${input.recoveryNotice}`);
+    // What earlier attempts on this task already did (2026-11-08, trc_92d7…: a retried engineer took
+    // his own earlier commit for someone else's and stopped to ask).
+    const earlier = task ? (platform.taskWrites?.(task.id, ctx.run.id) ?? []) : [];
+    if (earlier.length) parts.push(earlierWorkNote(earlier));
     if (input.trigger === "subtasks_completed" && input.subtasks.length) {
       const answers = input.subtasks.filter((c) => c.state.kind === "escalation" && c.state.inputsWait !== true);
       const waits = input.subtasks.filter((c) => c.state.inputsWait === true && c.status === "done");
@@ -131,6 +135,8 @@ export class ReflexEngine implements CognitiveEngine {
           tools,
           terminal: { complete: !!task, blocker: !!task },
           maxSteps: this.maxSteps,
+          requireSaved: !!task && ASKS_FOR_SAVED_WORK.test(`${task.title}\n${task.description}\n${task.acceptanceCriteria ?? ""}`),
+          priorWrites: earlier.length,
           taskId: task?.id ?? null,
           conversationId: input.trigger === "message" ? input.history.conversation.id : null,
           activityLabel: label,
@@ -214,3 +220,4 @@ export class ReflexEngine implements CognitiveEngine {
     }
   }
 }
+

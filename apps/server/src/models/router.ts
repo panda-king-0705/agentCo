@@ -86,6 +86,19 @@ function promptChars(request: ChatRequest): number {
 /** How long a provider is skipped after an account-level failure. */
 export const PROVIDER_COOLDOWN_MS = 10 * 60_000;
 
+/**
+ * How long a provider is skipped after one of its calls timed out (2026-11-08, trc_92d7…: Claude
+ * calls ran into the 2-minute limit five times in 25 minutes; each one cost two minutes of a
+ * five-minute run before the fallback answered in seconds, and three runs died of it).
+ */
+export const SLOW_PROVIDER_COOLDOWN_MS = 3 * 60_000;
+
+/** The provider did not answer within the per-request limit (MODEL_TIMEOUT_MS) — not the caller's own abort. */
+export function isTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return err.name === "TimeoutError" || /aborted due to timeout|operation timed out|request timed out/i.test(err.message);
+}
+
 /** No credit, quota used up, or a key the provider refuses: every call to that provider will fail. */
 export function isAccountError(err: unknown): boolean {
   const m = err instanceof Error ? err.message : String(err);
@@ -186,6 +199,7 @@ class ModelRouterImpl implements ModelRouter {
       // Only the caller's own signal is an abort; a provider timeout goes to the fallback profile.
       if (isBudgetError(err) || ctx.signal.aborted) throw err;
       if (isAccountError(err)) this.markDown(first.provider, err);
+      else if (fallback && fallback.provider !== first.provider && isTimeoutError(err)) this.markSlow(first.provider);
       if (!fallback) {
         if (isNetworkError(err)) throw new ProviderOutageError([`${first.provider}: ${errText(err)}`]);
         throw err;
@@ -223,6 +237,17 @@ class ModelRouterImpl implements ModelRouter {
     const fresh = !this.providersDown.has(provider);
     this.providersDown.set(provider, { until: Date.now() + PROVIDER_COOLDOWN_MS, reason });
     if (fresh) console.warn(`[models] ${provider}: ${reason} — using fallback models for ${PROVIDER_COOLDOWN_MS / 60_000} minutes`);
+  }
+
+  /** A timed-out provider: its next calls go to the fallback for a few minutes (an account failure's longer skip is kept). */
+  private markSlow(provider: string): void {
+    if (provider === "mock") return;
+    const until = Date.now() + SLOW_PROVIDER_COOLDOWN_MS;
+    const current = this.providersDown.get(provider);
+    if (current && current.until >= until) return;
+    const fresh = !current || Date.now() >= current.until;
+    this.providersDown.set(provider, { until, reason: "slow: a call timed out" });
+    if (fresh) console.warn(`[models] ${provider}: a call timed out — using fallback models for ${SLOW_PROVIDER_COOLDOWN_MS / 60_000} minutes`);
   }
 
   /** Providers currently skipped (for status pages and audits). */

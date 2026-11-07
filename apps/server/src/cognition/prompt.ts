@@ -69,3 +69,14 @@ export function systemPrompt(stage: string, parts: (string | null | undefined | 
 export function jsonContract(shape: string): string {
   return `Reply with one JSON object only, no prose: ${shape}`;
 }
+
+/** "Already done on this task by earlier attempts" — for a retry or a resumed run (tool-loop.ts WRITE_TOOL). */
+export function earlierWorkNote(earlier: readonly { at: string; agent: string; tool: string; what: string }[]): string {
+  return (
+    "Already done on this task by earlier attempts (these stand: build on them, don't redo them, and don't mistake them for someone else's work):\n" +
+    earlier
+      .slice(-12)
+      .map((e) => `- ${e.at.slice(11, 16)} UTC ${e.agent}: ${e.tool} — ${e.what}`)
+      .join("\n")
+  );
+}
