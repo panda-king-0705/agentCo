@@ -142,3 +142,66 @@ test("openai: tools refused while reasoning is on → retried with reasoning_eff
     assert.equal(bodies[3]?.reasoning_effort, undefined, "requests without tools keep the model's own reasoning");
   });
 });
+
+// Live (2026-11-08, trc_92d7…): gpt-6.1-sol and gpt-6-astra now refuse "none" as well ("Supported values
+// are: 'low', 'medium', 'high', and 'xhigh'"), so on /v1/chat/completions they cannot take tools at all.
+// Their tool calls go through /v1/responses (checked live: a function_call came back).
+const NONE_400: Reply = {
+  status: 400,
+  json: { error: { message: "Unsupported value: 'reasoning_effort' does not support 'none' with this model. Supported values are: 'low', 'medium', 'high', and 'xhigh'.", type: "invalid_request_error", param: "reasoning_effort", code: "unsupported_value" } },
+};
+
+test("openai: a model that refuses tools with reasoning AND refuses 'none' takes its tool calls through the Responses API (remembered)", async () => {
+  const tools = [{ name: "workspace_write_file", description: "save", parameters: { type: "object", properties: { path: { type: "string" } } } }];
+  const responsesReply: Reply = {
+    status: 200,
+    json: {
+      status: "completed",
+      output: [
+        { type: "reasoning", summary: [] },
+        { type: "function_call", call_id: "call_abc", name: "workspace_write_file", arguments: '{"path":"a.md"}' },
+      ],
+      usage: { input_tokens: 44, output_tokens: 14, input_tokens_details: { cached_tokens: 4 } },
+    },
+  };
+  await withServer(
+    (body) => ("input" in body ? responsesReply : body.tools ? (body.reasoning_effort === "none" ? NONE_400 : TOOLS_REASONING_400) : ok("plain")),
+    async (base, bodies) => {
+      const p = new OpenAICompatibleProvider({ providers: { openai: { name: "openai", baseUrl: base, apiKey: "k" } } } as never);
+      const history = [
+        { role: "system" as const, content: "You are Kenji." },
+        { role: "user" as const, content: "Save it." },
+        { role: "assistant" as const, content: "", toolCalls: [{ id: "call_1", name: "workspace_list", arguments: { dir: "" } }] },
+        { role: "tool" as const, toolCallId: "call_1", name: "workspace_list", content: "docs/" },
+      ];
+      const r = await p.complete(profile("openai"), { ...request, messages: history, tools }, new AbortController().signal);
+      assert.deepEqual(r.toolCalls, [{ id: "call_abc", name: "workspace_write_file", arguments: { path: "a.md" } }]);
+      assert.equal(r.finishReason, "tool_calls");
+      assert.deepEqual([r.usage.inputTokens, r.usage.outputTokens, r.usage.cachedInputTokens], [44, 14, 4]);
+      assert.equal(bodies.length, 3, "chat completions, then 'none', then the Responses API");
+      const sent = bodies[2]!;
+      assert.deepEqual(sent.reasoning, { effort: "low" });
+      assert.equal(sent.max_output_tokens, 64);
+      assert.deepEqual(sent.tools, [{ type: "function", name: "workspace_write_file", description: "save", parameters: { type: "object", properties: { path: { type: "string" } } } }]);
+      assert.deepEqual(sent.input, [
+        { role: "system", content: "You are Kenji." },
+        { role: "user", content: "Save it." },
+        { type: "function_call", call_id: "call_1", name: "workspace_list", arguments: '{"dir":""}' },
+        { type: "function_call_output", call_id: "call_1", output: "docs/" },
+      ]);
+      await p.complete(profile("openai"), { ...request, tools }, new AbortController().signal);
+      assert.equal(bodies.length, 4, "the next tool call goes straight to the Responses API");
+      assert.ok("input" in bodies[3]!);
+      const plain = await p.complete(profile("openai"), request, new AbortController().signal);
+      assert.equal(plain.content, "plain", "requests without tools stay on chat completions");
+    },
+  );
+});
+
+test("openai: a Responses API reply with text, or cut off by the output limit", async () => {
+  const { parseResponsesBody } = await import("../../src/models/providers/openai.ts");
+  const text = parseResponsesBody({ status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Done." }] }], usage: { input_tokens: 5, output_tokens: 2 } });
+  assert.deepEqual([text.content, text.finishReason, text.toolCalls.length], ["Done.", "stop", 0]);
+  const cut = parseResponsesBody({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [] });
+  assert.equal(cut.finishReason, "length");
+});

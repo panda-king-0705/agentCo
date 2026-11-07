@@ -179,9 +179,12 @@ test("F11 router: a provider timeout falls back to the fallback profile; a calle
   assert.equal(llm[0]!.status, "error", "the timed-out attempt is an error, not a cancellation");
   assert.equal(llm[1]!.attributes["agentco.fallback_from"], "openai:gpt-6.1-sol");
 
+  // (2026-11-08: a timed-out provider is skipped for a few minutes — a fresh router for the abort case.)
   served.length = 0;
+  const q = new FakePlatform({ env, providers: { "openai-compatible": slowPrimary } });
+  q.addAgent(agent);
   const caller = new AbortController();
   setTimeout(() => caller.abort(Object.assign(new Error("Run interrupted by the Board"), { name: "RunAbortedError" })), 5);
-  await assert.rejects(p.models.chat({ tier: "standard", messages: [{ role: "user", content: "hi" }] }, ctx(caller.signal)), /interrupted/);
+  await assert.rejects(q.models.chat({ tier: "standard", messages: [{ role: "user", content: "hi" }] }, ctx(caller.signal)), /interrupted/);
   assert.deepEqual(served, ["openai:gpt-6.1-sol"], "an abort by the caller never falls back");
 });

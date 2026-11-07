@@ -32,6 +32,14 @@ export const REPORT_BLOCKER: ToolSpec = {
 const TOOL_RESULT_CHARS = 21_000;
 /** Output room per step: a step that writes a whole document into workspace_write_file needs it (2,000 cut drafts mid-file). */
 const STEP_OUTPUT_TOKENS = 4000;
+/** After a cut-off call, the room doubles for the next steps, up to this (2026-11-08, trc_92d7…: 20+ identical cut-off saves). */
+const MAX_STEP_OUTPUT_TOKENS = 16_000;
+
+export { WRITE_TOOL } from "../tools/write-tools.ts";
+import { WRITE_TOOL } from "../tools/write-tools.ts";
+
+/** A brief that asks for saved or committed work (the empty-"done" guard applies). */
+export const ASKS_FOR_SAVED_WORK = /\b(save|saves|saved|saving|commit|commits|push|pull request)\b/i;
 
 /**
  * The wrap-up call has no tools: say plainly that the reply itself is the result (2026-11-07: a
@@ -65,6 +73,14 @@ export interface ToolLoopOptions {
   maxOutputTokens?: number;
   /** Called after every model response with its measured latency (OOD profiling). */
   onResponse?: (response: ChatResponse, latencyMs: number) => void;
+  /**
+   * The brief asks for saved or committed work: finishing with nothing saved is refused once, and
+   * running out of steps with nothing saved is a blocker, not "done" (2026-11-08, trc_92d7…: an
+   * engineer marked a whole code package "done" with "Nothing has been written yet").
+   */
+  requireSaved?: boolean;
+  /** Saves and commits earlier attempts on this task already made (they count as work done). */
+  priorWrites?: number;
   /**
    * Out of steps: warn on the last step, then make one final call WITHOUT tools for the result from
    * what was gathered (status completed, wrappedUp) instead of returning "exhausted". Live models
@@ -178,6 +194,18 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
     { role: "user", content: o.user },
   ];
   const out: ToolLoopResult = { status: "exhausted", result: "", reason: "", steps: 0, toolCalls: 0, effects: [], costUsd: 0 };
+  let stepOutput = o.maxOutputTokens ?? STEP_OUTPUT_TOKENS;
+  let writes = o.priorWrites ?? 0;
+  let refusedEmpty = false;
+  /** The empty-"done" guard: true when finishing now would hand in nothing the brief asked for (refused once). */
+  const refuseEmpty = (): boolean => {
+    if (!o.requireSaved || writes > 0 || refusedEmpty) return false;
+    refusedEmpty = true;
+    o.parentSpan.setAttributes({ "agentco.empty_done_refused": true });
+    return true;
+  };
+  const EMPTY_DONE =
+    "Not done yet: your brief asks for saved or committed work, and nothing has been saved or committed for this task. Do it now — a long file goes in parts (append), a code package one or two files per commit — or call report_blocker saying exactly what stops you. If this task truly needs nothing saved, call complete_task again.";
 
   for (let step = 1; step <= o.maxSteps; step++) {
     if (ctx.signal.aborted) throw abortErrorFrom(ctx.signal);
@@ -198,7 +226,7 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
         modelOverride: agent.modelOverride,
         messages,
         tools: specs.length > 0 ? specs : undefined,
-        maxOutputTokens: o.maxOutputTokens ?? STEP_OUTPUT_TOKENS,
+        maxOutputTokens: stepOutput,
       },
       { agentId: agent.id, runId: ctx.run.id, traceId: ctx.run.traceId, parentSpanId: o.parentSpan.spanId, taskId: o.taskId, stage: o.stage, signal: ctx.signal },
     );
@@ -207,6 +235,17 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
 
     if (response.toolCalls.length === 0) {
       const text = response.content.trim();
+      if (text && o.terminal.complete && o.requireSaved && writes === 0 && !refusedEmpty) {
+        if (step < o.maxSteps && refuseEmpty()) {
+          messages.push({ role: "assistant", content: text });
+          messages.push({ role: "user", content: EMPTY_DONE });
+          continue;
+        }
+        // The last step, still nothing saved: a blocker for the manager, never a "done".
+        out.status = "blocked";
+        out.reason = truncate(`Ran out of steps before saving or committing anything for this task. Where I got to: ${text}`, 1500);
+        return out;
+      }
       if (text) {
         out.status = "completed";
         out.result = text;
@@ -222,6 +261,11 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
       out.toolCalls++;
       if (o.terminal.complete && call.name === "complete_task") {
         const result = typeof call.arguments.result === "string" ? call.arguments.result.trim() : "";
+        if (result && refuseEmpty()) {
+          terminalSpan(o.parentSpan, call, "refused: nothing saved or committed yet", false);
+          messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: `Error: ${EMPTY_DONE}` });
+          continue;
+        }
         if (result) {
           terminalSpan(o.parentSpan, call, truncate(result, 2000), true);
           out.status = "completed";
@@ -255,11 +299,19 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
         signal: ctx.signal,
       });
       out.effects.push(...result.effects);
+      if (result.ok && WRITE_TOOL.test(call.name)) writes++;
+      // A call cut off by the reply's length limit: more room for the next replies, and say so.
+      let note = "";
+      if (!result.ok && /was cut off before it finished/.test(result.content) && stepOutput < MAX_STEP_OUTPUT_TOKENS) {
+        stepOutput = Math.min(MAX_STEP_OUTPUT_TOKENS, stepOutput * 2);
+        o.parentSpan.setAttributes({ "agentco.step_output_tokens": stepOutput });
+        note = ` Your next replies have room for about ${Math.round(stepOutput * 0.7).toLocaleString("en-US")} words in total — still send long content in parts.`;
+      }
       messages.push({
         role: "tool",
         toolCallId: call.id,
         name: call.name,
-        content: truncate(`${result.ok ? "" : "Error: "}${result.content}`, TOOL_RESULT_CHARS),
+        content: truncate(`${result.ok ? "" : "Error: "}${result.content}${note}`, TOOL_RESULT_CHARS),
       });
       // A hire, or an outside action (an MCP tool that changes something), that needs the Board's
       // approval: wait for the decision — resumed with it (and the action's result), like ask_human.
@@ -304,12 +356,19 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
   ctx.platform.agents.setActivity(agent.id, "thinking", `${o.activityLabel} (wrapping up)`, o.block ?? null);
   const started = Date.now();
   const wrap = await ctx.platform.models.chat(
-    { tier: o.tier, modelOverride: agent.modelOverride, messages, maxOutputTokens: o.maxOutputTokens ?? STEP_OUTPUT_TOKENS },
+    { tier: o.tier, modelOverride: agent.modelOverride, messages, maxOutputTokens: stepOutput },
     { agentId: agent.id, runId: ctx.run.id, traceId: ctx.run.traceId, parentSpanId: o.parentSpan.spanId, taskId: o.taskId, stage: o.stage, signal: ctx.signal },
   );
   out.costUsd += wrap.costUsd;
   o.onResponse?.(wrap, Date.now() - started);
   const text = wrap.toolCalls.length === 0 ? wrap.content.trim() : "";
+  if (text && o.requireSaved && writes === 0) {
+    // Out of steps with nothing saved: a blocker for the manager, never a "done" (2026-11-08, trc_92d7…).
+    out.status = "blocked";
+    out.reason = truncate(`Ran out of steps before saving or committing anything for this task. Where I got to: ${text}`, 1500);
+    out.wrappedUp = true;
+    return out;
+  }
   if (text) {
     out.status = "completed";
     out.result = text;

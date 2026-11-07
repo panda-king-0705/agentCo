@@ -60,6 +60,11 @@ export interface McpServerConfig {
   protectBranches: string[];
   /** Values substituted from the environment: redacted from every message and span. */
   secrets: string[];
+  /**
+   * A short note agents are told with the service (e.g. "Our repository: owner/name — never create
+   * another"): 2026-11-08, trc_92d7… — an engineer guessed "company/fx-scalper" before finding it.
+   */
+  notes: string;
 }
 
 export interface McpConfigResult {
@@ -140,6 +145,7 @@ export function parseMcpConfig(raw: unknown, env: NodeJS.ProcessEnv, path: strin
       dailyCallLimit: typeof s.dailyCallLimit === "number" && s.dailyCallLimit >= 0 ? Math.floor(s.dailyCallLimit) : 50,
       protectBranches: (Array.isArray(s.protectBranches) ? strs(s.protectBranches) : strs(s.grants).includes("git") ? ["main", "master"] : []).map((b) => b.toLowerCase()),
       secrets: [...new Set(secrets)].filter((v) => v.length >= 4),
+      notes: typeof s.notes === "string" ? s.notes.trim().slice(0, 300) : "",
     });
   }
   return { servers, skipped, path };

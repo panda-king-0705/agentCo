@@ -5,6 +5,30 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (trc_92d7…, the forex scalper: $2.75, 0 of 4 met, no code reached the repository)
+- **The OpenAI backup works for tool steps again.** gpt-6.1-sol and gpt-6-astra refuse tools on
+  chat completions unless reasoning is "none", and now refuse "none" too. Their tool calls go through
+  OpenAI's Responses API instead. This was checked live; the adapter learns it per model on the first refusal.
+- **A slow provider is skipped for a few minutes.** After a call times out (2 minutes), that
+  provider's next calls go to the fallback for 3 minutes, instead of each waiting 2 minutes. Five
+  Claude time-outs had cost three runs.
+- **More room after a cut-off.** When a save or commit is cut off by the reply's length limit, the
+  next replies get twice the room (up to 16k tokens) and are told so. For commits, the agent is told
+  to send one or two files at a time.
+- **No empty "done".** A worker whose brief asks for saved or committed work can't finish with
+  nothing saved: the first try is refused, and running out of steps becomes a blocker for the
+  manager. An engineer had marked a whole code package "done" with "Nothing has been written yet".
+- **Retries remember.** A retried or resumed run is told what earlier attempts on the task already
+  saved, committed or handed out. Commits through the GitHub connection are marked as carrying the
+  Board's account name, so an agent doesn't take its own earlier commit for yours.
+- **Code goes to people who can commit it**, even when the part's title names another department.
+  Big builds are planned as small parts in order (one module and its tests each), never one part
+  for a whole package.
+- **Reviewers and the checker read the repository.** Files committed on an objective are read back
+  from GitHub and judged with the drive's files. The checker had marked a committed spec missing.
+- **`notes` for a connection** in `mcp.json`, told to agents with the service, e.g. which
+  repository is ours.
+
 ### Added
 - **What "done" means, fixed up front, and checked by someone who didn't do the work** (validation
   contracts and an independent validator, after Factory's "Missions"). When an objective opens, its

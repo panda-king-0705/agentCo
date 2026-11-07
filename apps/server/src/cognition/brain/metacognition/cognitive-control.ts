@@ -204,6 +204,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
               (a.contract?.length
                 ? `What "done" means for this objective — fixed before the work starts; an independent checker judges the finished work against exactly these: ${contractList(a.contract)}. Give every part "covers": the ids of the statements it makes true; together the parts cover all of them, and each part's acceptance criteria come from its statements. `
                 : "") +
+              "A part that writes code goes to someone who can commit to the repository, and is small enough for one sitting — one module and its tests; a bigger build is several such parts in order (round 1 the foundations, round 2 what builds on them), never one part for a whole package. " +
               "Carry the request's own figures into the parts word for word — budgets, word counts, dates, file paths. " +
               "A document for outsiders (investors, customers) holds only what they should read: never brief anyone to add review notes, condition lists or change logs to it — those go in the review file. A part that changes an existing document names the section(s) to change; its owner edits them in place. " +
               "Name the exact file path each part saves to in its description (e.g. launch-plan/finance.md), and the path of the combined document in the round-2 step. If the same document already exists on the drive (listed below), reuse its path: saving replaces it and keeps the previous version. Never ask for a second copy of a document under another name. " +
@@ -361,6 +362,16 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
       // trc_6ee6…: "Confirm figures, finalize draft…" went to the General Counsel, and her contracts
       // analyst searched the drive for numbers only Finance keeps).
       if (own.size === 0) for (const id of fieldOwners(s.title, candidates, ownDepartment)) own.add(id);
+      // Code goes to someone who can commit it (2026-11-08, trc_92d7…: "Wire the risk manager…" went
+      // to Finance, which has no GitHub access — the Python it wrote never reached the repository).
+      // Even when the title names another department ("…to Finance limits"), if no one it names can commit.
+      if (CODE_PART.test(s.title)) {
+        const committers = candidates.filter((c) => run.platform.capabilities?.of(c.agent).has("git")).map((c) => c.agent.id);
+        if (committers.length && ![...own].some((id) => committers.includes(id))) {
+          own.clear();
+          for (const id of committers) own.add(id);
+        }
+      }
       const namedIds = own.size ? own : namedInRequest.size === 1 ? namedInRequest : undefined;
       const scores = scoreCandidates(`${s.title} ${s.description}`, candidates, { suggestedId: s.suggestedAssigneeId, usedCounts: used, fallbackDepartment: run.facts.department, ...(namedIds ? { namedIds } : {}) });
       const best = scores[0]!;
@@ -393,6 +404,9 @@ export function insideFix(task: { title: string; parentTaskId: string | null }, 
   }
   return false;
 }
+
+/** A part that writes or changes code (matched on its title). */
+export const CODE_PART = /\b(code|coding|implement(s|ing|ation)?|wire|wiring|module|package|refactor|commit|pull request|branch|repo(sitory)?|unit tests?|backtest script|\w+\.(py|ts|js|go|rs|java))\b|\b\w+\/(?=\s|$)/i;
 
 // Fields whose work belongs to one department, matched on a part's title when it names no one.
 const FIELDS: readonly { title: RegExp; department: RegExp }[] = [

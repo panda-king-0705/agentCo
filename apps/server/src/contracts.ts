@@ -386,6 +386,16 @@ export interface PlatformServices {
    * asking for a read-back (2026-11-07). Optional for test fakes.
    */
   drive?: SavedFiles;
+  /**
+   * What earlier attempts on a task already did that changed something (saves, commits, hand-offs),
+   * oldest first — told to a retry so it builds on its own earlier work (2026-11-08, trc_92d7…).
+   */
+  taskWrites?(taskId: string, excludeRunId: string): { at: string; agent: string; tool: string; what: string }[];
+  /**
+   * Files committed to outside repositories on this objective, read back from the repository now
+   * (mcp/tools.ts) — what reviewers and the independent check judge besides the drive.
+   */
+  outsideFiles?(traceId: string): Promise<{ display: string; by: string; content: string; truncated: boolean; words: number; lines: number }[]>;
   now(): Date;
 }
 

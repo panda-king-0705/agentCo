@@ -9,6 +9,8 @@ import { createPlaybookRead, listPlaybooks } from "./tools/builtins/playbooks.ts
 import { loadMcpConfig, mcpConfigPath, type McpConfigResult } from "./mcp/config.ts";
 import type { McpClientOptions } from "./mcp/client.ts";
 import { McpTools } from "./mcp/tools.ts";
+import { WRITE_TOOL } from "./tools/write-tools.ts";
+import { oneLine } from "./cognition/text.ts";
 import type { Capability, ConnectedService } from "./org/capabilities.ts";
 import { OutageGate, watchOutages } from "./models/outage.ts";
 import { ChatCleanup } from "./runs/chat-cleanup.ts";
@@ -147,7 +149,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
       return mcp
         .status()
         .filter((s) => s.connected && s.tools.length > 0)
-        .map((s) => ({ name: s.name, grants: s.grants, holders: agents.filter((a) => s.tools.some((t) => tools.canUse(t, a))).map((a) => a.name) }));
+        .map((s) => ({ name: s.name, grants: s.grants, holders: agents.filter((a) => s.tools.some((t) => tools.canUse(t, a))).map((a) => a.name), notes: s.notes }));
     },
   };
   const handbookSource: HandbookSource = {
@@ -196,7 +198,18 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
       }
     },
   };
-  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, drive, capabilities, now };
+  // What earlier attempts on a task already did (tool-loop.ts WRITE_TOOL): told to a retry (2026-11-08, trc_92d7…).
+  const taskWrites = (taskId: string, excludeRunId: string) =>
+    repos.spans
+      .toolCallsForTask(taskId, excludeRunId)
+      .filter((c) => WRITE_TOOL.test(c.name))
+      .map((c) => ({
+        at: c.at,
+        agent: c.agentId ? (org.getAgent(c.agentId)?.name ?? c.agentId) : "someone",
+        tool: c.name,
+        what: oneLine(String(c.attributes["agentco.file.path"] ?? (c.attributes["agentco.mcp.paths"] ? `${c.attributes["agentco.mcp.repo"]}@${c.attributes["agentco.mcp.branch"]}: ${String(c.attributes["agentco.mcp.paths"]).split("\n").join(", ")}` : c.output.replace(/^\[[^\]]*\]\s*/, ""))), 160),
+      }));
+  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, drive, capabilities, taskWrites, outsideFiles: (traceId) => mcp.outsideFiles(traceId), now };
   const engines = overrides.engines ?? (await loadEngines(config));
   const governor = new ContextGovernor(repos.settings, { dataDir: config.dataDir, triggerPct: config.contextTriggerPct, carryTurns: config.contextCarryTurns }, now);
   const runs = new RunService({

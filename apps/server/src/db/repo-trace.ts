@@ -73,6 +73,46 @@ export class SpanRepo {
     return out;
   }
 
+  /**
+   * Successful tool calls on a task, oldest first, outside one run (the current one): what earlier
+   * attempts already did. Callers keep the ones that change something (tool-loop.ts, WRITE_TOOL).
+   */
+  toolCallsForTask(taskId: string, excludeRunId: string | null): { at: string; agentId: string | null; runId: string | null; name: string; output: string; attributes: Record<string, unknown> }[] {
+    const rows = all(
+      this.db,
+      "SELECT started_at, agent_id, run_id, name, output, attributes FROM spans WHERE task_id = ? AND kind = 'tool' AND status = 'ok' AND (run_id IS NULL OR run_id != ?) ORDER BY started_at, rowid",
+      taskId,
+      excludeRunId ?? "",
+    );
+    return rows.map((r) => {
+      let attributes: Record<string, unknown> = {};
+      try {
+        attributes = JSON.parse(String(r.attributes ?? "{}")) as Record<string, unknown>;
+      } catch {
+        attributes = {};
+      }
+      return { at: String(r.started_at), agentId: r.agent_id ? String(r.agent_id) : null, runId: r.run_id ? String(r.run_id) : null, name: String(r.name).replace(/^tool\./, ""), output: String(r.output ?? ""), attributes };
+    });
+  }
+
+  /** Successful outside writes (MCP tools) on a trace that name a repository path, oldest first (mcp/tools.ts). */
+  repoWrites(traceId: string): { server: string; repo: string; branch: string; paths: string[] }[] {
+    const rows = all(this.db, "SELECT attributes FROM spans WHERE trace_id = ? AND kind = 'tool' AND status = 'ok' AND attributes LIKE '%agentco.mcp.paths%' ORDER BY started_at, rowid", traceId);
+    const out: { server: string; repo: string; branch: string; paths: string[] }[] = [];
+    for (const r of rows) {
+      try {
+        const a = JSON.parse(String(r.attributes ?? "{}")) as Record<string, unknown>;
+        const paths = String(a["agentco.mcp.paths"] ?? "").split("\n").filter(Boolean);
+        if (typeof a["agentco.mcp.server"] === "string" && typeof a["agentco.mcp.repo"] === "string" && paths.length) {
+          out.push({ server: a["agentco.mcp.server"] as string, repo: a["agentco.mcp.repo"] as string, branch: String(a["agentco.mcp.branch"] ?? ""), paths });
+        }
+      } catch {
+        /* skip unreadable rows */
+      }
+    }
+    return out;
+  }
+
   byRun(runId: string): Span[] {
     return all(this.db, "SELECT * FROM spans WHERE run_id = ? ORDER BY started_at, rowid", runId).map(toSpan);
   }

@@ -29,6 +29,7 @@ export interface McpServerStatus {
   tools: string[];
   error: string | null;
   grants: Capability[];
+  notes: string;
 }
 
 export interface McpToolsDeps {
@@ -65,7 +66,7 @@ export class McpTools {
   }
 
   status(): McpServerStatus[] {
-    return [...this.entries.values()].map((e) => ({ name: e.server.name, connected: e.client.connected, tools: e.tools.map((t) => toolName(e.server.name, t.name)), error: e.error, grants: e.server.grants }));
+    return [...this.entries.values()].map((e) => ({ name: e.server.name, connected: e.client.connected, tools: e.tools.map((t) => toolName(e.server.name, t.name)), error: e.error, grants: e.server.grants, notes: e.server.notes }));
   }
 
   stop(): void {
@@ -111,12 +112,16 @@ export class McpTools {
     const needsApproval = !readOnly && (destructive || !server.noApproval.includes(tool.name));
     const schema = tool.inputSchema.type === "object" ? tool.inputSchema : { type: "object", properties: {} };
     const branchArg = !readOnly && !needsApproval && server.protectBranches.length > 0 && Object.prototype.hasOwnProperty.call(schema.properties ?? {}, "branch");
+    // Commits through this connection carry the token owner's name (2026-11-08, trc_92d7…: a retried
+    // engineer took his own earlier commit for the founder's and stopped to ask).
+    const authorship = !readOnly && server.grants.includes("git") ? " (Commits made through this connection show the Board's GitHub account as author — including earlier ones by you or a colleague.)" : "";
     return {
       name,
       description:
         `[${server.name}] ${(tool.description || tool.title || tool.name).slice(0, 900)}` +
         (needsApproval ? " (Changes something outside the company: the call is sent to the Board and runs when approved.)" : "") +
-        (branchArg ? ` (Work on your own branch and open a pull request: a change to ${server.protectBranches.join(" or ")} goes to the Board first.)` : ""),
+        (branchArg ? ` (Work on your own branch and open a pull request: a change to ${server.protectBranches.join(" or ")} goes to the Board first.)` : "") +
+        authorship,
       parameters: stripSchemaMeta(schema),
       tiers: ALL_TIERS,
       grants: server.grants,
@@ -141,9 +146,42 @@ export class McpTools {
         }
         const r = await entry.client.callTool(tool.name, args, ctx.signal);
         const text = wrapResult(server.name, tool.name, r.text);
+        // Where a commit landed, so reviewers and the independent check can read it back (outsideFiles).
+        if (r.ok && !readOnly) {
+          const where = repoPaths(args);
+          if (where) ctx.span.setAttributes({ "agentco.mcp.repo": where.repo, "agentco.mcp.branch": where.branch, "agentco.mcp.paths": where.paths.join("\n") });
+        }
         return r.ok ? ok(text, [], { server: server.name, tool: tool.name }) : fail(text);
       },
     };
+  }
+
+  /**
+   * The files committed to repositories on this objective, read back from the repository now — what
+   * reviewers and the independent check judge besides the company drive (2026-11-08, trc_92d7…: the
+   * checker marked a committed spec unmet because it could only see the drive). At most 8 files.
+   */
+  async outsideFiles(traceId: string, limits = { files: 8, chars: 6000 }): Promise<{ display: string; by: string; content: string; truncated: boolean; words: number; lines: number }[]> {
+    const latest = new Map<string, { server: string; repo: string; branch: string; path: string }>();
+    for (const w of this.deps.repos.spans.repoWrites(traceId)) for (const path of w.paths) latest.set(`${w.server}|${w.repo}|${w.branch}|${path}`, { server: w.server, repo: w.repo, branch: w.branch, path });
+    const out: { display: string; by: string; content: string; truncated: boolean; words: number; lines: number }[] = [];
+    for (const f of [...latest.values()].slice(-limits.files)) {
+      const entry = this.entries.get(f.server);
+      const read = entry?.tools.find((t) => /(^|_)get_file_contents$/.test(t.name));
+      if (!entry || !read) continue;
+      const [owner, repo] = f.repo.split("/");
+      try {
+        if (!entry.client.connected) await entry.client.connect();
+        const r = await entry.client.callTool(read.name, { owner, repo, path: f.path, ...(f.branch ? { ref: `refs/heads/${f.branch}` } : {}) });
+        const body = r.ok ? r.text : `(could not be read back: ${entry.client.redact(r.text).slice(0, 200)})`;
+        const content = body.length > limits.chars ? body.slice(0, limits.chars) : body;
+        const words = content.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).length;
+        out.push({ display: `${f.repo}@${f.branch || "default"}:${f.path}`, by: "the repository", content, truncated: body.length > limits.chars, words, lines: content.split("\n").length });
+      } catch (error) {
+        this.log(`[mcp] reading back ${f.repo}:${f.path} failed: ${entry.client.redact(error instanceof Error ? error.message : String(error))}`);
+      }
+    }
+    return out;
   }
 
   private requestApproval(server: McpServerConfig, tool: McpTool, args: Record<string, unknown>, agent: Agent, taskId: string | null, traceId: string): ReturnType<typeof ok> {
@@ -199,4 +237,17 @@ function wrapResult(server: string, tool: string, text: string): string {
 function stripSchemaMeta(schema: Record<string, unknown>): Record<string, unknown> {
   const { $schema: _s, $id: _i, ...rest } = schema;
   return rest;
+}
+
+/** owner/repo, branch and the file paths a repository write names (GitHub-style arguments), or null. */
+export function repoPaths(args: Record<string, unknown>): { repo: string; branch: string; paths: string[] } | null {
+  const owner = typeof args.owner === "string" ? args.owner.trim() : "";
+  const repo = typeof args.repo === "string" ? args.repo.trim() : "";
+  if (!owner || !repo) return null;
+  const paths = [
+    ...(typeof args.path === "string" && args.path.trim() ? [args.path.trim()] : []),
+    ...(Array.isArray(args.files) ? args.files.map((f) => (f && typeof f === "object" && typeof (f as { path?: unknown }).path === "string" ? (f as { path: string }).path.trim() : "")).filter(Boolean) : []),
+  ];
+  if (!paths.length) return null;
+  return { repo: `${owner}/${repo}`, branch: typeof args.branch === "string" ? args.branch.trim() : "", paths };
 }
