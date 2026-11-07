@@ -63,8 +63,9 @@ function Detail({ a }: { a: Approval }) {
     case "external_action":
       return (
         <div className="stack tight">
-          <KV rows={[["Action", str(p.action)], ["Channel", str(p.channel) || "—"], ["Recipients", str(p.recipients) || "—"]]} />
+          <KV rows={[["Action", str(p.action)], ["Channel", str(p.channel) || "—"], ["Recipients", str(p.recipients) || "—"], ...(p.execution ? [["Ran", p.execution === "done" ? "Yes" : "Failed"] as [string, string]] : [])]} />
           {p.preview ? <pre className="io">{str(p.preview)}</pre> : null}
+          {p.result ? <pre className="io">{str(p.result)}</pre> : null}
         </div>
       );
     case "question":

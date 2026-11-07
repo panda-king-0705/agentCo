@@ -6,7 +6,7 @@
  * separately by `models/config.ts` (cognition) from the same environment.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { parseEnv } from "node:util";
 import { fileURLToPath } from "node:url";
 
@@ -40,6 +40,8 @@ export interface AppConfig {
   contextTriggerPct: number;
   contextCarryTurns: number;
   webFetchEnabled: boolean;
+  /** Folder of playbooks (Claude skill folders or .md files) agents can read (tools/builtins/playbooks.ts). */
+  playbooksDir: string;
   schedulerTickMs: number;
   /** Cap on concurrent SSE streams (SSE_MAX_CLIENTS); extra connections get 503. */
   sseMaxClients: number;
@@ -115,6 +117,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     contextTriggerPct: reader.num("CONTEXT_TRIGGER_PCT", 0.7, 0.1, 0.95),
     contextCarryTurns: reader.int("CONTEXT_CARRY_TURNS", 6, 1, 200),
     webFetchEnabled: reader.bool("WEB_FETCH_ENABLED", false),
+    playbooksDir: resolve(reader.str("PLAYBOOKS_DIR", join(resolve(reader.str("DATA_DIR", "./data")), "playbooks"))),
     schedulerTickMs: reader.int("SCHEDULER_TICK_MS", 750, 10, 60_000),
     sseMaxClients: reader.int("SSE_MAX_CLIENTS", 50, 1, 10_000),
     webDistDir: resolve(reader.str("WEB_DIST_DIR", defaultWebDist())),

@@ -1,0 +1,33 @@
+{
+  "servers": {
+    "firecrawl": {
+      "url": "https://mcp.firecrawl.dev/v2/mcp",
+      "headers": { "Authorization": "Bearer ${FIRECRAWL_API_KEY}" },
+      "grants": ["web"],
+      "access": {
+        "roles": ["cmo"],
+        "catalog": ["marketing/marketing-seo-specialist", "finance/finance-fpa-analyst", "product/product-manager"]
+      },
+      "tools": ["firecrawl_search", "firecrawl_scrape"],
+      "dailyCallLimit": 40
+    },
+    "github": {
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_TOKEN}",
+        "X-MCP-Toolsets": "repos,pull_requests",
+        "X-MCP-Exclude-Tools": "merge_pull_request,delete_file,create_repository,fork_repository"
+      },
+      "grants": ["git"],
+      "access": { "departments": ["engineering"] },
+      "noApproval": ["create_branch", "create_or_update_file", "push_files", "create_pull_request"],
+      "dailyCallLimit": 100
+    },
+    "fmp": {
+      "url": "https://financialmodelingprep.com/mcp?apikey=${FMP_API_KEY}",
+      "grants": ["data"],
+      "access": { "departments": ["finance"] },
+      "dailyCallLimit": 100
+    }
+  }
+}

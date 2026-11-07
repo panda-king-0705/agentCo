@@ -5,6 +5,11 @@
  *   createPlatform(config, overrides) is the only place concrete classes meet;
  *   tests inject fake engines / a fake model router through `overrides`.
  */
+import { createPlaybookRead, listPlaybooks } from "./tools/builtins/playbooks.ts";
+import { loadMcpConfig, mcpConfigPath, type McpConfigResult } from "./mcp/config.ts";
+import type { McpClientOptions } from "./mcp/client.ts";
+import { McpTools } from "./mcp/tools.ts";
+import type { Capability } from "./org/capabilities.ts";
 import { OutageGate, watchOutages } from "./models/outage.ts";
 import { ChatCleanup } from "./runs/chat-cleanup.ts";
 import type { Agent, CognitionKind, CompanySnapshot, ModelsInfo } from "../../../packages/shared/src/index.ts";
@@ -32,7 +37,7 @@ import { RunService } from "./runs/service.ts";
 import { ApprovalService } from "./tasks/approvals.ts";
 import { Scheduler } from "./tasks/scheduler.ts";
 import { TaskService } from "./tasks/service.ts";
-import { ToolExecutorImpl } from "./tools/registry.ts";
+import { BUILTIN_TOOLS, ToolExecutorImpl } from "./tools/registry.ts";
 import { Workspaces } from "./tools/workspace.ts";
 import { join } from "node:path";
 import { buildHandbook, type HandbookSource } from "./org/handbook.ts";
@@ -53,6 +58,10 @@ export interface PlatformOverrides {
   bootstrap?: boolean;
   /** The specialist catalog; default: loaded (once per process) from config.catalogDir. */
   catalog?: Catalog;
+  /** MCP servers (tests); default: read from MCP_CONFIG or <dataDir>/mcp.json. */
+  mcpConfig?: McpConfigResult;
+  /** MCP client options (tests: a fake fetch). */
+  mcpClient?: McpClientOptions;
 }
 
 export interface Platform {
@@ -69,6 +78,8 @@ export interface Platform {
   chats: ChatCleanup;
   /** Whether the AI providers can be reached; work waits while they can't (models/outage.ts). */
   outage: OutageGate;
+  /** MCP servers' tools (mcp/tools.ts). */
+  mcp: McpTools;
   memory: MemoryServiceImpl;
   tasks: TaskService;
   approvals: ApprovalService;
@@ -107,7 +118,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const budget = new BudgetService({ repos, bus, settings: () => company.settings(), now });
   const workspaces = new Workspaces(config.dataDir);
 
-  const tools = new ToolExecutorImpl(config, { onCall: (runId) => repos.runs.incrementToolCalls(runId) });
+  const tools = new ToolExecutorImpl(config, { onCall: (runId) => repos.runs.incrementToolCalls(runId), tools: [...BUILTIN_TOOLS, createPlaybookRead(() => config.playbooksDir)] });
   const catalog = overrides.catalog ?? createCatalog({ dir: config.catalogDir, playbookTokens: config.catalogPlaybookTokens });
   const org = new OrgService({
     repos, bus, company, budget, workspaces, now, castBaZi: computeBaZi, catalog,
@@ -122,7 +133,18 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   org.attachTaskReassigner((taskId, assigneeId, reason) => tasks.reassign(taskId, assigneeId, reason));
   const approvals = new ApprovalService({ repos, bus, org, tasks, company, now, redactor });
   // The company handbook (org/handbook.ts): generated from live data, for agents (tool, welcome) and the console.
+  // What the company can do outside it follows the enabled tools (org/capabilities.ts).
+  const capabilities = {
+    of: (agent: Agent) => tools.capabilitiesOf(agent),
+    company: () => {
+      const all = new Set<Capability>();
+      for (const a of org.listActiveAgents()) for (const c of tools.capabilitiesOf(a)) all.add(c);
+      return all;
+    },
+  };
   const handbookSource: HandbookSource = {
+    capabilities,
+    playbooks: () => listPlaybooks(config.playbooksDir),
     settings: () => company.settings(),
     org,
     openObjectives: (limit) =>
@@ -166,7 +188,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
       }
     },
   };
-  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, drive, now };
+  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, drive, capabilities, now };
   const engines = overrides.engines ?? (await loadEngines(config));
   const governor = new ContextGovernor(repos.settings, { dataDir: config.dataDir, triggerPct: config.contextTriggerPct, carryTurns: config.contextCarryTurns }, now);
   const runs = new RunService({
@@ -179,6 +201,9 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
     now,
   });
   org.attachRunControl(runs);
+  // MCP servers' tools (mcp/tools.ts): connected in the background at start(); approved actions run here.
+  const mcp = new McpTools({ config: overrides.mcpConfig ?? loadMcpConfig(mcpConfigPath(config.dataDir, env), env), registry: tools, repos, approvals, now, client: overrides.mcpClient });
+  approvals.attachActionRunner((a) => mcp.runApproved(a));
   const chats = new ChatCleanup({ repos, bus, governor, runs, approvals });
   org.attachRemovalCleanup((agent) => chats.removeAgent(agent));
   const scheduler = new Scheduler({ repos, bus, org, company, conversations, runs, tickMs: config.schedulerTickMs, outage });
@@ -225,7 +250,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   let lastBeat = now().getTime();
 
   const platform: Platform = {
-    config, db, repos, bus, tracer, company, budget, org, conversations, chats, outage, memory, tasks, approvals, tools, models, metrics,
+    config, db, repos, bus, tracer, company, budget, org, conversations, chats, outage, mcp, memory, tasks, approvals, tools, models, metrics,
     traces: new TraceService(repos), runs, scheduler, workspaces, catalog, services, bootstrapResult, modelsInfo,
     snapshot() {
       const at = now();
@@ -252,6 +277,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
     start() {
       runs.recoverOnBoot();
       scheduler.start();
+      void mcp.start();
       heartbeat = setInterval(() => {
         const minutes = company.settings().heartbeatMinutes;
         if (minutes <= 0 || now().getTime() - lastBeat < minutes * 60_000) return;
@@ -267,6 +293,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
     async stop() {
       if (heartbeat) clearInterval(heartbeat);
       scheduler.stop();
+      mcp.stop();
       await runs.shutdown();
       try {
         db.close();

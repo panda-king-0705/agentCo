@@ -203,6 +203,13 @@ export class ApprovalService {
     });
   }
 
+  private actionRunner: ((approval: Approval) => Promise<{ ok: boolean; text: string }>) | null = null;
+
+  /** Late-bound: runs an approved outside action (an MCP tool call, mcp/tools.ts). */
+  attachActionRunner(runner: (approval: Approval) => Promise<{ ok: boolean; text: string }>): void {
+    this.actionRunner = runner;
+  }
+
   /** Records the Board's decision, applies its effect and wakes blocked tasks. */
   decide(id: string, input: DecideApprovalInput): Approval {
     const approval = this.require(id);
@@ -217,8 +224,27 @@ export class ApprovalService {
     this.deps.repos.approvals.update(id, { status: input.decision, decidedBy: "human", note: input.note?.trim() ? this.clean(input.note.trim()) : null, decidedAt: this.deps.now().toISOString(), payload });
     const decided = this.require(id);
     this.deps.bus.emit("approval.decided", { agentId: decided.requestedBy, taskId: decided.taskId, traceId: decided.traceId, summary: summaries.approvalDecided(decided), data: decided });
+    // An approved outside action runs first; the agent is woken with its result.
+    if (decided.kind === "external_action" && decided.status === "approved" && decided.payload.server) {
+      void this.runAction(decided);
+      return decided;
+    }
     this.deps.tasks.answerApproval(decided);
     return decided;
+  }
+
+  private async runAction(approval: Approval): Promise<void> {
+    let result: { ok: boolean; text: string };
+    try {
+      result = this.actionRunner ? await this.actionRunner(approval) : { ok: false, text: "No connection for this action is configured, so it did not run." };
+    } catch (error) {
+      result = { ok: false, text: error instanceof Error ? error.message : String(error) };
+    }
+    const payload = { ...approval.payload, execution: result.ok ? "done" : "failed", result: this.clean(result.text).slice(0, 8000) };
+    this.deps.repos.approvals.update(approval.id, { payload });
+    const done = this.require(approval.id);
+    this.deps.bus.emit("approval.decided", { agentId: done.requestedBy, taskId: done.taskId, traceId: done.traceId, summary: `${String(done.payload.action ?? "Action")} ${result.ok ? "ran" : "failed"} after approval`, data: done });
+    this.deps.tasks.answerApproval(done);
   }
 
   private applyEffect(approval: Approval): Record<string, unknown> {

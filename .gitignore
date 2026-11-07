@@ -4,3 +4,8 @@ apps/web/dist/
 .env
 .sandbox-vendor/
 *.log
+
+# Per-PC company configuration (config/README.md): keys stay in .env, these stay on the PC.
+config/mcp.json
+config/playbooks/*
+!config/playbooks/README.md

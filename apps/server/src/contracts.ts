@@ -10,6 +10,7 @@
  * database directly; everything goes through PlatformServices so every side
  * effect is traced, budgeted and redacted in one place.
  */
+import type { Capability } from "./org/capabilities.ts";
 import type {
   Agent,
   Approval,
@@ -355,6 +356,8 @@ export interface PlatformServices {
   models: ModelRouter;
   metrics: MetricsView;
   tools: ToolExecutor;
+  /** What the company and an agent can do outside it, from the enabled tools (org/capabilities.ts); optional for test wiring. */
+  capabilities?: { company(): ReadonlySet<Capability>; of(agent: Agent): ReadonlySet<Capability> };
   memory: MemoryService;
   tracer: Tracer;
   org: OrgView;

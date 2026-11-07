@@ -10,7 +10,7 @@
  * gates (truthful / efficient / good) → accept | revise | rollback | escalate,
  * or fail once nothing is left to try (no revision, rollback or escalation).
  */
-import { LIMITS_LINE } from "../../../org/capabilities.ts";
+import { limitsLine } from "../../../org/capabilities.ts";
 import type { ModelTier, Task } from "../../../../../../packages/shared/src/index.ts";
 import type { SpanHandle, ToolEffect } from "../../../contracts.ts";
 import { oneOf, str, strArr, unit } from "../../coerce.ts";
@@ -18,7 +18,7 @@ import { oneLine, truncate } from "../../text.ts";
 import { ESCALATION_TOOLS, runToolLoop } from "../../tool-loop.ts";
 import { canEscalate } from "../escalation.ts";
 import { Q4_CONTROL, Q6_EXECUTION, q6SubprocessCount, type CandidateName } from "../interpretation.ts";
-import { block, llmJson, recordCall, toolContext, type BrainRun } from "../runtime.ts";
+import { block, capabilities, llmJson, recordCall, toolContext, type BrainRun } from "../runtime.ts";
 import type { Subprocess } from "./cognitive-control.ts";
 import { truthfulEfficientGood, type TegResult } from "./monitoring.ts";
 import { measure } from "../../../tools/builtins/files.ts";
@@ -178,7 +178,7 @@ export async function solving(
         hiring
           ? "You are making a hire: call hire_agent with the recommended catalogId, monthlyBudgetUsd and firstTask (their first piece of work, with the exact file path). Give that work to the new hire as their first task — do not do it yourself first."
           : "",
-        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file. Credit work to whoever actually did it: never write a colleague's name on work they did not do (\"recommended by\", \"written by\", in files, messages or requests to the Board) — if a step meant for someone else ended up with you, say you did it. " + LIMITS_LINE + "",
+        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file. Credit work to whoever actually did it: never write a colleague's name on work they did not do (\"recommended by\", \"written by\", in files, messages or requests to the Board) — if a step meant for someone else ended up with you, say you did it. " + limitsLine(capabilities(run).company, capabilities(run).mine),
         `[[context:${JSON.stringify({
           mode: "task",
           agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },
@@ -327,7 +327,7 @@ export async function feedback(
         "Judge substance — is it correct, complete, consistent and honest? — not formatting (exact heading counts, tag placement, wording, layout): a formatting slip is at most a note in issues, never on its own a reason to revise, unless the Board's original request demands that exact format. " +
         // 2026-11-07 (test 6): legal review went round four times over who signed, a dated
         // confirmation and "6,386 characters, but the file is 6,432".
-        `Never count paperwork against the work: signatures or sign-offs, dated confirmations, who saved a file, or small differences in word or character counts (only a length limit the request itself set counts). ${LIMITS_LINE} ` +
+        `Never count paperwork against the work: signatures or sign-offs, dated confirmations, who saved a file, or small differences in word or character counts (only a length limit the request itself set counts). ${limitsLine(capabilities(run).company)} ` +
         "If you escalate, write boardQuestion: one question for the Board — first what is done and where it is saved, then the single decision you need, with two or three options (under 90 words).",
       shape: '{"score":number,"truthful":number,"good":boolean,"issues":string[],"openPoints":string[],"decision":"accept"|"revise"|"rollback"|"escalate","summary":string,"boardQuestion":string}',
       context: { mode: "task", task: { title: run.task?.title }, results, solution: o.solution ?? "", files: files.map((f) => f.display) },

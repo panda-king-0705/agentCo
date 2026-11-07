@@ -1,4 +1,5 @@
 /** Tool definition shape for the built-in registry. */
+import type { Capability } from "../org/capabilities.ts";
 import type { Agent, AgentTier } from "../../../../packages/shared/src/index.ts";
 import type { SpanHandle, ToolCallContext, ToolEffect, ToolResult } from "../contracts.ts";
 import type { AppConfig } from "../config.ts";
@@ -48,6 +49,10 @@ export interface ToolDefinition {
   enabled?: (config: AppConfig) => boolean;
   /** Every agent has it, whatever its stored tool list (e.g. the company directory). */
   universal?: boolean;
+  /** Who may use it, decided here instead of by the agent's stored tool list (MCP tools: mcp/tools.ts). */
+  allowed?: (agent: Agent) => boolean;
+  /** What it lets the company do (org/capabilities.ts): agents are told, and it is no longer a Board step. */
+  grants?: readonly Capability[];
   run(args: Record<string, unknown>, ctx: ToolRunContext): Promise<ToolResult> | ToolResult;
 }
 

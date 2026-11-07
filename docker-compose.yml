@@ -19,6 +19,9 @@ services:
       HOST: 0.0.0.0
       PORT: "3000"
       DATA_DIR: /data
+      # Connections (MCP servers) and playbooks you configure on this PC: see config/README.md.
+      MCP_CONFIG: /config/mcp.json
+      PLAYBOOKS_DIR: /config/playbooks
       # Off loopback the API needs a bearer token; stop here with a clear message if .env lacks it.
       # (The server itself also refuses to start with fewer than 24 characters.)
       APP_AUTH_TOKEN: ${APP_AUTH_TOKEN:?APP_AUTH_TOKEN is empty - set it in .env to 24+ random characters (see docs/DEPLOY.md)}
@@ -27,6 +30,7 @@ services:
     ports: ["3000:3000"]
     volumes:
       - agentco-data:/data
+      - ./config:/config:ro
     restart: unless-stopped
     init: true
     stop_grace_period: 20s
