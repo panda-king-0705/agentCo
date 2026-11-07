@@ -35,6 +35,12 @@ export class SpanRepo {
     return row ? toSpan(row) : null;
   }
 
+  /** Calls that ran (status ok) an agent made to tools whose names start with `prefix` since a time (MCP daily limits). */
+  countToolCalls(agentId: string, prefix: string, sinceIso: string): number {
+    const row = one(this.db, "SELECT count(*) AS n FROM spans WHERE kind = 'tool' AND status = 'ok' AND agent_id = ? AND name LIKE ? ESCAPE '\\' AND started_at >= ? AND attributes NOT LIKE ?", agentId, `tool.${prefix.replace(/[%_]/g, (c) => `\\${c}`)}%`, sinceIso, '%"agentco.mcp.approval":true%');
+    return Number(row?.n ?? 0);
+  }
+
   byTrace(traceId: string): Span[] {
     return all(this.db, "SELECT * FROM spans WHERE trace_id = ? ORDER BY started_at, rowid", traceId).map(toSpan);
   }

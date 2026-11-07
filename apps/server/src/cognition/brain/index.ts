@@ -15,6 +15,7 @@
  * Blocks are grouped under §3 phase spans (brain.target_understanding,
  * brain.confidence, brain.planning, brain.solving, brain.evaluation, brain.report).
  */
+import { boardAnswerText } from "../board-answer.ts";
 import type { Approval, CalibrationStats, Okr, Task } from "../../../../../packages/shared/src/index.ts";
 import type { CognitiveEngine, CognitiveStatePatch, EngineContext, EngineResult, SpanHandle, ToolEffect } from "../../contracts.ts";
 import { arr, num, obj, str, strArr } from "../coerce.ts";
@@ -304,10 +305,17 @@ export class BrainEngine implements CognitiveEngine {
       if (a) {
         const hiredId = a.kind === "hire_agent" && typeof a.payload?.hiredAgentId === "string" ? a.payload.hiredAgentId : null;
         const hired = hiredId ? run.platform.org.getAgent(hiredId) : null;
-        run.wm.boardAnswer = { approvalId: a.id, kind: a.kind, status: a.status, note: a.note, ...(hired ? { hired: `${hired.name}, ${hired.title} (${hired.id})` } : {}) };
+        run.wm.boardAnswer = {
+          approvalId: a.id,
+          kind: a.kind,
+          status: a.status,
+          note: a.note,
+          ...(hired ? { hired: `${hired.name}, ${hired.title} (${hired.id})` } : {}),
+          ...(a.kind === "external_action" ? { action: a.payload.action, execution: a.payload.execution ?? null, result: typeof a.payload.result === "string" ? truncate(a.payload.result, 2500) : null } : {}),
+        };
         // The Board answered this task's question: no asking again (escalation.ts).
         if (a.kind === "question" && run.escalation) run.escalation.answered = true;
-        boardGuidance = `Answer from the Board (${a.status}): ${truncate(a.note ?? "(no note)", 400)}`;
+        boardGuidance = boardAnswerText(a);
         run.ctx.span.setAttributes({ "agentco.board_answer": a.status });
       }
     }

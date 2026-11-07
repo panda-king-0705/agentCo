@@ -258,6 +258,25 @@ Rules: HTTPS only (a TLS reverse proxy in front), the token always required, por
 5. Open `https://agentco.example.com` and paste the token. Back up and update exactly as in (b), using the same
    two `-f` files for `up`.
 
+## Connections and playbooks
+
+Agents can use tools from MCP servers (Firecrawl for research, GitHub for engineering, FMP for
+Finance…) and read your own skills as playbooks. Everything is configured in the `config/` folder of
+the repository on this PC, which the container mounts read-only — see `config/README.md`:
+
+1. Copy `config/mcp.example.json` to `config/mcp.json` and keep the servers you want.
+2. Put each server's key in `.env` (e.g. `FIRECRAWL_API_KEY=…`, `GITHUB_TOKEN=…` — a fine-grained
+   token for one repository), never in the JSON file or in chat.
+3. `docker compose up -d`, then check `http://localhost:3000/api/health` → `mcp` lists each server
+   with its tool count (or why it is unavailable).
+
+Who gets which tools is set per server (`access`: roles, agents, departments, catalog roles). Tools
+that only read run straight away; anything that changes something outside the company goes to
+**Approvals** and runs when you approve it, unless the server lists it under `noApproval`.
+
+Playbooks: copy a skill folder (with its `SKILL.md`) into `config/playbooks/`; agents see the list in
+their handbook and read one with `playbook_read`.
+
 ## Maintenance: archiving stale company memory
 
 Agents learn from what they did: lessons, episodes, blackboard notes and workspace files are recalled

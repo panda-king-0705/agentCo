@@ -167,6 +167,7 @@ export function createWebFetch(overrides: Partial<WebFetchDeps> = {}): ToolDefin
     parameters: { type: "object", properties: { url: { type: "string", maxLength: 2000 } }, required: ["url"] },
     tiers: ALL_TIERS,
     enabled: (config) => config.webFetchEnabled,
+    grants: ["web"],
     async run(args, ctx) {
       let url: URL;
       try {

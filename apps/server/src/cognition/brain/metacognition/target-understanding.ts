@@ -2,11 +2,11 @@
  * Metacognition › Target Understanding:
  * Problem Definition → Literature Review → Analysis (Perspectives) → Understanding.
  */
-import { LIMITS_LINE, needsBoardStep } from "../../../org/capabilities.ts";
+import { limitsLine, needsBoardStep, type Capability } from "../../../org/capabilities.ts";
 import { arr, obj, oneOf, str, strArr, unit } from "../../coerce.ts";
 import { oneLine, truncate } from "../../text.ts";
 import { readGlobalLongTerm, readGlobalWorking } from "../global-memory.ts";
-import { block, llmJson, type BrainRun } from "../runtime.ts";
+import { block, capabilities, llmJson, type BrainRun } from "../runtime.ts";
 import { localWorkingMemory, longTermMemory, memoryLine } from "./memory.ts";
 
 export interface ProblemDefinition {
@@ -50,11 +50,11 @@ export function requestText(run: BrainRun): string {
   );
 }
 
-export function coerceProblem(json: Record<string, unknown>, fallbackTitle: string, defaultIntent: "chat" | "work"): ProblemDefinition {
+export function coerceProblem(json: Record<string, unknown>, fallbackTitle: string, defaultIntent: "chat" | "work", company: ReadonlySet<Capability> = new Set()): ProblemDefinition {
   const criteria = strArr(json.successCriteria, 5, 200);
   // Backstop: a criterion that is itself an outside step ("the email reaches the investor list") is
-  // the Board's step, not something to be judged against (2026-11-07, test 6).
-  const outside = criteria.filter(needsBoardStep);
+  // the Board's step, not something to be judged against (2026-11-07, test 6) — unless a tool can do it.
+  const outside = criteria.filter((c) => needsBoardStep(c, company));
   const named = strArr(json.boardSteps, 4, 200);
   // The model's own wording of the step reads better; the criterion stands in only when it named none.
   const boardSteps = (named.length ? named : outside).slice(0, 4);
@@ -78,11 +78,12 @@ export async function problemDefinition(run: BrainRun, gaps: string[] = []): Pro
   const isMessage = input.trigger === "message";
   const fallbackTitle = isMessage ? truncate(input.message.content.split("\n")[0] ?? "Request", 100) : input.task.title;
   return block(run, "metacognition.target_understanding.problem_definition", isMessage ? "Understanding the message" : `Defining the problem for T-${input.task.number}`, async (span) => {
+    const caps = capabilities(run);
     const json = await llmJson(run, {
       stage: "metacognition.target_understanding.problem_definition",
       span,
       instructions:
-        `${requestText(run)}\n\nDefine the problem.\n${LIMITS_LINE}\n` +
+        `${requestText(run)}\n\nDefine the problem.\n${limitsLine(caps.company, caps.mine)}\n` +
         "Success criteria are what this company can deliver. A step it cannot do goes in boardSteps (e.g. \"Send the update to the investors\"), and its criterion becomes that it is ready for the Board (e.g. \"The update is drafted, checked and ready for the Board to send\"). " +
         "The title says what we will deliver (\"Draft the monthly investor update\", not \"Send…\")." +
         (gaps.length ? ` Your previous understanding was evaluated as insufficient; re-define the problem around these gaps: ${gaps.join("; ")}.` : "") +
@@ -99,10 +100,10 @@ export async function problemDefinition(run: BrainRun, gaps: string[] = []): Pro
       },
       maxOutputTokens: 800,
     });
-    const p = coerceProblem(json, fallbackTitle, isMessage ? "chat" : "work");
+    const p = coerceProblem(json, fallbackTitle, isMessage ? "chat" : "work", caps.company);
     if (!isMessage) p.intent = "work";
     if (p.successCriteria.length === 0) {
-      const ac = !isMessage && input.task.acceptanceCriteria && !needsBoardStep(input.task.acceptanceCriteria) ? input.task.acceptanceCriteria : null;
+      const ac = !isMessage && input.task.acceptanceCriteria && !needsBoardStep(input.task.acceptanceCriteria, caps.company) ? input.task.acceptanceCriteria : null;
       p.successCriteria = ac
         ? [truncate(ac, 200)]
         : p.boardSteps.length

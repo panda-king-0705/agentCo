@@ -34,6 +34,8 @@ export function buildRouter(platform: Platform): Router {
       time: platform.services.now().toISOString(),
       // While no AI provider can be reached, work is on hold (models/outage.ts).
       outage: o ? { since: new Date(o.since).toISOString(), nextTryAt: new Date(o.until).toISOString(), tries: o.strikes } : null,
+      // Connected MCP servers and their tools (mcp/tools.ts).
+      mcp: platform.mcp.status().map((s) => ({ name: s.name, connected: s.connected, tools: s.tools.length, error: s.error })),
     };
   });
 

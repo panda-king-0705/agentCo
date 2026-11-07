@@ -7,6 +7,7 @@
  *                    bad arguments, thrown error) is returned as ok:false — it
  *                    never throws, so a misbehaving model cannot crash a run.
  */
+import type { Capability } from "../org/capabilities.ts";
 import type { Agent } from "../../../../packages/shared/src/index.ts";
 import type { ToolCall, ToolCallContext, ToolExecutor, ToolResult, ToolSpec } from "../contracts.ts";
 import type { AppConfig } from "../config.ts";
@@ -55,6 +56,7 @@ export class ToolExecutorImpl implements ToolExecutor {
   private readonly config: AppConfig;
   private services: ToolServices | null = null;
   private readonly onCall: ((runId: string) => void) | undefined;
+  private readonly dynamic = new Map<string, string[]>();
 
   constructor(config: AppConfig, options: ToolExecutorOptions = {}) {
     this.config = config;
@@ -74,6 +76,26 @@ export class ToolExecutorImpl implements ToolExecutor {
 
   definition(name: string): ToolDefinition | undefined {
     return this.tools.get(name);
+  }
+
+  /** Tools that come and go at runtime (an MCP server's, mcp/tools.ts): replaces what `owner` registered before. Never shadows a built-in. */
+  replaceDynamic(owner: string, tools: readonly ToolDefinition[]): string[] {
+    for (const name of this.dynamic.get(owner) ?? []) this.tools.delete(name);
+    const added: string[] = [];
+    for (const t of tools) {
+      if (this.tools.has(t.name)) continue;
+      this.tools.set(t.name, t);
+      added.push(t.name);
+    }
+    this.dynamic.set(owner, added);
+    return added;
+  }
+
+  /** What this agent's own enabled tools let it do (org/capabilities.ts). */
+  capabilitiesOf(agent: Agent): Set<Capability> {
+    const out = new Set<Capability>();
+    for (const tool of this.tools.values()) if (tool.grants?.length && this.permitted(tool, agent)) for (const c of tool.grants) out.add(c);
+    return out;
   }
 
   specsFor(agent: Agent): ToolSpec[] {
@@ -134,7 +156,8 @@ export class ToolExecutorImpl implements ToolExecutor {
   private permitted(tool: ToolDefinition, agent: Agent): boolean {
     if (!tool.tiers.includes(agent.tier)) return false;
     if (tool.enabled && !tool.enabled(this.config)) return false;
-    return tool.universal === true || agent.tools.includes(tool.name);
+    if (tool.universal === true) return true;
+    return tool.allowed ? tool.allowed(agent) : agent.tools.includes(tool.name);
   }
 }
 

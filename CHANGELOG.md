@@ -5,6 +5,20 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Connections (MCP servers).** Agents can use tools from MCP servers configured in
+  `config/mcp.json` on the PC (examples: Firecrawl, GitHub, FMP; keys in `.env`). Each server's tools
+  go only to the roles, agents, departments or specialist roles it names. Tools that only read run
+  straight away; anything that changes something outside the company goes to Approvals and runs when
+  the Board approves it, and the agent is resumed with the result. Each server has a daily call limit
+  per agent, results are marked as outside information (never instructions), and keys are redacted
+  everywhere. `/api/health` lists connected servers.
+- **What the company can do follows its tools.** The "can't do" list agents see is now built from the
+  tools that are switched on: connect a web tool and agents know they (or named colleagues) can
+  search the web, and it stops being left to the Board.
+- **Playbooks.** The founder's own skills, copied into `config/playbooks/`, are listed in the
+  handbook and read with `playbook_read`. Scripts a skill ships are not run.
+
 ### Fixed (test 6, trc_1a51…: "Email our investors this month's update")
 - **The company knows what it can't do.** Every agent is told it cannot send email or other messages
   outside the company, browse the web, run code, make payments, or use outside accounts. A request

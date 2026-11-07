@@ -308,7 +308,9 @@ answered, the task is not escalated again (BRAIN.md → escalation budget).
 | `blackboard_read {key?}` / `blackboard_write {key, value}` | all / managers+ | global working memory |
 | `workspace_write_file {path, content}` / `workspace_read_file {path}` / `workspace_list {dir?}` | all | a plain path or `shared/…` is the company drive (colleagues can read it); `private/…` is the agent's own folder. A missed read returns the file a teammate saved under that path or name on the same objective (trace), with a note on where it is. Overwrites keep the previous version in `.history/`. A write is read back on disk before it is confirmed. Write and read results report words, lines and characters. Path traversal is rejected. |
 | `hire_agent {catalogId? \| roleId?, title, departmentId, managerId, tier, justification, monthlyBudgetUsd?, firstTask?}` | executives | into the hirer's own team; approval or direct create (policy); `firstTask` → a subtask for the new hire under the hiring task |
-| `web_fetch {url}` | opt-in (`WEB_FETCH_ENABLED`) | GET, text only, 20 kB cap |
+| `web_fetch {url}` | opt-in (`WEB_FETCH_ENABLED`) | GET, text only, 20 kB cap; grants `web` |
+| `playbook_read {name?}` | everyone, when `PLAYBOOKS_DIR` has playbooks | the founder's own skills as instructions (SKILL.md / .md); scripts listed, never run |
+| `<server>_<tool>` | the agents an MCP server's `access` names (`config/mcp.json`) | `mcp/`: Streamable HTTP or stdio client; read-only tools run; others go to Approvals as `external_action` and run when approved (result handed to the woken agent); `noApproval` writes run directly, destructive never do; daily call limit per agent; results wrapped as outside information; keys from `.env`, redacted. A server's `grants` are what the company can now do (`org/capabilities.ts`): the limits line every agent sees follows the enabled tools. |
 
 ## Traceability
 
