@@ -83,7 +83,8 @@ test("a missed read finds the file a teammate saved on the same objective — ev
     rootTask(t, ids.cto, "Unrelated objective");
     await t.drain();
 
-    assert.match(seen.write!.content, /^Wrote shared\/launch-plan\/exec\/one-page\.md .*Colleagues can read it/);
+    assert.match(seen.write!.content, /^Wrote shared\/launch-plan\/exec\/one-page\.md \(12 chars, 2 words, 1 lines\)\. Saved and verified on disk\. Colleagues can read it/);
+    assert.match(seen.byName!.content, /\n\[end of shared\/launch-plan\/exec\/one-page\.md — complete: 2 words, 1 lines, 12 chars\]$/, "the read-back says it is complete, with tool counts");
     assert.equal(seen.private!.ok, true);
     assert.match(seen.private!.content, /^\[Not at launch-plan\/sections\/gtm\.md; found .*'s private file launch-plan\/sections\/gtm\.md, saved by .* on this objective\. Save a copy on the drive/);
     assert.match(seen.private!.content, /Launch 2027-01-12/);

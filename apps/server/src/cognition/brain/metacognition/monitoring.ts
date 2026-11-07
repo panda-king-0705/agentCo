@@ -195,7 +195,7 @@ export async function reverseThinking(run: BrainRun, planSummary: string): Promi
       instructions: `Plan: ${truncate(planSummary, 900)}\n\nAssume this plan failed. Why? List the most likely failure modes; fatal = true only if the plan cannot work as stated.`,
       shape: '{"failureModes": string[], "fatal": boolean, "mitigation": string}',
       context: { mode: "task", task: run.task ? { title: run.task.title } : undefined },
-      maxOutputTokens: 300,
+      maxOutputTokens: 600,
     });
     const r = { failureModes: strArr(json.failureModes, 4, 200), fatal: bool(json.fatal, false), mitigation: str(json.mitigation, "", 300) };
     span.setAttributes({ "agentco.premortem.fatal": r.fatal });

@@ -78,7 +78,7 @@ export async function proposeFromOkrs(run: BrainRun): Promise<{ title: string; d
       instructions: `Key result with the largest gap: "${gap.kr.description}" (${gap.kr.current}/${gap.kr.target}${gap.kr.unit}) under objective "${gap.objective.objective}". Propose ONE concrete objective that moves it.`,
       shape: '{"title": string, "description": string, "value": number 0-1000}',
       context: { okr: { objective: gap.objective.objective, keyResult: gap.kr.description } },
-      maxOutputTokens: 300,
+      maxOutputTokens: 500,
     });
     return {
       title: truncate(str(json.title, `Advance: ${gap.kr.description}`, 140), 140),

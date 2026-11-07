@@ -57,8 +57,10 @@ export interface BrainRun {
   maxRevisions: number;
   calls: CallRecord[];
   insights: OptimizationInsight[];
-  /** Run time limit (RUN_TIMEOUT_MS) for the constraint-pressure signal. */
+  /** Run time limit (RUN_TIMEOUT_MS) for the constraint-pressure signal and the time guard. */
   runTimeoutMs: number;
+  /** Wall-clock start of this engine run (Date.now()): the time guard measures from here. */
+  startedMs: number;
   /** Phase span the next blocks hang under (§3 grouping), else the run span. */
   parent: SpanHandle | null;
   /** The block currently executing (for call records). */

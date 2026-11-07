@@ -93,7 +93,7 @@ export async function assessConfidence(
         "Estimate confidence of success and uncertainty (0-1), the top risks, and evaluate your understanding and your competence for this task: each {score 0-1, gaps[] = what is missing}.",
       shape: '{"confidence":number,"uncertainty":number,"risks":string[],"blocker":string|null,"irreversible":boolean,"understandingEval":{"score":number,"gaps":string[]},"competenceEval":{"score":number,"gaps":string[]}}',
       context: { mode: "task", ood: ood.taskOod, pressure: ood.pressure.map((p) => p.kind), task: run.task ? { title: run.task.title } : undefined },
-      maxOutputTokens: 350,
+      maxOutputTokens: 650,
     });
     const c = coerceConfidence(
       json,

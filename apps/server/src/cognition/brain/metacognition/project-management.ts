@@ -203,7 +203,7 @@ export async function reflectionReplanning(run: BrainRun, issues: string[], summ
       instructions: `The result was not accepted. Issues: ${issues.join("; ") || "unspecified"}. Result summary: ${truncate(summary, 500)}. Diagnose why and list the concrete changes for the next plan.`,
       shape: '{"diagnosis": string, "changes": string[]}',
       context: { mode: "task", task: run.task ? { title: run.task.title } : undefined, feedback: issues },
-      maxOutputTokens: 300,
+      maxOutputTokens: 650,
     });
     const changes = strArr(json.changes, 5, 200);
     const diagnosis = str(json.diagnosis, "", 300);
@@ -232,7 +232,7 @@ export async function onlineLearning(run: BrainRun, o: { outcome: "completed" | 
         instructions: `Outcome: ${o.outcome}. ${truncate(o.summary, 500)}\nWrite ONE reusable procedural lesson (how to do this kind of work better), optionally one durable conceptual insight about the company/market/product, and whether the lesson generalises beyond you.`,
         shape: '{"lesson": string, "conceptual": string|null, "generalizes": boolean}',
         context: { mode: "task", task: run.task ? { title: run.task.title } : undefined, outcome: o.outcome, results: new Array(o.resultCount).fill({}) },
-        maxOutputTokens: 300,
+        maxOutputTokens: 500,
       });
       lesson = str(json.lesson, "", 400) || null;
       conceptual = typeof json.conceptual === "string" && json.conceptual.trim() ? truncate(json.conceptual.trim(), 400) : null;

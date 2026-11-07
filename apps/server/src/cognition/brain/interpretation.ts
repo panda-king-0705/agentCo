@@ -32,6 +32,8 @@ export const Q2_OOD = {
   contextShare: 0.7, // prompt tokens > 70% of the model's context window
   budgetShare: 0.2, // budget remaining < 20% of the agent's monthly budget
   timeShare: 0.25, // < 25% of the run's time limit left
+  /** No new revise/rollback pass with less than this share of the run's time left (one pass ≈ 1 minute of a 5-minute run). */
+  anotherPassMinTimeShare: 0.4,
   /** Each pressure signal lowers raw confidence by this much (tuning) … */
   confidencePenaltyPerSignal: 0.08,
   confidencePenaltyMax: 0.24,

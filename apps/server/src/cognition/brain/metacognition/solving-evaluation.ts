@@ -124,7 +124,7 @@ export async function solving(
         `Solve: ${plan.problem}\nSuccess criteria: ${plan.successCriteria.join("; ")}\nApproach (${plan.candidate.replace("_", " ")}): ${exec.verify ? "be thorough and verify your claims" : "be efficient"}.`,
         plan.memory.length ? `What you know:\n${plan.memory.slice(0, 10).join("\n")}` : "",
         guidance.length ? `Guidance you asked for (follow it):\n${guidance.join("\n")}` : "",
-        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective.",
+        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified.",
         `[[context:${JSON.stringify({
           mode: "task",
           agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },
@@ -235,10 +235,14 @@ export async function feedback(
         (results.length
           ? `Subprocess results:\n${results.map((r) => `- [${r.status}] ${oneLine(r.title, 80)}: ${truncate((r.result ?? "").replace(/\s+/g, " "), 400)}`).join("\n")}\n`
           : `Solution:\n${truncate(o.solution ?? "(none)", 2500)}\n`) +
-        "Evaluate: score 0-1 against the criteria; truthful 0-1 (claims supported by the results/sources); good (meets the criteria and our values); issues; decision accept | revise | rollback (the approach is wrong) | escalate; and a 2-4 sentence summary for the requester.",
+        "Evaluate: score 0-1 against the criteria; truthful 0-1 (claims supported by the results/sources); good (meets the criteria and our values); issues; decision accept | revise | rollback (the approach is wrong) | escalate; and a 2-4 sentence summary for the requester. " +
+        // 2026-11-07 (test 4): a one-page plan was sent back twice for "modeled pricing" and an "open
+        // caps-or-prices decision" — things only the Board can settle — and for a "tool word count"
+        // no tool could give.
+        "Judge only gaps this team can close with its tools. Decisions that belong to the Board (prices, budgets, go/no-go, trade-offs between options), data nobody has, and assumptions or estimates clearly labelled as such are NOT defects: name them in the summary as open points for the Board, and do not revise, roll back or lower the score for them. A word, line or character count reported by a file tool, and a save the file tool confirmed, count as verified.",
       shape: '{"score":number,"truthful":number,"good":boolean,"issues":string[],"decision":"accept"|"revise"|"rollback"|"escalate","summary":string}',
       context: { mode: "task", task: { title: run.task?.title }, results, solution: o.solution ?? "" },
-      maxOutputTokens: 500,
+      maxOutputTokens: 1000,
     });
     const nonEmpty = results.length ? results.some((r) => (r.result ?? "").trim()) : !!(o.solution ?? "").trim();
     const threshold = acceptThreshold(o.controlLevel, run.drives.strictSelfEvaluation);

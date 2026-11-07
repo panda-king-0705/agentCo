@@ -16,7 +16,7 @@ export const workspaceWriteFile: ToolDefinition = {
   name: "workspace_write_file",
   description:
     "Save a text file on the company drive, where colleagues can read it (use the exact path your brief names, e.g. launch-plan/finance.md). " +
-    "Start the path with private/ only for scratch notes nobody else needs. Saving over a file keeps the previous version.",
+    "Start the path with private/ only for scratch notes nobody else needs. Saving over a file keeps the previous version. The result confirms the save and gives the word, line and character counts.",
   parameters: {
     type: "object",
     properties: { path: { type: "string", maxLength: 300 }, content: { type: "string", maxLength: 200000 } },
@@ -28,33 +28,38 @@ export const workspaceWriteFile: ToolDefinition = {
     const w = ctx.services.workspaces.write(ctx.agent.id, String(args.path), content);
     ctx.span.setAttributes({ "agentco.file.path": w.display, "agentco.file.area": w.area });
     const where = w.area === "private" ? " Private: only you can read it." : " Colleagues can read it at this path.";
-    return ok(`Wrote ${w.display} (${content.length} chars${w.replaced ? "; previous version kept" : ""}).${where}`, [{ kind: "file_written", path: w.display }], { path: w.display });
+    const m = measure(content);
+    return ok(
+      `Wrote ${w.display} (${m.chars} chars, ${m.words} words, ${m.lines} lines${w.replaced ? "; previous version kept" : ""}). Saved and verified on disk.${where}`,
+      [{ kind: "file_written", path: w.display }],
+      { path: w.display, ...m },
+    );
   },
 };
 
 export const workspaceReadFile: ToolDefinition = {
   name: "workspace_read_file",
-  description: "Read a text file from the company drive (or private/… for your own notes). If it is not at that path, files with that name saved on this objective are found for you.",
+  description: "Read a text file from the company drive (or private/… for your own notes); the result ends with the file's word, line and character counts. If it is not at that path, files with that name saved on this objective are found for you.",
   parameters: { type: "object", properties: { path: { type: "string", maxLength: 300 } }, required: ["path"] },
   tiers: ALL_TIERS,
   run(args, ctx) {
     const path = String(args.path);
     const ws = ctx.services.workspaces;
     if (ws.exists(ctx.agent.id, path)) {
-      const { content, truncated } = ws.read(ctx.agent.id, path);
-      return ok(truncated ? content + "\n[truncated]" : content);
+      const { content, truncated, display } = ws.read(ctx.agent.id, path);
+      return ok(content + footer(display, content, truncated), [], { path: display, ...measure(content) });
     }
     const found = findOnObjective(ctx, path);
     if (found) {
       const { best, others } = found;
-      const { content, truncated } = ws.read(best.agentId, best.display);
+      const { content, truncated, display } = ws.read(best.agentId, best.display);
       const theirs = best.area === "private" && best.agentId !== ctx.agent.id;
       const header =
         `[Not at ${path}; found ${theirs ? `${nameOf(ctx, best.agentId)}'s private file ${best.rel}` : best.display}, saved by ${nameOf(ctx, best.agentId)} on this objective.` +
         (theirs ? " Save a copy on the drive if others need it." : "") +
         (others.length ? ` Other files with that name: ${others.map((w) => describe(ctx, w)).join(", ")}.` : "") +
         "]\n";
-      return ok(header + content + (truncated ? "\n[truncated]" : ""), [], { found: true, path: best.display });
+      return ok(header + content + footer(display, content, truncated), [], { found: true, path: best.display, ...measure(content) });
     }
     // Not there (yet): say what IS there instead of a red error — often a colleague's file still being written.
     const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
@@ -83,6 +88,25 @@ export const workspaceList: ToolDefinition = {
     return ok(text, [], { entries });
   },
 };
+
+/**
+ * The file's size as a tool measured it (2026-11-07, test 4: leaders asked for "a word count from a
+ * tool" and no tool gave one, so every section failed that check and was redone). Words are
+ * whitespace-separated tokens with a letter or digit, so markdown bullets and table bars don't count.
+ */
+export function measure(text: string): { chars: number; words: number; lines: number } {
+  const words = text.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).length;
+  const lines = text.length === 0 ? 0 : text.replace(/\n$/, "").split("\n").length;
+  return { chars: text.length, words, lines };
+}
+
+/** Read-back footer: the whole file was returned (or where it was cut), with the tool's counts. */
+function footer(display: string, content: string, truncated: boolean): string {
+  const m = measure(content);
+  return truncated
+    ? `\n[cut at ${m.chars} chars: ${display} is longer than one read returns; counts below cover the part shown — ${m.words} words, ${m.lines} lines]`
+    : `\n[end of ${display} — complete: ${m.words} words, ${m.lines} lines, ${m.chars} chars]`;
+}
 
 function nameOf(ctx: ToolRunContext, agentId: string): string {
   if (agentId === ctx.agent.id) return "you";

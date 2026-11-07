@@ -24,7 +24,14 @@ export const REPORT_BLOCKER: ToolSpec = {
   parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] },
 };
 
-const TOOL_RESULT_CHARS = 3000;
+/**
+ * What the model sees of one tool result. Was 3,000 chars: every read-back of a 3.5k one-page plan
+ * came back cut off, and Feedback rejected the page as "truncated" (2026-11-07, test 4). Now one
+ * whole file read (MAX_READ_CHARS 20,000) plus its header/footer fits.
+ */
+const TOOL_RESULT_CHARS = 21_000;
+/** Output room per step: a step that writes a whole document into workspace_write_file needs it (2,000 cut drafts mid-file). */
+const STEP_OUTPUT_TOKENS = 4000;
 
 /**
  * The wrap-up call has no tools: say plainly that the reply itself is the result (2026-11-07: a
@@ -176,7 +183,7 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
         modelOverride: agent.modelOverride,
         messages,
         tools: specs.length > 0 ? specs : undefined,
-        maxOutputTokens: o.maxOutputTokens ?? 2000,
+        maxOutputTokens: o.maxOutputTokens ?? STEP_OUTPUT_TOKENS,
       },
       { agentId: agent.id, runId: ctx.run.id, traceId: ctx.run.traceId, parentSpanId: o.parentSpan.spanId, taskId: o.taskId, stage: o.stage, signal: ctx.signal },
     );
@@ -269,7 +276,7 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
   ctx.platform.agents.setActivity(agent.id, "thinking", `${o.activityLabel} (wrapping up)`, o.block ?? null);
   const started = Date.now();
   const wrap = await ctx.platform.models.chat(
-    { tier: o.tier, modelOverride: agent.modelOverride, messages, maxOutputTokens: o.maxOutputTokens ?? 2000 },
+    { tier: o.tier, modelOverride: agent.modelOverride, messages, maxOutputTokens: o.maxOutputTokens ?? STEP_OUTPUT_TOKENS },
     { agentId: agent.id, runId: ctx.run.id, traceId: ctx.run.traceId, parentSpanId: o.parentSpan.spanId, taskId: o.taskId, stage: o.stage, signal: ctx.signal },
   );
   out.costUsd += wrap.costUsd;

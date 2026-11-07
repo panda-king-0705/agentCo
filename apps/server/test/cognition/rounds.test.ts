@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BrainEngine } from "../../src/cognition/brain/index.ts";
+import { measure } from "../../src/tools/builtins/files.ts";
 import { coerceSubprocesses, isDependentStep, maxSubprocessesFor } from "../../src/cognition/brain/metacognition/cognitive-control.ts";
 import { namedCandidates, type Candidate } from "../../src/cognition/brain/self-management/role-arrangement.ts";
 import { ReflexEngine } from "../../src/cognition/reflex.ts";
@@ -18,7 +19,7 @@ import { FakePlatform, makeAgent, makeTask, taskInput } from "./fakes.ts";
 const BRAIN_TOOLS = ["delegate_task", "send_message", "escalate", "ask_human", "memory_search", "memory_write", "workspace_write_file", "blackboard_write"];
 const SOLVING = "metacognition.solving_evaluation.solving";
 
-type Reply = (ctx: Record<string, unknown>, n: number) => unknown;
+type Reply = (ctx: Record<string, unknown>, n: number, prompt: string) => unknown;
 
 /** Mock provider: JSON replies per stage, and (optionally) the tool calls Solving makes. */
 function provider(json: Record<string, Reply>, solvingTool?: { name: string; arguments: Record<string, unknown> }): ModelProvider {
@@ -36,7 +37,7 @@ function provider(json: Record<string, Reply>, solvingTool?: { name: string; arg
       const n = (counts.get(stage) ?? 0) + 1;
       counts.set(stage, n);
       const f = json[stage];
-      const v = f ? f(readContext(request.messages), n) : undefined;
+      const v = f ? f(readContext(request.messages), n, request.messages.map((m) => m.content).join("\n")) : undefined;
       return v === undefined ? r : { ...r, content: typeof v === "string" ? v : JSON.stringify(v) };
     },
   };
@@ -196,4 +197,99 @@ test("cap, rounds and named owners: the rules", () => {
   assert.deepEqual([...namedCandidates("Add an executive summary", cands, { ownDepartment: "Executive Office" })], [], "the CEO's own department word names nobody");
   assert.deepEqual([...namedCandidates("Add an executive summary", cands)], ["cos"], "(without the guard it would)");
   assert.deepEqual([...namedCandidates("Noah Patel assembles the page", cands, { ownDepartment: "Executive Office" })], ["cos"], "a full name names the person");
+});
+
+// ── Second test-4 run (2026-11-07, trc_7a04…): the structure held, but checking looped — criteria no
+// tool could meet ("word count from a tool"), read-backs cut at 3,000 chars, a revise that redid all
+// four parts, Board decisions treated as defects, and assembly runs killed by the 5-minute limit.
+
+test("a revision after delivered parts fixes what the feedback names — the plan is told what is done and not to redo it", async () => {
+  const prompts: string[] = [];
+  const ctxs: Record<string, unknown>[] = [];
+  const plan = {
+    mode: "delegate",
+    subprocesses: [
+      { title: "CMO: GTM section", description: "Write the GTM section.", assigneeId: "agt_cmo", value: 300, estCostUsd: 0.05, acceptanceCriteria: "Saved." },
+      { title: "CFO: pricing section", description: "Write the pricing section.", assigneeId: "agt_cfo", value: 300, estCostUsd: 0.05, acceptanceCriteria: "Saved." },
+    ],
+    candidates: CANDIDATES,
+    rationale: "split",
+  };
+  const verdict = { score: 0.6, truthful: 0.9, good: false, issues: ["The pricing section has no Free-tier line."], decision: "revise", summary: "Add the Free tier." };
+  const p = new FakePlatform({
+    providers: {
+      mock: provider({
+        "metacognition.cognitive_control": (ctx, _n, prompt) => (ctxs.push(ctx), prompts.push(prompt), plan),
+        "metacognition.solving_evaluation.feedback": (_ctx, _n, prompt) => (prompts.push(prompt), verdict),
+      }),
+    },
+  });
+  const { ceo } = company(p);
+  const task = p.addTask(makeTask({ id: "tsk_200", number: 200, title: "Launch plan", description: "Have the CMO write the GTM section and the CFO the pricing section.", assigneeId: ceo.id, value: 800, estCostUsd: 0.5 }));
+  const first = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task)));
+  apply(task, first);
+  const parts = p.tasks.children(task.id);
+  assert.equal(parts.length, 2);
+  for (const c of parts) {
+    c.status = "done";
+    c.result = `${c.title}: saved launch-plan/${c.assigneeId}.md (412 words).`;
+  }
+  await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: parts })));
+  const feedbackPrompt = prompts.find((x) => x.includes("Evaluate: score 0-1"))!;
+  assert.match(feedbackPrompt, /Decisions that belong to the Board .* are NOT defects: name them in the summary as open points for the Board/);
+  assert.match(feedbackPrompt, /A word, line or character count reported by a file tool, and a save the file tool confirmed, count as verified\./);
+  const replan = prompts.filter((x) => x.includes("Decompose into at most")).at(-1)!;
+  assert.match(replan, /Already delivered — keep these, do NOT redo them:\n- T-\d+ "CMO: GTM section" by Olivia Bennett: CMO: GTM section: saved/);
+  assert.match(replan, /send a fix only to the owner whose part it concerns \(title it "Fix: …"/);
+  assert.match(replan, /the file tools confirm every save and report word, line and character counts/);
+  assert.ok(ctxs[0]!.namedOwners, "the first plan gives every named owner a part");
+  assert.equal(ctxs.at(-1)!.namedOwners, undefined, "a fix round goes only to whoever a fix concerns");
+  assert.doesNotMatch(replan, /The request names these owners/);
+});
+
+test("not enough run time for another pass: the best result is handed in with its open issues instead of starting over", async () => {
+  const verdict = { score: 0.5, truthful: 0.9, good: false, issues: ["Section 4 is thin."], decision: "revise", summary: "Mostly there." };
+  const p = new FakePlatform({
+    providers: {
+      mock: provider({
+        "metacognition.cognitive_control": () => ({ mode: "direct", subprocesses: [], candidates: CANDIDATES, rationale: "myself" }),
+        "metacognition.solving_evaluation.feedback": () => verdict,
+      }),
+    },
+  });
+  const { cos } = company(p);
+  const task = p.addTask(makeTask({ id: "tsk_193", number: 193, title: "Assemble the one-page plan", description: "Merge the sections.", assigneeId: cos.id, value: 500, estCostUsd: 0.2 }));
+  const r = await new BrainEngine({ maxRevisions: 3, runTimeoutMs: 1 }).run(p.context(cos, taskInput(task)));
+  assert.equal(r.outcome, "completed", r.error ?? r.output);
+  assert.match(r.output, /\n\nOpen issues \(not fixed: run time nearly used up\):\n- Section 4 is thin\./);
+  assert.equal(p.tracer.spans.filter((s) => s.attributes["agentco.brain.block"] === SOLVING).length, 1, "one Solving pass, no second");
+  assert.ok(p.tracer.spans.some((s) => s.attributes["agentco.time_guard"] === "revise"));
+});
+
+test("a tool result as long as one whole file read reaches the model uncut", async () => {
+  const seen: string[] = [];
+  let step = 0;
+  const reader: ModelProvider = {
+    name: "mock",
+    async complete() {
+      step++;
+      if (step === 1) return { content: "", toolCalls: [{ id: "r1", name: "workspace_read_file", arguments: { path: "shared/launch-plan/one-page.md" } }], usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 }, finishReason: "tool_calls" as const };
+      return { content: "Read it.", toolCalls: [], usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0 }, finishReason: "stop" as const };
+    },
+  };
+  const p = new FakePlatform({ providers: { mock: { ...reader, complete: async (profile, request, signal) => (seen.push(...request.messages.filter((m) => m.role === "tool").map((m) => m.content)), reader.complete(profile, request, signal)) } } });
+  p.addDepartment("dep_exec", "executive", "Executive");
+  const worker = p.addAgent(makeAgent({ id: "agt_w", name: "Noah Patel", title: "Chief of Staff", departmentId: "dep_exec", tools: ["workspace_read_file"] }));
+  const page = `# One-page plan\n${"Launch line with owners and dates. ".repeat(140)}\nEND-OF-PAGE`;
+  assert.ok(page.length > 4000);
+  p.files.set("shared/launch-plan/one-page.md", page);
+  const task = p.addTask(makeTask({ id: "tsk_r", title: "Check the page", description: "Read it.", assigneeId: worker.id }));
+  const r = await new ReflexEngine({ maxSteps: 3 }).run(p.context(worker, taskInput(task)));
+  assert.equal(r.outcome, "completed");
+  assert.ok(seen.some((c) => c.endsWith("END-OF-PAGE")), "the end of the page made it to the model");
+});
+
+test("measure: words are tokens with a letter or digit (markdown bullets and table bars don't count)", () => {
+  assert.deepEqual(measure("# Plan\n\n- Launch 2027-01-12 | owner: Olivia\n- |---|\n"), { chars: 52, words: 5, lines: 4 });
+  assert.deepEqual(measure(""), { chars: 0, words: 0, lines: 0 });
 });
