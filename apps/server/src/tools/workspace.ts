@@ -101,6 +101,17 @@ export class Workspaces {
     return { display: target.display, area: target.area, replaced };
   }
 
+  /**
+   * Adds to the end of a file, creating it if needed: a long document saved in parts (a reply has an
+   * output limit). The previous version is kept and the whole file verified, as for write.
+   */
+  append(agentId: string, path: string, content: string): { display: string; area: Area; replaced: boolean; content: string } {
+    const target = this.resolve(agentId, path);
+    const existing = isFile(target.absolute) ? readFileSync(target.absolute, "utf8") : "";
+    const joined = existing && !existing.endsWith("\n") && !content.startsWith("\n") ? `${existing}\n${content}` : existing + content;
+    return { ...this.write(agentId, path, joined), content: joined };
+  }
+
   /** Whether a file exists at the path (an invalid path throws, as for read). */
   exists(agentId: string, path: string): boolean {
     return isFile(this.locate(agentId, path).absolute);

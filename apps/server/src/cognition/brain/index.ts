@@ -69,7 +69,12 @@ export interface PersistedPlan {
   rejected: CandidateName[];
   feedback: string[];
   costSoFarUsd: number;
+  /** Steps the request needs that this company cannot do: the Board's, never a shortfall (org/capabilities.ts). */
+  boardSteps: string[];
 }
+
+/** After one round of fixes, what is still open goes to the Board with the work instead of another round (2026-11-07, test 6). */
+const REWORK_ROUNDS = 1;
 
 function readPlan(task: Task): PersistedPlan | null {
   const p = obj(task.state.plan);
@@ -96,7 +101,44 @@ function readPlan(task: Task): PersistedPlan | null {
     rejected,
     feedback: strArr(p.feedback, 8, 240),
     costSoFarUsd: num(p.costSoFarUsd, 0, 0),
+    boardSteps: strArr(p.boardSteps, 4, 200),
   };
+}
+
+/** The reply that opens an objective; a step the company cannot do is said up front. */
+function openedReply(task: Task, boardSteps: string[]): string {
+  const base = `Opened T-${task.number}: ${task.title}. I'll work it through and report back here when it's done.`;
+  if (!boardSteps.length) return base;
+  const one = boardSteps.length === 1;
+  return `${base} One thing up front: this company can't do ${one ? "this step" : "these steps"}, so ${one ? "it is" : "they are"} left to you: ${boardSteps.join("; ")}. I'll prepare everything up to ${one ? "it" : "them"}.`;
+}
+
+/** A finished result lists what is left for the Board (steps the company cannot do). */
+function withBoardSteps(output: string, steps: string[], forBoard: boolean): string {
+  if (!steps.length) return output;
+  return `${output}\n\n## ${forBoard ? "Left for you" : "Left for the Board"}\nThis company can't do ${steps.length === 1 ? "this" : "these"}, so ${steps.length === 1 ? "it is" : "they are"} ${forBoard ? "yours" : "the Board's"} to do:\n${steps.map((s) => `- ${s}`).join("\n")}`;
+}
+
+/** Cut at a sentence (or word) boundary, never mid-word. */
+function clip(text: string, max: number): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max);
+  const sentence = Math.max(head.lastIndexOf(". "), head.lastIndexOf("; "));
+  if (sentence > max * 0.5) return head.slice(0, sentence + 1);
+  const space = head.lastIndexOf(" ");
+  return `${head.slice(0, space > 0 ? space : max).replace(/[,;:]$/, "")}…`;
+}
+
+/**
+ * The question for the Board when a review escalates: what is done and where, then one decision with
+ * options. Before (2026-11-07, test 6): the task title twice, every review complaint (a character
+ * count among them), cut off mid-word, and "How should I proceed?".
+ */
+function boardQuestionFrom(fb: FeedbackResult): string {
+  if (fb.boardQuestion) return clip(fb.boardQuestion, 900);
+  const open = (fb.openPoints.length ? fb.openPoints : fb.issues).slice(0, 3).map((i) => clip(i, 180));
+  return `${clip(fb.summary, 400)}${open.length ? ` Still open: ${open.join(" ")}` : ""} Should I finish with it as it is (open points listed), or what should change?`;
 }
 
 interface Understood {
@@ -201,12 +243,13 @@ export class BrainEngine implements CognitiveEngine {
           acceptanceCriteria: problem.successCriteria.join("; ") || null,
         });
         span.setAttributes({ "agentco.task.id": t.id, "agentco.task.number": t.number });
-        return t;
+        // Steps the company cannot do travel with the objective: its review never counts them short.
+        return problem.boardSteps.length ? run.platform.tasks.patchState(t.id, { boardSteps: problem.boardSteps }) : t;
       });
 
     if (problem.intent === "work") {
       const task = await openObjective(problem.title);
-      return { outcome: "completed", output: `Opened T-${task.number}: ${task.title}. I'll work it through and report back here when it's done.` };
+      return { outcome: "completed", output: openedReply(task, problem.boardSteps) };
     }
 
     // A chat reply has no tools: it cannot act. The reply model also says whether the message asks
@@ -229,7 +272,7 @@ export class BrainEngine implements CognitiveEngine {
     if (out.needsTask === true) {
       run.ctx.span.setAttributes({ "agentco.chat.needs_task": true });
       const task = await openObjective(problem.title);
-      return { outcome: "completed", output: `Opened T-${task.number}: ${task.title}. I'll work it through and report back here when it's done.` };
+      return { outcome: "completed", output: openedReply(task, problem.boardSteps) };
     }
     const reply = typeof out.reply === "string" ? out.reply.trim() : "";
     return { outcome: "completed", output: reply || "Noted — I'll follow up." };
@@ -372,6 +415,7 @@ export class BrainEngine implements CognitiveEngine {
       rejected: [],
       feedback: [],
       costSoFarUsd: 0,
+      boardSteps: strArr(task.state.boardSteps, 4, 200),
     };
   }
 
@@ -573,13 +617,19 @@ export class BrainEngine implements CognitiveEngine {
           revisionsLeft: Math.max(0, maxRevisions - revision),
           rollbackAvailable: rejected.length < CANDIDATE_NAMES.length - 1,
           canEscalate: canEscalate(run),
+          boardSteps: persisted.boardSteps,
         }),
       );
-      if (fb.decision === "accept") {
-        const output = fb.openPoints.length ? `${solution.text}\n\n## Open points for the Board\n${fb.openPoints.map((p) => `- ${p}`).join("\n")}` : solution.text;
+      // One round of fixes already made: what is still open goes up with the work, not into another round.
+      const reworkCapped = fb.decision === "revise" && revision >= REWORK_ROUNDS && solution.kind === "solution" && !!solution.text.trim();
+      if (reworkCapped) run.ctx.span.setAttributes({ "agentco.rework_cap": revision });
+      if (fb.decision === "accept" || reworkCapped) {
+        const points = reworkCapped ? [...fb.openPoints, ...fb.issues] : fb.openPoints;
+        const body = points.length ? `${solution.text}\n\n## Open points for the Board\n${points.map((p) => `- ${p}`).join("\n")}` : solution.text;
+        const output = withBoardSteps(body, persisted.boardSteps, !task.parentTaskId);
         return this.report(run, { outcome: "completed", output, score: fb.score, summary: fb.summary, predicted: u.confidence.calibrated, events: [], estimateUsd: persisted.estimateUsd, plan: { ...persisted, feedback: [] } });
       }
-      if (fb.decision === "escalate") return this.escalateOutcome(run, `Result for T-${task.number} not acceptable: ${fb.issues.join("; ") || fb.summary}`, u.confidence.calibrated);
+      if (fb.decision === "escalate") return this.escalateOutcome(run, `Result for T-${task.number} not acceptable: ${fb.issues.join("; ") || fb.summary}`, u.confidence.calibrated, [], null, undefined, boardQuestionFrom(fb));
       if (fb.decision === "fail") {
         feedbackIssues = fb.issues.length ? fb.issues : [fb.summary];
         break;
@@ -719,6 +769,7 @@ export class BrainEngine implements CognitiveEngine {
       rejected,
       feedback: feedbackIssues,
       costSoFarUsd: prior?.costSoFarUsd ?? 0,
+      boardSteps: [...(u.problem.boardSteps ?? []), ...(prior?.boardSteps ?? []), ...strArr(run.task!.state.boardSteps, 4, 200)].filter((s, i, all) => all.indexOf(s) === i).slice(0, 4),
     };
   }
 
@@ -746,18 +797,23 @@ export class BrainEngine implements CognitiveEngine {
         revisionsLeft: Math.max(0, maxRevisions - plan.revision),
         rollbackAvailable: plan.rejected.length < CANDIDATE_NAMES.length - 1,
         canEscalate: canEscalate(run),
+        boardSteps: plan.boardSteps,
       }),
     );
-    if (fb.decision === "accept") {
+    // One round of fixes already made: the same work is not re-reviewed again — what is still open goes
+    // to the Board with it (2026-11-07, test 6: four rounds of legal review, $2.06 of $3.41).
+    const reworkCapped = fb.decision === "revise" && plan.revision >= REWORK_ROUNDS && children.some((c) => c.status === "done");
+    if (reworkCapped) run.ctx.span.setAttributes({ "agentco.rework_cap": plan.revision });
+    if (fb.decision === "accept" || reworkCapped) {
       await this.recognizeWorkers(run, children);
       const output = integrateResults(task.title, fb.summary, children, run.agent.name, {
-        openPoints: fb.openPoints,
+        openPoints: reworkCapped ? [...fb.openPoints, ...fb.issues] : fb.openPoints,
         files: saved,
         names: (id) => run.platform.org.getAgent(id ?? "")?.name ?? "someone",
       });
-      return this.report(run, { outcome: "completed", output, score: fb.score, summary: fb.summary, predicted: plan.confidence, events, estimateUsd: plan.estimateUsd, plan: { ...plan, feedback: [] } });
+      return this.report(run, { outcome: "completed", output: withBoardSteps(output, plan.boardSteps, !task.parentTaskId), score: fb.score, summary: fb.summary, predicted: plan.confidence, events, estimateUsd: plan.estimateUsd, plan: { ...plan, feedback: [] } });
     }
-    if (fb.decision === "escalate") return this.escalateOutcome(run, `Subtasks of T-${task.number} fell short: ${fb.issues.join("; ") || fb.summary}`, plan.confidence, events);
+    if (fb.decision === "escalate") return this.escalateOutcome(run, `Subtasks of T-${task.number} fell short: ${fb.issues.join("; ") || fb.summary}`, plan.confidence, events, null, undefined, boardQuestionFrom(fb));
     if (fb.decision === "fail") {
       // No revision, rollback or escalation left: settle instead of re-planning on every wake-up.
       return this.report(run, {
@@ -878,6 +934,7 @@ export class BrainEngine implements CognitiveEngine {
     events: ProcessEvent[] = [],
     opened: { approvalId: string | null; subtaskId: string | null } | null = null,
     resumeBlock: Checkpoint["block"] = "metacognition.confidence",
+    question?: string,
   ): Promise<EngineResult> {
     const task = run.task!;
     // `opened`: the Solving loop already escalated (reuse it, never open a second one).
@@ -885,7 +942,7 @@ export class BrainEngine implements CognitiveEngine {
       opened ??
       (await block(run, "metacognition.confidence", "Early stop: escalating", async (span) => {
         span.setAttributes({ "agentco.early_stop": true, "agentco.early_stop.reason": truncate(reason, 300) });
-        return this.escalate(run, reason, span);
+        return this.escalate(run, reason, span, question);
       }));
     const onHold = !!esc.subtaskId && run.platform.tasks.get(esc.subtaskId)?.state.inputsWait === true;
     if ((esc.approvalId || esc.subtaskId) && run.escalation && !onHold) run.escalation.count += 1;
@@ -916,9 +973,10 @@ export class BrainEngine implements CognitiveEngine {
     return { ...result, approvalId, taskState: { ...result.taskState, checkpoint } };
   }
 
-  private async escalate(run: BrainRun, reason: string, span: SpanHandle): Promise<{ approvalId: string | null; subtaskId: string | null }> {
-    const task = run.task!;
-    const question = `T-${task.number} "${truncate(task.title, 80)}": ${truncate(reason, 400)} How should I proceed?`;
+  private async escalate(run: BrainRun, reason: string, span: SpanHandle, asked?: string): Promise<{ approvalId: string | null; subtaskId: string | null }> {
+    // The task is named where the question is shown (Boardroom: "Question for the Board on T-…";
+    // escalation: "Escalation on T-…"), so the question itself does not repeat it.
+    const question = asked ?? `${clip(reason, 500)} How should I proceed?`;
     const tools = run.agent.tools;
     const order: string[] = [];
     if (tools.includes("escalate")) order.push("escalate");

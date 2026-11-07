@@ -103,6 +103,16 @@ export class ToolExecutorImpl implements ToolExecutor {
       const tool = this.tools.get(call.name);
       if (!tool || (tool.enabled && !tool.enabled(this.config))) throw new ToolError(`unknown tool "${call.name}"`);
       if (!this.permitted(tool, ctx.agent)) throw new ToolError(`tool "${call.name}" is not available to ${ctx.agent.title}`);
+      // The model's reply hit its length limit mid-call: the arguments never finished (2026-11-07, test 6:
+      // "missing required argument path" for a file whose path was right there, cut off in its content).
+      if (typeof (call.arguments as Record<string, unknown>)._raw === "string" && Object.keys(call.arguments).length === 1) {
+        throw new ToolError(
+          `your ${call.name} call was cut off before it finished (the reply hit its length limit), so nothing happened. ` +
+            (call.name === "workspace_write_file"
+              ? "Save the file in parts: write the first part, then add each next part with append: true — or make it shorter."
+              : "Send it again, shorter."),
+        );
+      }
       const invalid = validateArgs(tool.parameters, call.arguments);
       if (invalid) throw new ToolError(`invalid arguments: ${invalid}`);
       if (ctx.signal.aborted) throw new ToolError("run was aborted before the tool started");

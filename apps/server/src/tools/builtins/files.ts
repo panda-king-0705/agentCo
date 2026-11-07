@@ -16,16 +16,32 @@ export const workspaceWriteFile: ToolDefinition = {
   name: "workspace_write_file",
   description:
     "Save a text file on the company drive, where colleagues can read it (use the exact path your brief names, e.g. launch-plan/finance.md — if a file is already there, it is replaced and the old version kept; never save a second copy of the same document under another name). " +
-    "Start the path with private/ only for scratch notes nobody else needs. Saving over a file keeps the previous version. The result confirms the save and gives the word, line and character counts.",
+    "Start the path with private/ only for scratch notes nobody else needs. Saving over a file keeps the previous version. The result confirms the save and gives the word, line and character counts. " +
+    "A long document (more than about 1,500 words) is saved in parts: the first part normally, each next part with append: true.",
   parameters: {
     type: "object",
-    properties: { path: { type: "string", maxLength: 300 }, content: { type: "string", maxLength: 200000 } },
+    properties: {
+      path: { type: "string", maxLength: 300 },
+      content: { type: "string", maxLength: 200000 },
+      append: { type: "boolean", description: "true adds content to the end of the file instead of replacing it (for a long document saved in parts)." },
+    },
     required: ["path", "content"],
   },
   tiers: ALL_TIERS,
   run(args, ctx) {
     const content = String(args.content);
-    const w = ctx.services.workspaces.write(ctx.agent.id, String(args.path), content);
+    const ws = ctx.services.workspaces;
+    if (args.append === true) {
+      const a = ws.append(ctx.agent.id, String(args.path), content);
+      ctx.span.setAttributes({ "agentco.file.path": a.display, "agentco.file.area": a.area, "agentco.file.append": true });
+      const t = measure(a.content);
+      return ok(
+        `Added ${content.length} chars to ${a.display}; the whole file is now ${t.chars} chars, ${t.words} words, ${t.lines} lines. Saved and verified on disk.${a.area === "private" ? " Private: only you can read it." : " Colleagues can read it at this path."}`,
+        [{ kind: "file_written", path: a.display }],
+        { path: a.display, appended: true, ...t },
+      );
+    }
+    const w = ws.write(ctx.agent.id, String(args.path), content);
     ctx.span.setAttributes({ "agentco.file.path": w.display, "agentco.file.area": w.area });
     const where = w.area === "private" ? " Private: only you can read it." : " Colleagues can read it at this path.";
     const m = measure(content);
