@@ -19,12 +19,14 @@ Copy `mcp.example.json` to `mcp.json`, keep the servers you want, add their keys
 | `tools` | Allow-list of the server's tool names (empty = all it lists). Keep it short: every tool costs tokens on every call. |
 | `noApproval` | Tools that change something but may run without your approval. Every other tool that is not read-only goes to Approvals first and runs when you approve it; destructive tools always do. |
 | `dailyCallLimit` | Calls per agent per day to this server (0 = none). |
+| `protectBranches` | A call whose `branch` is one of these goes to Approvals first, even for a `noApproval` tool. Default for a server that grants `git`: `["main", "master"]` (so only you put changes on main, even where GitHub's own branch protection isn't available — private repositories on the free plan). |
 
 Notes on the examples:
 - **Firecrawl** — research roles only; search and single pages (no crawls, which use credits fast).
 - **GitHub** — engineering only. Create a *fine-grained* token limited to the one repository the
-  engineers may work in (contents + pull requests: read/write), and protect its main branch. Merging
-  is excluded: you merge.
+  engineers may work in (contents + pull requests: read/write). Merging is excluded (you merge), and
+  a commit straight to main goes to Approvals. The `tools` list keeps the 12 tools engineering needs:
+  the server offers 25, and every tool an agent has costs tokens on every call.
 - **FMP** — market and financial data for Finance (the key travels in the URL, which FMP requires).
 - Servers that need a browser sign-in (OAuth) — TextToQuant, Gmail, Google Drive, Notion through
   claude.ai — cannot be connected yet; connectors are signed in to your claude.ai account and cannot

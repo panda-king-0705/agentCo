@@ -109,17 +109,23 @@ export class McpTools {
     const readOnly = tool.annotations.readOnlyHint === true && !destructive;
     const needsApproval = !readOnly && (destructive || !server.noApproval.includes(tool.name));
     const schema = tool.inputSchema.type === "object" ? tool.inputSchema : { type: "object", properties: {} };
+    const branchArg = !readOnly && !needsApproval && server.protectBranches.length > 0 && Object.prototype.hasOwnProperty.call(schema.properties ?? {}, "branch");
     return {
       name,
-      description: `[${server.name}] ${(tool.description || tool.title || tool.name).slice(0, 900)}${needsApproval ? " (Changes something outside the company: the call is sent to the Board and runs when approved.)" : ""}`,
+      description:
+        `[${server.name}] ${(tool.description || tool.title || tool.name).slice(0, 900)}` +
+        (needsApproval ? " (Changes something outside the company: the call is sent to the Board and runs when approved.)" : "") +
+        (branchArg ? ` (Work on your own branch and open a pull request: a change to ${server.protectBranches.join(" or ")} goes to the Board first.)` : ""),
       parameters: stripSchemaMeta(schema),
       tiers: ALL_TIERS,
       grants: server.grants,
       allowed: (agent) => this.hasAccess(server, agent),
       run: async (args, ctx) => {
         ctx.span.setAttributes({ "agentco.mcp.server": server.name, "agentco.mcp.tool": tool.name, ...(needsApproval ? { "agentco.mcp.approval": true } : {}) });
-        // A write only asks the Board here; it reaches the server (and the limit) once approved.
-        if (needsApproval) return this.requestApproval(server, tool, args, ctx.agent, ctx.taskId, ctx.traceId);
+        // A write only asks the Board here; it reaches the server (and the limit) once approved. A change
+        // straight to a protected branch (main) always asks (2026-11-08: the founder merges, not agents).
+        const toProtected = branchArg && typeof args.branch === "string" && server.protectBranches.includes(args.branch.trim().toLowerCase());
+        if (needsApproval || toProtected) return this.requestApproval(server, tool, args, ctx.agent, ctx.taskId, ctx.traceId);
         if (server.dailyCallLimit > 0) {
           const since = new Date(this.deps.now().getTime() - 86_400_000).toISOString();
           const used = this.deps.repos.spans.countToolCalls(ctx.agent.id, `${server.name}_`, since);

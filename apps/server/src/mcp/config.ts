@@ -12,7 +12,8 @@
  *       "access": { "roles": ["cmo"], "agents": ["Morgan Patel"], "departments": ["product"], "catalog": ["marketing/marketing-seo-specialist"] },
  *       "tools": ["firecrawl_search", "firecrawl_scrape"],
  *       "noApproval": [],
- *       "dailyCallLimit": 40
+ *       "dailyCallLimit": 40,
+ *       "protectBranches": ["main"]
  *     },
  *     "local": { "command": "npx", "args": ["-y", "some-mcp-server"], "env": { "KEY": "${SOME_API_KEY}" } }
  *   }
@@ -51,6 +52,12 @@ export interface McpServerConfig {
   noApproval: string[];
   /** Calls per agent per day across this server's tools (0 = no limit). */
   dailyCallLimit: number;
+  /**
+   * A call whose `branch` argument is one of these goes to the Board first, even if the tool is in
+   * noApproval — commits reach main only with the founder's approval, whatever the GitHub plan allows.
+   * Default for a server that grants "git": main and master.
+   */
+  protectBranches: string[];
   /** Values substituted from the environment: redacted from every message and span. */
   secrets: string[];
 }
@@ -131,6 +138,7 @@ export function parseMcpConfig(raw: unknown, env: NodeJS.ProcessEnv, path: strin
       tools: strs(s.tools),
       noApproval: strs(s.noApproval),
       dailyCallLimit: typeof s.dailyCallLimit === "number" && s.dailyCallLimit >= 0 ? Math.floor(s.dailyCallLimit) : 50,
+      protectBranches: (Array.isArray(s.protectBranches) ? strs(s.protectBranches) : strs(s.grants).includes("git") ? ["main", "master"] : []).map((b) => b.toLowerCase()),
       secrets: [...new Set(secrets)].filter((v) => v.length >= 4),
     });
   }
