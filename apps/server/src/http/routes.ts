@@ -25,7 +25,17 @@ export function buildRouter(platform: Platform): Router {
   const router = new Router();
   const { org, tasks, runs, conversations, approvals, memory, repos, company, metrics, traces, bus } = platform;
 
-  router.get("/api/health", () => ({ ok: true, name: company.settings().name, paused: company.settings().paused, time: platform.services.now().toISOString() }));
+  router.get("/api/health", () => {
+    const o = platform.outage.status();
+    return {
+      ok: true,
+      name: company.settings().name,
+      paused: company.settings().paused,
+      time: platform.services.now().toISOString(),
+      // While no AI provider can be reached, work is on hold (models/outage.ts).
+      outage: o ? { since: new Date(o.since).toISOString(), nextTryAt: new Date(o.until).toISOString(), tries: o.strikes } : null,
+    };
+  });
 
   // ───────────── company ─────────────
   router.get("/api/company", () => platform.snapshot());

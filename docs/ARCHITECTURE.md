@@ -205,6 +205,19 @@ interrupt/pause/destroy can abort it, then apply the result:
 Errors thrown by the engine (incl. BudgetExceededError) → run `failed`,
 `failingSpanId` = first span in the run with status error.
 
+**Provider outages** (`models/outage.ts`). A model call that fails on every
+provider with a network error ("fetch failed", DNS, connection refused/reset)
+throws `ProviderOutageError`. The run's task goes back to `todo` with the
+attempt refunded and the same trigger next time (a continuation stays a
+continuation); a chat message goes back in the queue (the chat is told once).
+The `OutageGate` then holds the scheduler: nothing starts until the next try —
+30 s, 1 min, 2 min, then every 5 min — and the first model call that gets an
+answer clears it. A second failed try posts one system message in the
+Boardroom; the end of the outage posts another. `GET /api/health` reports
+`outage: {since, nextTryAt, tries}` while it lasts. (2026-11-07: a dropped
+hotspot failed the CEO's last step twice in 0.4 s and the objective ended
+"failed" with every part done.)
+
 **Crash recovery (ported).** On boot, every run still `running` becomes
 `interrupted`; its task goes back to `todo` with `state.recovery = { runId }`;
 the next run gets `trigger: "recovery"` and `recoveryNotice`:
@@ -358,7 +371,7 @@ state-changing requests need `Content-Type: application/json` and an allowed
 Origin (SECURITY.md → Browser attacks).
 
 ```
-GET    /api/health
+GET    /api/health                        {ok, name, paused, time, outage: {since, nextTryAt, tries} | null}
 GET    /api/company                       CompanySnapshot
 PATCH  /api/company                       Partial<CompanySettings>
 POST   /api/company/pause | /resume       kill switch (aborts running runs)

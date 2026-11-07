@@ -1,7 +1,8 @@
 /**
  * Scheduler (tick 750 ms, plus an event-driven nudge so work starts immediately).
  *
- *  - nothing starts while the company is paused (kill switch);
+ *  - nothing starts while the company is paused (kill switch), or while no AI provider can be
+ *    reached (an outage: retried after 30 s, 1, 2, then every 5 minutes);
  *  - at most `maxConcurrentRuns` runs in total, one run per agent;
  *  - agents that are paused, terminated, busy or out of budget are skipped (tasks) —
  *    excluded in SQL and paged past, so no backlog of an ineligible agent can starve
@@ -34,6 +35,8 @@ export interface SchedulerDeps {
   conversations: ConversationService;
   runs: RunLauncher;
   tickMs: number;
+  /** While no AI provider can be reached, nothing starts until the next try (models/outage.ts). */
+  outage?: { heldUntil(): number | null };
 }
 
 const WAKE_EVENTS = new Set(["task.created", "task.updated", "message.created", "run.completed", "company.updated", "agent.updated", "approval.decided"]);
@@ -103,6 +106,7 @@ export class Scheduler {
     const { company, runs, repos, org, conversations } = this.deps;
     const settings = company.settings();
     if (settings.paused) return 0;
+    if (this.deps.outage?.heldUntil()) return 0;
     let free = settings.maxConcurrentRuns - runs.activeCount();
     let started = 0;
     if (free <= 0) return 0;

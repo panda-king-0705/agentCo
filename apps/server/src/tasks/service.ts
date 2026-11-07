@@ -289,6 +289,21 @@ export class TaskService implements TaskView {
   }
 
   /**
+   * The run could not reach any AI provider (network outage): back to todo with the attempt refunded,
+   * resuming the same way (a continuation stays a continuation). The scheduler holds all work until
+   * the providers answer (models/outage.ts) — an outage never uses up a task's attempts.
+   */
+  holdForOutage(taskId: string, note: string): Task {
+    const task = this.require(taskId);
+    if (task.status !== "in_progress") return task;
+    const refund = task.state.lastAttemptCounted === true ? 1 : 0;
+    const last = task.state.lastTrigger;
+    const resume: Record<string, unknown> = { nextTrigger: last === "subtasks_completed" || last === "human_answer" ? last : "task" };
+    if (last === "human_answer" && typeof task.state.lastAnsweredApprovalId === "string") resume.answeredApprovalId = task.state.lastAnsweredApprovalId;
+    return this.transition(task, "todo", { attempts: Math.max(0, task.attempts - refund), error: this.clean(note), state: { ...task.state, ...resume } });
+  }
+
+  /**
    * Crash recovery: an in_progress task whose run was killed goes back to todo with
    * `state.recovery = { runId }` (next run: trigger "recovery"); the lost attempt is refunded.
    */

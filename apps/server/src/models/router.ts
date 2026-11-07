@@ -13,6 +13,7 @@
  * so concurrent calls cannot overrun a hard cap together; recordSpend releases
  * it, and so does any failure (release() in a finally).
  */
+import { isNetworkError, ProviderOutageError } from "./outage.ts";
 import type { Agent, ModelProfile, ModelTier } from "../../../../packages/shared/src/index.ts";
 import type {
   ChatCallContext,
@@ -36,6 +37,11 @@ export interface ModelRouterExtras {
   /** Provider adapters by profile.provider ("mock") or "openai-compatible" for everything else. */
   providers?: Record<string, ModelProvider>;
   fetch?: typeof fetch;
+}
+
+function errText(err: unknown): string {
+  const m = err instanceof Error ? err.message : String(err);
+  return m.replace(/^.*? request to \S+ failed: /, "").slice(0, 120);
 }
 
 export function isBudgetError(err: unknown): boolean {
@@ -155,18 +161,35 @@ class ModelRouterImpl implements ModelRouter {
     // A provider that failed on the ACCOUNT (no credit, bad key) fails every call the same way:
     // skip it for a while instead of paying a failed round trip on each call (2026-11-07).
     const down = this.downReason(first.provider);
-    if (down && fallback && !this.downReason(fallback.provider)) return this.attempt(fallback, request, ctx, first.id, down);
+    if (down && fallback && !this.downReason(fallback.provider)) {
+      try {
+        return await this.attempt(fallback, request, ctx, first.id, down);
+      } catch (err) {
+        if (isBudgetError(err) || ctx.signal.aborted) throw err;
+        // The primary is out (account) and the fallback can't be reached: nothing can answer.
+        if (isNetworkError(err)) throw new ProviderOutageError([`${first.provider}: ${down}`, `${fallback.provider}: ${errText(err)}`]);
+        throw err;
+      }
+    }
     try {
       return await this.attempt(first, request, ctx, null);
     } catch (err) {
       // Only the caller's own signal is an abort; a provider timeout goes to the fallback profile.
       if (isBudgetError(err) || ctx.signal.aborted) throw err;
       if (isAccountError(err)) this.markDown(first.provider, err);
-      if (!fallback) throw err;
+      if (!fallback) {
+        if (isNetworkError(err)) throw new ProviderOutageError([`${first.provider}: ${errText(err)}`]);
+        throw err;
+      }
       try {
         return await this.attempt(fallback, request, ctx, first.id);
       } catch (second) {
+        if (isBudgetError(second) || ctx.signal.aborted) throw second;
         if (isAccountError(second)) this.markDown(fallback.provider, second);
+        // Neither provider could be reached (2026-11-07: a dropped hotspot): an outage, not a failure.
+        if (isNetworkError(second) && (isNetworkError(err) || isAccountError(err))) {
+          throw new ProviderOutageError([`${first.provider}: ${errText(err)}`, `${fallback.provider}: ${errText(second)}`]);
+        }
         throw second;
       }
     }

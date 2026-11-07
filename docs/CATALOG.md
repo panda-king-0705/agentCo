@@ -187,6 +187,16 @@ an approval when `HIRING_REQUIRES_APPROVAL` is on or headcount is at the cap; th
 `catalogId`, and the agent is created on approval. Existing databases are backfilled at boot: agents
 get their role's `catalogId`, and executives that can hire get `catalog_search`.
 
+**Guards** (2026-11-07). One hire per role per *objective*: hire records are read across every task
+under the same root, so a later step cannot ask for the same specialist again. If someone on the
+receiving team already holds the catalog role, `hire_agent` refuses and names them, unless the
+request explicitly asks for another person in that role (`additional: true`). When the request states
+one monthly budget ("a $10 monthly budget"), that is the budget: a different figure is refused, and
+an omitted one is filled in. `hire_agent` is offered only on steps that ask to hire, not on a
+recruiter's recommendation step. The justification must name who recommended the pick only if they
+did. `company_directory` shows each person's join date, hirer, monthly budget and catalog role, finds
+people by catalog role, and looks up an agent id — including someone who has left.
+
 **Console.** `#/catalog` browses by division (optional departments are marked *new*) and searches; a
 card opens a drawer with the compiled playbook (with its token meter) and the full text; *Hire into…*
 picks department and manager. The org chart's Hire modal opens on a **From catalog** tab (the role

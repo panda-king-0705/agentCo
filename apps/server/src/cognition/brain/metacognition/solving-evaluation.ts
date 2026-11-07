@@ -21,7 +21,7 @@ import { block, llmJson, recordCall, toolContext, type BrainRun } from "../runti
 import type { Subprocess } from "./cognitive-control.ts";
 import { truthfulEfficientGood, type TegResult } from "./monitoring.ts";
 import { measure } from "../../../tools/builtins/files.ts";
-import { describeHire, hiresOf } from "../../../tools/builtins/hiring.ts";
+import { describeHire, objectiveHires } from "../../../tools/builtins/hiring.ts";
 
 const TIERS: ModelTier[] = ["economy", "standard", "frontier"];
 
@@ -96,7 +96,9 @@ export async function delegateParts(run: BrainRun, span: SpanHandle, parts: Subp
 
 /** A request to hire someone (the tools and the plan then follow the hiring flow). */
 export function isHiringRequest(text: string): boolean {
-  return /\b(hire|hires|hiring|hired|recruit\w*|headcount|new (agent|specialist|employee|team member))\b/i.test(text);
+  // "Recruiter recommends…" is a recommendation step, not a hire (2026-11-07, trc_617b…: the CMO was
+  // offered hire_agent on it and hired before the recruiter had been asked).
+  return /\b(hire|hires|hiring|hired|recruit(?!ers?\b)\w*|headcount|new (agent|specialist|employee|team member))\b/i.test(text);
 }
 
 /** Open first tasks of agents this task hired (hire_agent firstTask). */
@@ -157,7 +159,7 @@ export async function solving(
       // hire_agent only on a hiring task: the head of the receiving team makes the hire (founder,
       // 2026-11-07) — and only until the hire is made or requested (a resumed manager hired the same
       // specialist twice).
-      const hires = hiresOf(run.platform.tasks.get(task.id) ?? task).filter((h) => h.status !== "declined");
+      const hires = objectiveHires(run.platform.tasks, run.platform.tasks.get(task.id) ?? task).filter((h) => h.status !== "declined");
       const hiring = isHiringRequest(`${task.title}\n${task.description}`) && hires.length === 0;
       const tools = run.platform.tools
         .specsFor(run.agent)
@@ -171,11 +173,11 @@ export async function solving(
         `Solve: ${plan.problem}\nSuccess criteria: ${plan.successCriteria.join("; ")}\nApproach (${plan.candidate.replace("_", " ")}): ${exec.verify ? "be thorough and verify your claims" : "be efficient"}.`,
         plan.memory.length ? `What you know:\n${plan.memory.slice(0, 10).join("\n")}` : "",
         guidance.length ? `Guidance you asked for (follow it):\n${guidance.join("\n")}` : "",
-        hires.length ? `Already done for this task: ${hires.map(describeHire).join("; ")}. Do not hire again — work with them; they report to their manager.` : "",
+        hires.length ? `Already done on this objective: ${hires.map(describeHire).join("; ")}. Do not hire again — work with them; they report to their manager.` : "",
         hiring
           ? "You are making a hire: call hire_agent with the recommended catalogId, monthlyBudgetUsd and firstTask (their first piece of work, with the exact file path). Give that work to the new hire as their first task — do not do it yourself first."
           : "",
-        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file.",
+        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file. Credit work to whoever actually did it: never write a colleague's name on work they did not do (\"recommended by\", \"written by\", in files, messages or requests to the Board) — if a step meant for someone else ended up with you, say you did it.",
         `[[context:${JSON.stringify({
           mode: "task",
           agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },

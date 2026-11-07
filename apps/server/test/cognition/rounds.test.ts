@@ -122,7 +122,7 @@ test("named owners each get a part (even on the Low Effort candidate); assembly 
   const all = p.tasks.children(task.id);
   assert.equal(all.length, 4);
   const r2 = all.find((c) => c.title === "Assemble the one-page plan")!;
-  assert.match(r2.description, /Round-1 results to work from:\n- T-/);
+  assert.match(r2.description, /Round-1 results to work from \(if they show part of this step is already done — a hire made, a file saved — do not redo it: build on it and say so\):\n- T-/);
   for (const c of round1) assert.ok(r2.description.includes(`T-${c.number} "${c.title}"`), `brief includes T-${c.number}`);
   assert.equal((task.state.plan as { subprocesses: { title: string; taskId: string | null }[] }).subprocesses.find((s) => s.title === r2.title)!.taskId, r2.id);
   assert.equal(p.tracer.spans.filter((s) => s.attributes["agentco.brain.block"] === "metacognition.solving_evaluation.feedback").length, 0, "round 1 is not judged on its own");
@@ -451,6 +451,30 @@ test("a person named outside the leader's reports routes to the report whose tea
   assert.match(prompts[0]!, /agt_cpo \(Chief People Officer — Jasmine Lee is in their team; the part is for them\)/);
   assert.match(prompts[0]!, /Hiring: the head of the team the new hire joins makes the hire — hire_agent places people only in the hirer's own team .* Plan the recommendation as round 1 \(to the head of People, for their recruiter\) and the hire — with budget and first task — as round 2 \(to the receiving department's head\)\./);
   assert.equal(ctxs[0]!.hiring, true);
+});
+
+// Live (2026-11-07, trc_617b…): the CEO planned the recruiter step for Natalie (Jasmine's head of People),
+// but role arrangement handed it to the CMO — the request named "Marketing", and Jasmine didn't count.
+test("a part naming someone on the leader's chosen team stays with that leader, even when the request names another department", async () => {
+  const plan = {
+    mode: "delegate",
+    subprocesses: [
+      { title: "Recruiter recommends SEO specialist from catalog", description: "Have Jasmine Lee (People recruiter) use catalog_search to find one SEO specialist for Marketing and save her pick.", assigneeId: "agt_cpo", round: 1, value: 350, estCostUsd: 0.02, acceptanceCriteria: "A real catalog id with reasons." },
+      { title: "CMO hires SEO specialist and assigns keyword brief", description: "Using Jasmine's recommendation, hire into Marketing with a $10 budget and the first task.", assigneeId: "agt_cmo", round: 2, value: 550, estCostUsd: 0.03, acceptanceCriteria: "Hired with the brief assigned." },
+    ],
+    candidates: CANDIDATES,
+    rationale: "Recruiter sources, the CMO hires.",
+  };
+  const p = new FakePlatform({ providers: { mock: provider({ "metacognition.cognitive_control": () => plan }) } });
+  const { ceo, cpo } = hiringCompany(p);
+  const task = p.addTask(makeTask({ id: "tsk_228", number: 228, title: "Hire SEO specialist and produce launch keyword brief", description: "We need an SEO specialist in Marketing for the meeting-notes launch. Jasmine should hire one from the specialist catalog with a $10 monthly budget, and give them a first task.", assigneeId: ceo.id, value: 600, estCostUsd: 0.3 }));
+  const first = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task)));
+  assert.equal(first.outcome, "waiting", first.error ?? first.output);
+  const round1 = p.tasks.children(task.id);
+  assert.deepEqual(round1.map((c) => [c.title, c.assigneeId]), [["Recruiter recommends SEO specialist from catalog", cpo.id]]);
+  const arranged = p.tracer.spans.find((s) => s.attributes["agentco.role_arrangement"])!;
+  assert.equal(arranged.attributes["agentco.role_arrangement.overrode_llm"], 0);
+  assert.match(String(arranged.attributes["agentco.role_arrangement.named"]), /agt_cpo/, "Jasmine's head of People counts as named");
 });
 
 test("mentionedPeople: full names, or a capitalised first name only one person has", () => {

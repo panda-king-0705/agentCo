@@ -5,6 +5,28 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (test 5 rerun, trc_617b…)
+- **A network outage no longer fails work.** When no AI provider can be reached (the PC's hotspot
+  dropped for six minutes), the run's task goes back in the queue with its attempt refunded, and
+  nothing starts until the next try: 30 seconds, then 1, 2 and every 5 minutes. The first answer
+  from a provider ends the hold. If the outage lasts, the Boardroom gets one message saying so, and
+  another when it is over. A chat message hit by an outage is kept and answered later. Before, the
+  CEO's last step failed twice in 0.4 seconds and the objective ended "failed" with every part done.
+- **Steps reach the person the plan meant.** The recruiter's step had been handed to the CMO because
+  the request also named Marketing and Jasmine didn't count as named. Now a person the request
+  names counts, and the leader's pick stands when the step names someone on that pick's team.
+- **Hiring.** A hire made on one step of an objective blocks asking for the same specialist on
+  another. If the role is already on the team, the hire is refused and the person named, unless the
+  request asks for another. The budget the request states is the budget ($10 was turned into
+  "no more than $10", then $8). Recommendation steps no longer get the hire tool. A round-2 step that
+  round 1 already did is built on, not redone.
+- **Credit.** The handbook and both kinds of agent now say: never put a colleague's name on work they
+  didn't do. The CMO had written the recommendation herself under the recruiter's name, and the hire
+  request to the Board said the recruiter recommended it.
+- **Company directory.** Entries show when someone joined, who hired them, their monthly model budget
+  and catalog role; the directory finds people by catalog role and looks up an agent id, including
+  someone who has left.
+
 ### Added
 - **Delete a chat.** Every chat has a "Delete chat" button (the Boardroom has "Clear chat"). A
   deleted chat is gone for good: its messages, the notes the agent wrote while answering in it,
