@@ -10,3 +10,6 @@ export const OUTSIDE_DOC_RULE =
 
 /** Editing part of a document: in place, not by rewriting it. */
 export const EDIT_IN_PLACE_RULE = "To change part of an existing document, edit it in place with workspace_edit_file (a passage or a whole section); rewrite a whole file only when you mean to replace all of it.";
+
+/** Repository files are saved work (2026-11-08, trc_8e3b…: reviews asked for drive copies of committed code). */
+export const REPO_SAVED = "Files named owner/repo@branch:path are committed to a repository: that is saved work, exactly as a file on the drive is — never ask for a copy on the drive. ";

@@ -23,6 +23,16 @@ import type { Capability } from "../org/capabilities.ts";
 
 export const MCP_RESULT_CHARS = 20_000;
 
+/** A file read back from an outside repository (the shape reviewers see, like a drive file). */
+export interface OutsideFile {
+  display: string;
+  by: string;
+  content: string;
+  truncated: boolean;
+  words: number;
+  lines: number;
+}
+
 export interface McpServerStatus {
   name: string;
   connected: boolean;
@@ -159,28 +169,61 @@ export class McpTools {
   /**
    * The files committed to repositories on this objective, read back from the repository now — what
    * reviewers and the independent check judge besides the company drive (2026-11-08, trc_92d7…: the
-   * checker marked a committed spec unmet because it could only see the drive). At most 8 files.
+   * checker marked a committed spec unmet because it could only see the drive).
+   *
+   * First a list of every file committed per repository and branch, then the files themselves: the
+   * ones the contract names first (a path, or its folder), then the newest, within a size budget
+   * (trc_8e3b…: with only the newest eight files read back, the spec, adapter and signal code
+   * committed earlier were judged missing and a fix round re-did them).
    */
-  async outsideFiles(traceId: string, limits = { files: 8, chars: 6000 }): Promise<{ display: string; by: string; content: string; truncated: boolean; words: number; lines: number }[]> {
+  async outsideFiles(traceId: string, o: { prefer?: readonly string[]; files?: number; perFile?: number; total?: number } = {}): Promise<OutsideFile[]> {
+    const maxFiles = o.files ?? 24;
     const latest = new Map<string, { server: string; repo: string; branch: string; path: string }>();
-    for (const w of this.deps.repos.spans.repoWrites(traceId)) for (const path of w.paths) latest.set(`${w.server}|${w.repo}|${w.branch}|${path}`, { server: w.server, repo: w.repo, branch: w.branch, path });
-    const out: { display: string; by: string; content: string; truncated: boolean; words: number; lines: number }[] = [];
-    for (const f of [...latest.values()].slice(-limits.files)) {
-      const entry = this.entries.get(f.server);
-      const read = entry?.tools.find((t) => /(^|_)get_file_contents$/.test(t.name));
-      if (!entry || !read) continue;
-      const [owner, repo] = f.repo.split("/");
-      try {
-        if (!entry.client.connected) await entry.client.connect();
-        const r = await entry.client.callTool(read.name, { owner, repo, path: f.path, ...(f.branch ? { ref: `refs/heads/${f.branch}` } : {}) });
-        const body = r.ok ? r.text : `(could not be read back: ${entry.client.redact(r.text).slice(0, 200)})`;
-        const content = body.length > limits.chars ? body.slice(0, limits.chars) : body;
-        const words = content.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).length;
-        out.push({ display: `${f.repo}@${f.branch || "default"}:${f.path}`, by: "the repository", content, truncated: body.length > limits.chars, words, lines: content.split("\n").length });
-      } catch (error) {
-        this.log(`[mcp] reading back ${f.repo}:${f.path} failed: ${entry.client.redact(error instanceof Error ? error.message : String(error))}`);
+    for (const w of this.deps.repos.spans.repoWrites(traceId)) {
+      for (const path of w.paths) {
+        const key = `${w.server}|${w.repo}|${w.branch}|${path}`;
+        latest.delete(key);
+        latest.set(key, { server: w.server, repo: w.repo, branch: w.branch, path });
       }
     }
+    const all = [...latest.values()];
+    if (all.length === 0) return [];
+    const prefer = (o.prefer ?? []).join("\n");
+    // A path named whole, or its folder ("docs/fx/"), never as part of a longer path ("fx/" inside "docs/fx/").
+    const mentions = (s: string) => new RegExp(`(^|[^\\w./-])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(prefer);
+    const named = (path: string) => mentions(path) || (path.includes("/") && mentions(`${path.slice(0, path.lastIndexOf("/"))}/`));
+    // The ones the contract names, then the newest; shown named first, each group in commit order.
+    const picked = new Set([...all.filter((f) => named(f.path)), ...all.filter((f) => !named(f.path)).reverse()].slice(0, maxFiles));
+    const chosen = [...all.filter((f) => picked.has(f) && named(f.path)), ...all.filter((f) => picked.has(f) && !named(f.path))];
+    const perFile = Math.max(1200, Math.min(o.perFile ?? 5000, Math.floor((o.total ?? 48_000) / chosen.length)));
+
+    const out: OutsideFile[] = [];
+    const byPlace = new Map<string, string[]>();
+    for (const f of all) byPlace.set(`${f.repo}@${f.branch || "default"}`, [...(byPlace.get(`${f.repo}@${f.branch || "default"}`) ?? []), f.path]);
+    for (const [place, paths] of byPlace) {
+      const content = `Files committed on this objective (all of them; their contents follow, the longest ones in part):\n${paths.map((p) => `- ${p}`).join("\n")}`;
+      out.push({ display: `${place} — committed files`, by: "the repository", content, truncated: false, words: paths.length, lines: paths.length + 1 });
+    }
+    const read = await Promise.all(
+      chosen.map(async (f) => {
+        const entry = this.entries.get(f.server);
+        const tool = entry?.tools.find((t) => /(^|_)get_file_contents$/.test(t.name));
+        if (!entry || !tool) return null;
+        const [owner, repo] = f.repo.split("/");
+        try {
+          if (!entry.client.connected) await entry.client.connect();
+          const r = await entry.client.callTool(tool.name, { owner, repo, path: f.path, ...(f.branch ? { ref: `refs/heads/${f.branch}` } : {}) });
+          const body = r.ok ? r.text : `(could not be read back: ${entry.client.redact(r.text).slice(0, 200)})`;
+          const content = body.length > perFile ? body.slice(0, perFile) : body;
+          const words = content.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).length;
+          return { display: `${f.repo}@${f.branch || "default"}:${f.path}`, by: "the repository", content, truncated: body.length > perFile, words, lines: content.split("\n").length };
+        } catch (error) {
+          this.log(`[mcp] reading back ${f.repo}:${f.path} failed: ${entry.client.redact(error instanceof Error ? error.message : String(error))}`);
+          return null;
+        }
+      }),
+    );
+    for (const f of read) if (f) out.push(f);
     return out;
   }
 

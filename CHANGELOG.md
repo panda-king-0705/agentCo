@@ -5,6 +5,17 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (trc_8e3b…, the forex scalper rerun: PR #3 opened, but the check said 1 of 4 met)
+- **The check sees every committed file.** Only the newest eight files committed on an objective
+  were read back, so the spec, broker adapter, signal code and settings committed earlier were
+  judged missing, and a fix round re-did them. Reviewers now get a list of every committed file per
+  repository and branch. After that come up to 24 of the files themselves, within a size budget:
+  the ones the contract names are read first, then the newest. The leader's own review gets a
+  smaller share of them.
+- **Committed code is saved work.** Reviews and the check are told that a file in a repository counts
+  as saved, like a file on the drive. Reviewers had asked for drive copies of committed code, and the
+  report ended with "save those files as read from the branch".
+
 ### Fixed (trc_92d7…, the forex scalper: $2.75, 0 of 4 met, no code reached the repository)
 - **The OpenAI backup works for tool steps again.** gpt-6.1-sol and gpt-6-astra refuse tools on
   chat completions unless reasoning is "none", and now refuse "none" too. Their tool calls go through

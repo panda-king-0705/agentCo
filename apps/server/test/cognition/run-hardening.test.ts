@@ -8,6 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ReflexEngine } from "../../src/cognition/reflex.ts";
 import { BrainEngine } from "../../src/cognition/brain/index.ts";
+import { withinBudget } from "../../src/cognition/brain/metacognition/solving-evaluation.ts";
 import { MockProvider } from "../../src/models/providers/mock.ts";
 import { readStage } from "../../src/models/protocol.ts";
 import type { ChatRequest, ModelProvider, ToolCall, ToolResult } from "../../src/contracts.ts";
@@ -185,10 +186,23 @@ test("reviews and the independent check see what was committed to the repository
   });
   p.addDepartment("dep_exec", "executive", "Executive");
   const ceo = p.addAgent(makeAgent({ id: "agt_ceo", name: "Ava Chen", title: "Chief Executive Officer", departmentId: "dep_exec", tier: "executive", cognition: "brain", modelTier: "frontier", tools: ["workspace_write_file"], identity: { mission: "Deliver." } as never }));
-  (p as unknown as { outsideFiles: () => Promise<unknown[]> }).outsideFiles = async () => [{ display: "acme/bot@t-308-fx-scalper:docs/fx-scalper/spec.md", by: "the repository", content: "# Spec\nEUR/USD, 1-minute candles, EMA 9/21 with RSI(14)", truncated: false, words: 8, lines: 2 }];
+  const preferred: unknown[] = [];
+  (p as unknown as { outsideFiles: (t: string, prefer?: unknown) => Promise<unknown[]> }).outsideFiles = async (_t, prefer) => (preferred.push(prefer), [{ display: "acme/bot@t-308-fx-scalper:docs/fx-scalper/spec.md", by: "the repository", content: "# Spec\nEUR/USD, 1-minute candles, EMA 9/21 with RSI(14)", truncated: false, words: 8, lines: 2 }]);
   const task = p.addTask(makeTask({ id: "tsk_1", number: 1, title: "Write the spec", description: "Write the spec and commit it.", assigneeId: ceo.id }));
   task.state.contract = [{ id: "A1", text: "docs/fx-scalper/spec.md defines the pair and timeframe" }];
   await new BrainEngine().run(p.context(ceo, taskInput(task)));
   assert.ok(seenPrompts.length >= 2, "the check and the leader's review both ran");
   for (const prompt of seenPrompts) assert.match(prompt, /=== acme\/bot@t-308-fx-scalper:docs\/fx-scalper\/spec\.md/);
+  // trc_8e3b…: committed code is saved work — no one asks for a copy on the drive.
+  for (const prompt of seenPrompts) assert.match(prompt, /committed to a repository: that is saved work, exactly as a file on the drive is/);
+  // The files the contract names are read back first.
+  assert.deepEqual(preferred[0], ["docs/fx-scalper/spec.md defines the pair and timeframe"]);
+});
+
+test("the leader's review gets a share of the repository files; the list of committed files stays whole", () => {
+  const file = (display: string, n: number) => ({ display, by: "the repository", content: "x".repeat(n), truncated: false, words: 1, lines: 1 });
+  const out = withinBudget([file("acme/bot@fx — committed files", 5000), ...Array.from({ length: 9 }, (_, i) => file(`acme/bot@fx:f${i}.py`, 5000))], 24_000);
+  assert.equal(out[0]!.content.length, 5000);
+  assert.ok(out.slice(1).every((f) => f.content.length === 2400 && f.truncated));
+  assert.deepEqual(withinBudget([file("a@b:c", 100)], 24_000)[0]!.truncated, false);
 });

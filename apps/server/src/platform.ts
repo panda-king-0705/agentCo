@@ -209,7 +209,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
         tool: c.name,
         what: oneLine(String(c.attributes["agentco.file.path"] ?? (c.attributes["agentco.mcp.paths"] ? `${c.attributes["agentco.mcp.repo"]}@${c.attributes["agentco.mcp.branch"]}: ${String(c.attributes["agentco.mcp.paths"]).split("\n").join(", ")}` : c.output.replace(/^\[[^\]]*\]\s*/, ""))), 160),
       }));
-  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, drive, capabilities, taskWrites, outsideFiles: (traceId) => mcp.outsideFiles(traceId), now };
+  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, drive, capabilities, taskWrites, outsideFiles: (traceId, prefer) => mcp.outsideFiles(traceId, { prefer }), now };
   const engines = overrides.engines ?? (await loadEngines(config));
   const governor = new ContextGovernor(repos.settings, { dataDir: config.dataDir, triggerPct: config.contextTriggerPct, carryTurns: config.contextCarryTurns }, now);
   const runs = new RunService({

@@ -395,7 +395,7 @@ export interface PlatformServices {
    * Files committed to outside repositories on this objective, read back from the repository now
    * (mcp/tools.ts) — what reviewers and the independent check judge besides the drive.
    */
-  outsideFiles?(traceId: string): Promise<{ display: string; by: string; content: string; truncated: boolean; words: number; lines: number }[]>;
+  outsideFiles?(traceId: string, prefer?: readonly string[]): Promise<{ display: string; by: string; content: string; truncated: boolean; words: number; lines: number }[]>;
   now(): Date;
 }
 

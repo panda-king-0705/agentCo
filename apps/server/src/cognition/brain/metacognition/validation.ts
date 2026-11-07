@@ -20,6 +20,7 @@ import { oneLine, truncate } from "../../text.ts";
 import { llmJson, type BrainRun } from "../runtime.ts";
 import type { SpanHandle } from "../../../contracts.ts";
 import type { ReviewFile } from "./solving-evaluation.ts";
+import { REPO_SAVED } from "../../../org/rules.ts";
 
 export interface Assertion {
   /** "A1", "A2", … */
@@ -130,7 +131,7 @@ export async function validateContract(
       instructions:
         `The contract — what "done" means, fixed before the work started:\n${o.contract.map((a) => `${a.id}: ${a.text}`).join("\n")}\n\n` +
         (o.boardSteps.length ? `Left to the Board (this company cannot do these; never count them): ${o.boardSteps.join("; ")}\n\n` : "") +
-        `The saved work:\n${work}\n\n` +
+        `The saved work${o.files.some((f) => /^[\w.-]+\/[\w.-]+@/.test(f.display)) ? ` (${REPO_SAVED.trim()})` : ""}:\n${work}\n\n` +
         "For each statement give status: met (evidence: the file and a short quote that shows it), unmet (gap: exactly what is missing for THIS statement — nothing it does not ask for), or board (it can only be met with something only the Board can give: data no one in the company has, a decision, an outside step). " +
         "Judge substance only: formatting, wording style, sign-offs and small count differences never make a statement unmet. A figure honestly marked as not available, where no file in the company has it, is the Board's, not unmet. Do not add requirements, and do not trust claims — only what the saved work shows.",
       shape: '{"checks":[{"id":"A1","status":"met"|"unmet"|"board","evidence":string,"gap":string}]}',

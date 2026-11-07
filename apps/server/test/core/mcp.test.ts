@@ -62,7 +62,7 @@ async function fakeMcp(): Promise<FakeServer> {
       if (msg.params!.name === "push_files") return reply({ content: [{ type: "text", text: "Pushed 1 file." }] });
       if (msg.params!.name === "get_file_contents") {
         const a = msg.params!.arguments as { path: string; ref?: string };
-        return reply({ content: [{ type: "text", text: `contents of ${a.path} at ${a.ref ?? "default"}: def signal(): return "buy"` }] });
+        return reply({ content: [{ type: "text", text: `contents of ${a.path} at ${a.ref ?? "default"}: def signal(): return "buy"${a.path.endsWith(".big") ? "x".repeat(9000) : ""}` }] });
       }
       return reply({ content: [{ type: "text", text: "Pull request #7 opened." }] });
     }
@@ -252,11 +252,50 @@ test("files committed through the connection are read back from the repository f
     rootTask(t, cto, "Write the signal module");
     await t.drain();
     const files = await t.app.platform.mcp.outsideFiles(traceId);
-    assert.deepEqual(files.map((f) => f.display), ["acme/bot@feature/fx:fx/signals.py", "acme/bot@feature/fx:tests/test_signals.py"]);
-    assert.match(files[0]!.content, /contents of fx\/signals\.py at refs\/heads\/feature\/fx/);
-    assert.equal(files[0]!.by, "the repository");
+    assert.deepEqual(files.map((f) => f.display), ["acme/bot@feature/fx — committed files", "acme/bot@feature/fx:fx/signals.py", "acme/bot@feature/fx:tests/test_signals.py"]);
+    assert.match(files[0]!.content, /- fx\/signals\.py\n- tests\/test_signals\.py/);
+    assert.match(files[1]!.content, /contents of fx\/signals\.py at refs\/heads\/feature\/fx/);
+    assert.equal(files[1]!.by, "the repository");
     // The founder's note travels with the service, and commits say whose name they carry.
     assert.match(t.app.platform.services.handbook!(t.agentByRole("cto")), /gh \(read and change a code repository through pull requests\) — [^;]+\[Our repository: acme\/bot — never create another\.\]/);
+  } finally {
+    await t.close();
+    await fake.close();
+  }
+});
+
+// 2026-11-08 (trc_8e3b…): only the newest eight committed files were read back, so the spec, the broker
+// adapter and the signal code committed earlier were judged missing and a fix round re-did them.
+test("every committed file is listed, the ones the contract names are read first, within a size budget", async () => {
+  const fake = await fakeMcp();
+  const mcpConfig = parseMcpConfig({ servers: { gh: { url: fake.url, headers: { Authorization: "Bearer ${GH_TOKEN}" }, grants: ["git"], access: { roles: ["cto"] }, noApproval: ["push_files"] } } }, { GH_TOKEN: KEY });
+  let cto = "";
+  let traceId = "";
+  const t = await createTestApp({
+    overrides: { mcpConfig },
+    brain: async (ctx) => {
+      if (ctx.input.trigger !== "task" || ctx.agent.id !== cto) return done();
+      traceId = ctx.run.traceId;
+      await callTool(ctx, "gh_push_files", { owner: "acme", repo: "bot", branch: "fx", message: "spec", files: [{ path: "docs/fx/spec.md", content: "..." }, { path: "fx/oanda.py", content: "..." }] });
+      const many = Array.from({ length: 28 }, (_, i) => ({ path: `fx/part_${String(i).padStart(2, "0")}.big`, content: "..." }));
+      await callTool(ctx, "gh_push_files", { owner: "acme", repo: "bot", branch: "fx", message: "parts", files: many });
+      return done("Committed.");
+    },
+  });
+  try {
+    await t.app.platform.mcp.start();
+    cto = t.agentByRole("cto").id;
+    rootTask(t, cto, "Write the bot");
+    await t.drain();
+    const files = await t.app.platform.mcp.outsideFiles(traceId, { prefer: ["docs/fx/spec.md states the pairs and the session hours"] });
+    const [list, ...read] = files;
+    assert.equal(list!.display, "acme/bot@fx — committed files");
+    assert.equal(list!.content.split("\n").filter((l) => l.startsWith("- ")).length, 30, "the list names every committed file");
+    assert.equal(read.length, 24);
+    assert.equal(read[0]!.display, "acme/bot@fx:docs/fx/spec.md", "the file the contract names is read first, though committed first");
+    assert.ok(read.some((f) => f.display.endsWith("fx/part_27.big")), "then the newest");
+    assert.ok(!read.some((f) => f.display.endsWith("fx/part_00.big")));
+    assert.ok(read.every((f) => f.content.length <= 2000) && read.some((f) => f.truncated), "each file keeps its share of the budget");
   } finally {
     await t.close();
     await fake.close();

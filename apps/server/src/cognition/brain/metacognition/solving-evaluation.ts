@@ -11,7 +11,7 @@
  * or fail once nothing is left to try (no revision, rollback or escalation).
  */
 import { limitsLine } from "../../../org/capabilities.ts";
-import { EDIT_IN_PLACE_RULE, OUTSIDE_DOC_RULE } from "../../../org/rules.ts";
+import { EDIT_IN_PLACE_RULE, OUTSIDE_DOC_RULE, REPO_SAVED } from "../../../org/rules.ts";
 import type { ModelTier, Task } from "../../../../../../packages/shared/src/index.ts";
 import type { SpanHandle, ToolEffect } from "../../../contracts.ts";
 import { oneOf, str, strArr, unit } from "../../coerce.ts";
@@ -299,15 +299,17 @@ export async function feedback(
     const results = summarizeResults(o.subtasks);
     // The drive's files, plus what was committed to repositories on this objective, read back now
     // (2026-11-08, trc_92d7…: a committed spec was judged missing because only the drive was visible).
-    const outside = (await run.platform.outsideFiles?.(run.ctx.run.traceId).catch(() => [])) ?? [];
-    if (outside.length) span.setAttributes({ "agentco.feedback.repo_files": outside.map((f) => f.display).join(", ") });
-    const files = [...(o.files ?? []), ...outside];
+    const outside = (await run.platform.outsideFiles?.(run.ctx.run.traceId, o.contract?.map((a) => a.text) ?? o.successCriteria).catch(() => [])) ?? [];
+    if (outside.length) span.setAttributes({ "agentco.feedback.repo_files": outside.length });
+    // The checker gets every file read back; the leader's own review a smaller share of them.
+    const checkFiles = [...(o.files ?? []), ...outside];
+    const files = [...(o.files ?? []), ...withinBudget(outside, 24_000)];
     // The platform's own hire records: the evidence for a hire (2026-11-07, trc_005b…: the hirer and
     // the CEO both reviewed a finished hire as "not evidenced" and the CEO re-did work to prove it).
     const hires = run.task ? objectiveHires(run.platform.tasks, run.platform.tasks.get(run.task.id) ?? run.task) : [];
     span.setAttributes({ "agentco.feedback.files": files.map((f) => f.display).join(", "), ...(hires.length ? { "agentco.feedback.hires": hires.length } : {}) });
     // The independent check comes first: the contract and the saved work only (validation.ts).
-    const validation = o.contract?.length ? await validateContract(run, span, { contract: o.contract, files, solution: results.length ? null : o.solution, boardSteps: o.boardSteps ?? [] }) : null;
+    const validation = o.contract?.length ? await validateContract(run, span, { contract: o.contract, files: checkFiles, solution: results.length ? null : o.solution, boardSteps: o.boardSteps ?? [] }) : null;
     const json = await llmJson(run, {
       stage: "metacognition.solving_evaluation.feedback",
       span,
@@ -326,7 +328,9 @@ export async function feedback(
           ? `Subprocess results:\n${results.map((r) => `- [${r.status}] ${oneLine(r.title, 80)}: ${truncate((r.result ?? "").replace(/\s+/g, " "), 400)}`).join("\n")}\n`
           : `Solution:\n${truncate(o.solution ?? "(none)", 2500)}\n`) +
         (files.length
-          ? "Files as saved on disk — this IS the read-back: judge these files themselves, and never ask the author to read a file back, paste it or count its words again:\n" +
+          ? "Files as saved on disk — this IS the read-back: judge these files themselves, and never ask the author to read a file back, paste it or count its words again. " +
+            (outside.length ? REPO_SAVED : "") +
+            "\n" +
             files.map((f) => `=== ${f.display} — saved by ${f.by} (${f.words} words, ${f.lines} lines${f.truncated ? "; shown in part" : ""}) ===\n${f.content}`).join("\n") +
             "\n"
           : "") +
@@ -423,6 +427,13 @@ export function integrateResults(
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/** Files cut to a total size, each keeping its share (the list of committed files always whole). */
+export function withinBudget<T extends ReviewFile>(files: readonly T[], total: number): T[] {
+  if (files.length === 0) return [];
+  const each = Math.max(800, Math.floor(total / files.length));
+  return files.map((f) => (f.content.length <= each || f.display.endsWith("committed files") ? f : { ...f, content: f.content.slice(0, each), truncated: true }));
 }
 
 /**
