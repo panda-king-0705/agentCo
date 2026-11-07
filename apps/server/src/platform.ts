@@ -147,6 +147,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const metrics = new MetricsService(repos, now);
   const drive: SavedFiles = {
     written: (traceId) => repos.spans.filesWritten(traceId),
+    recent: (limit) => workspaces.recentShared(limit),
     read: (agentId, display) => {
       try {
         if (!workspaces.exists(agentId, display)) return null;

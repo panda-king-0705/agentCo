@@ -377,6 +377,8 @@ export interface SavedFiles {
   written(traceId: string): { agentId: string; taskId: string | null; display: string; at: string }[];
   /** The file's current content, or null when it is gone. `agentId` owns `private/…` paths. */
   read(agentId: string, display: string): { content: string; truncated: boolean } | null;
+  /** The company drive's files, newest first (path relative to shared/). */
+  recent(limit: number): { rel: string; chars: number; modified: string }[];
 }
 
 /** Conversation history after context governance (compaction) has been applied. */

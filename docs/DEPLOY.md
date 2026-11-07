@@ -288,6 +288,9 @@ docker exec agentco-agentco-1 node /tmp/archive-files.mjs --apply <traceId> <tra
 docker exec agentco-agentco-1 node /tmp/archive-files.mjs --restore <stamp>-drive        # undo
 ```
 
+Add `--private` to also move the private drafts those objectives wrote. An author still finds their own
+old drafts by plain path, so a stale draft keeps resurfacing until it is archived.
+
 ## Weekly audit
 
 `scripts/audit/company-audit.mjs` prints a read-only JSON audit of the running company: work and stuck

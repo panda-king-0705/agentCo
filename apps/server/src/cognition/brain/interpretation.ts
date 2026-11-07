@@ -94,9 +94,9 @@ export type CandidateName = (typeof Q6_CANDIDATES)[number]["name"];
 export const CANDIDATE_NAMES: readonly CandidateName[] = Q6_CANDIDATES.map((c) => c.name);
 /** How each candidate executes (tuning): subprocess share, direct-solving steps, tier shift. */
 export const Q6_EXECUTION: Record<CandidateName, { subprocessShare: number; directSteps: number; tierShift: -1 | 0 | 1; verify: boolean }> = {
-  high_cost: { subprocessShare: 1, directSteps: 6, tierShift: 1, verify: true },
-  low_cost: { subprocessShare: 1, directSteps: 4, tierShift: -1, verify: false },
-  low_effort: { subprocessShare: 0.5, directSteps: 2, tierShift: -1, verify: false },
+  high_cost: { subprocessShare: 1, directSteps: 8, tierShift: 1, verify: true },
+  low_cost: { subprocessShare: 1, directSteps: 6, tierShift: -1, verify: false },
+  low_effort: { subprocessShare: 0.5, directSteps: 4, tierShift: -1, verify: false },
 };
 export function q6SubprocessCount(candidate: CandidateName, decomposed: number): number {
   if (decomposed <= 0) return 0;

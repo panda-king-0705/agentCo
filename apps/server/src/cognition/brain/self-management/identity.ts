@@ -42,7 +42,7 @@ export interface Drives {
   truthfulGate: number; // 0.6 + 0.3·epistemic
   visionMultiplier: number; // 1 + 0.5·vision·(0.5 + purpose) for vision/OKR-aligned work (Purpose → OKR weighting)
   earlyStopThreshold: number; // 0.25, +0.1 when autonomy is low
-  maxSolveSteps: number; // ≤ 6, shorter when strongly task-driven
+  maxSolveSteps: number; // ≤ 8, shorter when strongly task-driven
   frustrationGate: boolean; // frustration > 0.7 forces the early stop
   /** Notes explaining every modulation, for the trace. */
   notes: string[];
@@ -116,7 +116,9 @@ export function computeDrives(identity: AgentIdentity, affect: AffectState, need
     // Motivation › Purpose → OKR weighting: purpose scales the vision/OKR alignment multiplier.
     visionMultiplier: round(alignmentMultiplier(vision, purpose), 3),
     earlyStopThreshold: round(EARLY_STOP_BASE + (lowAutonomy ? 0.1 : 0), 3),
-    maxSolveSteps: clamp(6 - (taskDriven > 0.7 ? 2 : 0), 2, 6),
+    // 2026-11-07 (test 4): 4 steps were not enough to read three sections and save a page — the
+    // assembler handed in unsaved pages six times. Room for read, write and finish, then a margin.
+    maxSolveSteps: clamp(8 - (taskDriven > 0.7 ? 2 : 0), 4, 8),
     frustrationGate: affect.frustration > FRUSTRATION_LIMIT,
     notes,
   };

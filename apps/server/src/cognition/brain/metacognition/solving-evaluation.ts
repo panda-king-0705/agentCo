@@ -125,7 +125,7 @@ export async function solving(
         `Solve: ${plan.problem}\nSuccess criteria: ${plan.successCriteria.join("; ")}\nApproach (${plan.candidate.replace("_", " ")}): ${exec.verify ? "be thorough and verify your claims" : "be efficient"}.`,
         plan.memory.length ? `What you know:\n${plan.memory.slice(0, 10).join("\n")}` : "",
         guidance.length ? `Guidance you asked for (follow it):\n${guidance.join("\n")}` : "",
-        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it.",
+        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file.",
         `[[context:${JSON.stringify({
           mode: "task",
           agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },
@@ -346,7 +346,15 @@ const REVIEW_MAX_FILES = 6;
  * The files a piece of work saved, newest first, as they are on disk now (one entry per location,
  * capped in count and size) — what Feedback judges instead of asking for a read-back.
  */
-export function reviewFiles(run: BrainRun, writes: { agentId: string; display: string }[]): ReviewFile[] {
+export interface FileCaps {
+  perFile: number;
+  total: number;
+  maxFiles: number;
+}
+
+const REVIEW_CAPS: FileCaps = { perFile: REVIEW_FILE_CHARS, total: REVIEW_TOTAL_CHARS, maxFiles: REVIEW_MAX_FILES };
+
+export function reviewFiles(run: BrainRun, writes: { agentId: string; display: string }[], caps: FileCaps = REVIEW_CAPS): ReviewFile[] {
   const drive = run.platform.drive;
   if (!drive || writes.length === 0) return [];
   const seen = new Set<string>();
@@ -358,19 +366,19 @@ export function reviewFiles(run: BrainRun, writes: { agentId: string; display: s
     seen.add(key);
     const file = drive.read(w.agentId, w.display);
     if (!file) continue;
-    const room = Math.min(REVIEW_FILE_CHARS, REVIEW_TOTAL_CHARS - total);
+    const room = Math.min(caps.perFile, caps.total - total);
     if (room < 500) break;
     const m = measure(file.content);
     const content = file.content.length > room ? file.content.slice(0, room) : file.content;
     total += content.length;
     out.push({ display: w.display, by: run.platform.org.getAgent(w.agentId)?.name ?? w.agentId, content, truncated: file.truncated || content.length < file.content.length, words: m.words, lines: m.lines });
-    if (out.length >= REVIEW_MAX_FILES) break;
+    if (out.length >= caps.maxFiles) break;
   }
   return out;
 }
 
 /** Files saved under these tasks or anywhere below them (a report's own reports included). */
-export function filesUnderTasks(run: BrainRun, roots: Task[]): ReviewFile[] {
+export function filesUnderTasks(run: BrainRun, roots: Task[], caps: FileCaps = REVIEW_CAPS): ReviewFile[] {
   const drive = run.platform.drive;
   const task = run.task;
   if (!drive || !task || roots.length === 0) return [];
@@ -382,6 +390,6 @@ export function filesUnderTasks(run: BrainRun, roots: Task[]): ReviewFile[] {
     ids.add(id);
     for (const c of run.platform.tasks.children(id)) queue.push(c.id);
   }
-  return reviewFiles(run, drive.written(task.traceId).filter((w) => w.taskId !== null && ids.has(w.taskId)));
+  return reviewFiles(run, drive.written(task.traceId).filter((w) => w.taskId !== null && ids.has(w.taskId)), caps);
 }
 

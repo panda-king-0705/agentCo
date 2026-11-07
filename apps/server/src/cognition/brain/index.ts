@@ -796,11 +796,22 @@ export class BrainEngine implements CognitiveEngine {
     if (gate.length === 0 || !gate.every((c) => c.status === "done")) return null;
     const task = run.task!;
     const who = (id: string | null) => run.platform.org.getAgent(id ?? "")?.name ?? "someone";
-    const inputs = parts
-      .filter((c) => c.status === "done")
-      .map((c) => `- T-${c.number} "${truncate(c.title, 80)}" by ${who(c.assigneeId)}: ${truncate(oneLine(c.result ?? ""), 700)}`)
+    const done = parts.filter((c) => c.status === "done");
+    const inputs = done
+      .slice(-8)
+      .map((c) => `- T-${c.number} "${truncate(c.title, 80)}" by ${who(c.assigneeId)}: ${truncate(oneLine(c.result ?? ""), 500)}`)
       .join("\n");
-    const briefed = pending.map((s) => ({ ...s, description: `${s.description}\n\nRound-1 results to work from (their files are on the company drive):\n${inputs}` }));
+    // The current versions of the round-1 files go in the brief itself: the assembler needs no
+    // reading (it spent its steps re-reading files and never saved, 2026-11-07) and cannot pick up
+    // older copies from the drive. Sized to stay inside a task description (20,000 chars).
+    const longest = Math.max(0, ...pending.map((s) => s.description.length));
+    const room = Math.min(12_000, 18_500 - longest - inputs.length);
+    const files = room >= 1500 ? filesUnderTasks(run, done, { perFile: 5000, total: room, maxFiles: 6 }) : [];
+    const attached = files.length
+      ? "\n\nCurrent versions of their files — work from these (older files on the drive are superseded; no need to read these again):\n" +
+        files.map((f) => `=== ${f.display} — by ${f.by} (${f.words} words${f.truncated ? "; shown in part, read the rest with workspace_read_file" : ""}) ===\n${f.content}`).join("\n")
+      : "";
+    const briefed = pending.map((s) => ({ ...s, description: `${s.description}\n\nRound-1 results to work from:\n${inputs}${attached}` }));
     const out = await block(run, "metacognition.solving_evaluation.solving", `Delegating round 2 of T-${task.number}`, async (span) => {
       const r = await delegateParts(run, span, briefed, children.map((c) => c.title));
       span.setAttributes({ "agentco.delegated": r.delegated.length, "agentco.round": 2 });

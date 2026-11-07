@@ -129,6 +129,28 @@ export class Workspaces {
     return entries;
   }
 
+  /** The company drive's files, newest first (dot-folders skipped): what planning sees before naming paths. */
+  recentShared(limit = 25): { rel: string; chars: number; modified: string }[] {
+    const out: { rel: string; chars: number; modifiedMs: number }[] = [];
+    const walk = (dir: string, prefix: string, depth: number) => {
+      if (depth > 6 || !existsSync(dir)) return;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name.startsWith(".")) continue;
+        const abs = join(dir, entry.name);
+        if (entry.isDirectory()) walk(abs, `${prefix}${entry.name}/`, depth + 1);
+        else if (entry.isFile()) {
+          const st = statSync(abs);
+          out.push({ rel: `${prefix}${entry.name}`, chars: st.size, modifiedMs: st.mtimeMs });
+        }
+      }
+    };
+    walk(this.sharedDir(), "", 0);
+    return out
+      .sort((a, b) => b.modifiedMs - a.modifiedMs)
+      .slice(0, limit)
+      .map((f) => ({ rel: f.rel, chars: f.chars, modified: new Date(f.modifiedMs).toISOString() }));
+  }
+
   /** Moves the agent's workspace to workspaces/.terminated/<agentId> (kept for audit). */
   archive(agentId: string): string | null {
     const source = this.agentDir(agentId);
