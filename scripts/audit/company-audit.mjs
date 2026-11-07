@@ -51,7 +51,9 @@ const open = all(`SELECT id, number, title, status, assignee_id, parent_task_id,
 const stuck = open
   .filter((t) => ageH(t.updated_at) >= 24 && (t.status === "blocked" || t.status === "waiting"))
   .map((t) => ({ task: `T-${t.number}`, status: t.status, title: cut(t.title, 100), assignee: agentName[t.assignee_id] ?? t.assignee_id, idleHours: ageH(t.updated_at) }));
-const escalations = all("SELECT id, root_task_id, status, created_at FROM tasks WHERE json_extract(state, '$.kind') = 'escalation' AND created_at >= ?", since);
+// Inputs waits (an agent on hold for a colleague's part) are not escalations; counted separately.
+const escalations = all("SELECT id, root_task_id, status, created_at FROM tasks WHERE json_extract(state, '$.kind') = 'escalation' AND json_extract(state, '$.inputsWait') IS NOT 1 AND created_at >= ?", since);
+const inputWaits = all("SELECT id FROM tasks WHERE json_extract(state, '$.inputsWait') = 1 AND created_at >= ?", since).length;
 const escalationsByRoot = {};
 for (const e of escalations) escalationsByRoot[`T-${taskNo[e.root_task_id]}`] = (escalationsByRoot[`T-${taskNo[e.root_task_id]}`] ?? 0) + 1;
 const createdThisPeriod = one("SELECT COUNT(*) n FROM tasks WHERE created_at >= ?", since).n;
@@ -146,7 +148,7 @@ console.log(
             models: company.models?.tiers ?? company.models,
           },
       metrics: metrics.error ? metrics : { runSuccessRate: metrics.runSuccessRate ?? metrics.successRate, routingSavingsUsd: round(metrics.routingSavingsUsd) },
-      work: { tasksByStatus, createdThisPeriod, doneThisPeriod, failedThisPeriod, openCount: open.length, stuck, escalationsThisPeriod: escalations.length, escalationsByObjective: escalationsByRoot },
+      work: { tasksByStatus, createdThisPeriod, doneThisPeriod, failedThisPeriod, openCount: open.length, stuck, escalationsThisPeriod: escalations.length, escalationsByObjective: escalationsByRoot, inputWaitsThisPeriod: inputWaits },
       board: { pending, decidedThisPeriod: decided, questionsAskedThisPeriod: questionsAsked },
       runs: { thisPeriod: runs.length, byStatus: runStatus, topErrors: Object.entries(runErrors).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([error, count]) => ({ error, count })), llmCalls, modelErrors },
       spend,

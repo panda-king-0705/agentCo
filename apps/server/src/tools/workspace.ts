@@ -1,10 +1,19 @@
 /**
- * Agent workspaces: data/workspaces/<agentId>/ (private) and
- * data/workspaces/shared/ (company drive, addressed as `shared/...`).
- * Every path is resolved and checked to stay inside its root (traversal,
- * absolute paths, NUL bytes and symlink escapes are rejected).
+ * Agent workspaces: data/workspaces/shared/ (the company drive) and
+ * data/workspaces/<agentId>/ (private notes).
+ *
+ * Paths are addressed as `shared/…` (company drive), `private/…` (the agent's own notes) or plain
+ * `…`, which means the COMPANY DRIVE: work files are visible to colleagues by default, so a brief
+ * that says "save launch-plan/x.md" lands where the person assembling it will look (2026-11-07,
+ * T-171: four executives saved their sections privately and the assembler never found them).
+ * A plain path that is not on the drive but exists in the agent's private folder (written before
+ * the default changed) is still found by read/exists/list.
+ *
+ * Overwriting a file keeps the previous version under <root>/.history/ (hidden from listings).
+ * Every path is resolved and checked to stay inside its root (traversal, absolute paths, NUL bytes
+ * and symlink escapes are rejected).
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const MAX_FILE_BYTES = 200_000;
@@ -40,51 +49,82 @@ export class Workspaces {
     return dir;
   }
 
-  /** Resolves a model-supplied path to an absolute path inside the right root, or throws WorkspaceError. */
-  resolve(agentId: string, input: string): { base: string; absolute: string; display: string } {
-    const raw = String(input ?? "").trim();
+  /**
+   * Resolves a model-supplied path to an absolute path inside the right root, or throws WorkspaceError.
+   * `shared/…` → company drive, `private/…` → the agent's own folder, anything else → company drive
+   * (`explicit: false`, so reads can still fall back to a legacy private file).
+   */
+  resolve(agentId: string, input: string): ResolvedPath {
+    const raw = String(input ?? "").trim().replace(/^\.\/+/, "");
     if (raw.includes("\0")) throw new WorkspaceError("path contains a NUL byte");
     if (raw.includes("\\")) throw new WorkspaceError("use forward slashes in paths");
     if (isAbsolute(raw)) throw new WorkspaceError("absolute paths are not allowed; use a path relative to your workspace");
-    const shared = raw === "shared" || raw.startsWith("shared/");
-    const base = shared ? this.sharedDir() : this.ensure(agentId);
+    const prefix = /^(shared|private)(\/|$)/.exec(raw)?.[1] as "shared" | "private" | undefined;
+    const area: Area = prefix === "private" ? "private" : "shared";
+    const base = area === "private" ? this.ensure(agentId) : this.sharedDir();
     mkdirSync(base, { recursive: true });
-    const rest = shared ? raw.slice("shared".length).replace(/^\/+/, "") : raw;
+    const rest = (prefix ? raw.slice(prefix.length) : raw).replace(/^\/+/, "");
     const absolute = resolve(base, rest || ".");
     if (absolute !== base && !absolute.startsWith(base + sep)) throw new WorkspaceError(`path escapes the workspace: ${raw}`);
     assertNoSymlinkEscape(base, absolute);
-    return { base, absolute, display: (shared ? "shared/" : "") + relative(base, absolute) };
+    const rel = relative(base, absolute).split(sep).join("/");
+    return { base, absolute, area, explicit: !!prefix, rel, display: `${area}/${rel}` };
   }
 
-  write(agentId: string, path: string, content: string): string {
+  /** Where a file at `path` actually is: the drive, or (plain path, legacy) the agent's private folder. */
+  locate(agentId: string, path: string): ResolvedPath {
+    const target = this.resolve(agentId, path);
+    if (target.explicit || isFile(target.absolute)) return target;
+    const legacy = this.resolve(agentId, `private/${target.rel}`);
+    return isFile(legacy.absolute) ? legacy : target;
+  }
+
+  /** Writes the file (company drive unless the path says private/); the previous version is kept in .history/. */
+  write(agentId: string, path: string, content: string): { display: string; area: Area; replaced: boolean } {
     const bytes = Buffer.byteLength(content, "utf8");
     if (bytes > MAX_FILE_BYTES) throw new WorkspaceError(`file too large (${bytes} bytes > ${MAX_FILE_BYTES})`);
     const target = this.resolve(agentId, path);
     if (target.absolute === target.base) throw new WorkspaceError("a file path is required");
+    if (target.rel.split("/").some((part) => part.startsWith("."))) throw new WorkspaceError("file and folder names must not start with a dot");
     mkdirSync(dirname(target.absolute), { recursive: true });
+    let replaced = false;
+    if (isFile(target.absolute)) {
+      if (readFileSync(target.absolute, "utf8") === content) return { display: target.display, area: target.area, replaced: false };
+      const kept = join(target.base, ".history", `${target.rel}.${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      mkdirSync(dirname(kept), { recursive: true });
+      copyFileSync(target.absolute, kept);
+      replaced = true;
+    }
     writeFileSync(target.absolute, content, "utf8");
-    return target.display;
+    return { display: target.display, area: target.area, replaced };
   }
 
   /** Whether a file exists at the path (an invalid path throws, as for read). */
   exists(agentId: string, path: string): boolean {
-    const target = this.resolve(agentId, path);
-    return existsSync(target.absolute) && statSync(target.absolute).isFile();
+    return isFile(this.locate(agentId, path).absolute);
   }
 
-  read(agentId: string, path: string): { content: string; truncated: boolean } {
-    const target = this.resolve(agentId, path);
-    if (!existsSync(target.absolute) || !statSync(target.absolute).isFile()) throw new WorkspaceError(`no such file: ${path}`);
+  read(agentId: string, path: string): { content: string; truncated: boolean; display: string } {
+    const target = this.locate(agentId, path);
+    if (!isFile(target.absolute)) throw new WorkspaceError(`no such file: ${path}`);
     const content = readFileSync(target.absolute, "utf8");
-    return content.length > MAX_READ_CHARS ? { content: content.slice(0, MAX_READ_CHARS), truncated: true } : { content, truncated: false };
+    return content.length > MAX_READ_CHARS ? { content: content.slice(0, MAX_READ_CHARS), truncated: true, display: target.display } : { content, truncated: false, display: target.display };
   }
 
+  /**
+   * Entries of a directory ("x/" for folders). The root ("", "shared") lists the company drive plus
+   * "private/" when the agent has private notes; a plain folder missing from the drive falls back to
+   * the agent's private folder of that name (legacy). Dot-entries (.history) are hidden.
+   */
   list(agentId: string, dir = ""): string[] {
     const target = this.resolve(agentId, dir);
-    if (!existsSync(target.absolute)) return [];
-    return readdirSync(target.absolute, { withFileTypes: true })
-      .map((entry) => (entry.isDirectory() ? entry.name + "/" : entry.name))
-      .sort();
+    let entries = entriesOf(target.absolute);
+    if (!target.explicit && target.rel === "") {
+      if (entriesOf(this.agentDir(agentId)).length > 0) entries = [...entries, "private/"];
+    } else if (!target.explicit && entries.length === 0) {
+      entries = entriesOf(this.resolve(agentId, `private/${target.rel}`).absolute);
+    }
+    return entries;
   }
 
   /** Moves the agent's workspace to workspaces/.terminated/<agentId> (kept for audit). */
@@ -98,6 +138,32 @@ export class Workspaces {
     renameSync(source, target);
     return target;
   }
+}
+
+type Area = "shared" | "private";
+
+export interface ResolvedPath {
+  base: string;
+  absolute: string;
+  area: Area;
+  /** The path named its area (shared/… or private/…). */
+  explicit: boolean;
+  /** Path relative to the area's root, forward slashes ("" = the root). */
+  rel: string;
+  /** How tools show it: "shared/x/y.md" or "private/x.md". */
+  display: string;
+}
+
+function isFile(path: string): boolean {
+  return existsSync(path) && statSync(path).isFile();
+}
+
+function entriesOf(dir: string): string[] {
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => !entry.name.startsWith("."))
+    .map((entry) => (entry.isDirectory() ? entry.name + "/" : entry.name))
+    .sort();
 }
 
 function assertNoSymlinkEscape(base: string, absolute: string): void {

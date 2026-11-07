@@ -11,7 +11,7 @@
  * or fail once nothing is left to try (no revision, rollback or escalation).
  */
 import type { ModelTier, Task } from "../../../../../../packages/shared/src/index.ts";
-import type { ToolEffect } from "../../../contracts.ts";
+import type { SpanHandle, ToolEffect } from "../../../contracts.ts";
 import { oneOf, str, strArr, unit } from "../../coerce.ts";
 import { oneLine, truncate } from "../../text.ts";
 import { ESCALATION_TOOLS, runToolLoop } from "../../tool-loop.ts";
@@ -42,6 +42,8 @@ export function guidanceLines(run: BrainRun): string[] {
   const lines: string[] = [];
   const esc = run.wm.escalationAnswer;
   if (typeof esc === "string" && esc.trim()) lines.push(`Answer from your manager: ${truncate(esc, 600)}`);
+  const inputs = run.wm.inputsReady;
+  if (typeof inputs === "string" && inputs.trim()) lines.push(truncate(inputs, 2400));
   const board = run.wm.boardAnswer as { status?: unknown; note?: unknown } | undefined;
   if (board && typeof board === "object") lines.push(`Answer from the Board (${String(board.status ?? "decided")}): ${truncate(typeof board.note === "string" && board.note ? board.note : "(no note)", 600)}`);
   return lines;
@@ -49,6 +51,38 @@ export function guidanceLines(run: BrainRun): string[] {
 
 function normTitle(t: string): string {
   return t.trim().toLowerCase();
+}
+
+/**
+ * delegate_task for each part (one delegation span each), skipping parts without an assignee and
+ * titles already delegated. Sets `taskId` on each delegated part.
+ */
+export async function delegateParts(run: BrainRun, span: SpanHandle, parts: Subprocess[], existingTitles: string[]): Promise<{ delegated: Subprocess[]; effects: ToolEffect[] }> {
+  const existing = new Set(existingTitles.map(normTitle));
+  const delegated: Subprocess[] = [];
+  const effects: ToolEffect[] = [];
+  for (const sp of parts) {
+    if (!sp.assigneeId) continue;
+    if (existing.has(normTitle(sp.title))) continue; // never duplicate a subtask
+    const name = run.platform.org.getAgent(sp.assigneeId)?.name ?? sp.assigneeId;
+    run.platform.agents.setActivity(run.agent.id, "acting", `Delegating "${truncate(sp.title, 50)}" to ${name}`, "metacognition.solving_evaluation.solving");
+    const r = await run.platform.tools.execute(
+      {
+        id: `delegate_${run.ctx.run.id}_${delegated.length}`,
+        name: "delegate_task",
+        arguments: { assigneeId: sp.assigneeId, title: sp.title, description: sp.description, acceptanceCriteria: sp.acceptanceCriteria, value: sp.value, estCostUsd: sp.estCostUsd },
+      },
+      toolContext(run, span),
+    );
+    effects.push(...r.effects);
+    const created = r.effects.find((e): e is Extract<ToolEffect, { kind: "task_created" }> => e.kind === "task_created");
+    if (r.ok && created) {
+      sp.taskId = created.taskId;
+      delegated.push(sp);
+      existing.add(normTitle(sp.title));
+    }
+  }
+  return { delegated, effects };
 }
 
 /** Block: Solving. */
@@ -64,33 +98,16 @@ export async function solving(
     plan.mode === "delegate" ? `Delegating T-${task.number}` : `Working on T-${task.number}`,
     async (span) => {
       if (plan.mode === "delegate") {
-        const count = q6SubprocessCount(plan.candidate, plan.subprocesses.length);
-        const chosen = [...plan.subprocesses].sort((a, b) => b.value / Math.max(b.estCostUsd, 0.01) - a.value / Math.max(a.estCostUsd, 0.01)).slice(0, count);
-        const existing = new Set(plan.existingTitles.map(normTitle));
-        const delegated: Subprocess[] = [];
-        const effects: ToolEffect[] = [];
-        for (const sp of chosen) {
-          if (!sp.assigneeId) continue;
-          if (existing.has(normTitle(sp.title))) continue; // never duplicate a subtask
-          const name = run.platform.org.getAgent(sp.assigneeId)?.name ?? sp.assigneeId;
-          run.platform.agents.setActivity(run.agent.id, "acting", `Delegating "${truncate(sp.title, 50)}" to ${name}`, "metacognition.solving_evaluation.solving");
-          const r = await run.platform.tools.execute(
-            {
-              id: `delegate_${run.ctx.run.id}_${delegated.length}`,
-              name: "delegate_task",
-              arguments: { assigneeId: sp.assigneeId, title: sp.title, description: sp.description, acceptanceCriteria: sp.acceptanceCriteria, value: sp.value, estCostUsd: sp.estCostUsd },
-            },
-            toolContext(run, span),
-          );
-          effects.push(...r.effects);
-          const created = r.effects.find((e): e is Extract<ToolEffect, { kind: "task_created" }> => e.kind === "task_created");
-          if (r.ok && created) {
-            sp.taskId = created.taskId;
-            delegated.push(sp);
-            existing.add(normTitle(sp.title));
-          }
-        }
-        span.setAttributes({ "agentco.delegated": delegated.length, "agentco.candidate": plan.candidate });
+        // Round 1 now; round-2 steps (assembly, review) wait for round 1's results (index.ts).
+        const firstRound = plan.subprocesses.filter((s) => s.round !== 2);
+        const pool = firstRound.length > 0 ? firstRound : plan.subprocesses;
+        const named = pool.filter((s) => s.named);
+        const others = pool.filter((s) => !s.named).sort((a, b) => b.value / Math.max(b.estCostUsd, 0.01) - a.value / Math.max(a.estCostUsd, 0.01));
+        // The candidate's share trims optional parts, never a part for an owner the request names.
+        const count = Math.max(q6SubprocessCount(plan.candidate, pool.length), named.length);
+        const chosen = [...named, ...others].slice(0, count);
+        const { delegated, effects } = await delegateParts(run, span, chosen, plan.existingTitles);
+        span.setAttributes({ "agentco.delegated": delegated.length, "agentco.candidate": plan.candidate, "agentco.round2_pending": plan.subprocesses.filter((s) => s.round === 2 && !s.taskId).length });
         if (delegated.length > 0) return { kind: "waiting" as const, text: `Delegated ${delegated.length} subprocess(es).`, delegated, effects };
         // Nothing could be delegated: fall through to solving it directly.
       }
@@ -107,7 +124,7 @@ export async function solving(
         `Solve: ${plan.problem}\nSuccess criteria: ${plan.successCriteria.join("; ")}\nApproach (${plan.candidate.replace("_", " ")}): ${exec.verify ? "be thorough and verify your claims" : "be efficient"}.`,
         plan.memory.length ? `What you know:\n${plan.memory.slice(0, 10).join("\n")}` : "",
         guidance.length ? `Guidance you asked for (follow it):\n${guidance.join("\n")}` : "",
-        "Use your tools if useful (save substantial documents under shared/<your-department>/), then call complete_task with the full result.",
+        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective.",
         `[[context:${JSON.stringify({
           mode: "task",
           agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },

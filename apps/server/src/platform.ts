@@ -135,7 +135,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
     now,
   };
   const handbook = (agent: Agent | null) => buildHandbook(handbookSource, agent);
-  tools.bind({ config, org, tasks, approvals, conversations, memory, workspaces, company, tracer, catalog, handbook });
+  tools.bind({ config, org, tasks, approvals, conversations, memory, workspaces, company, tracer, catalog, handbook, traceFiles: (traceId) => repos.spans.filesWritten(traceId) });
 
   const modelConfig = overrides.createRouter && overrides.modelsInfo ? null : loadModelConfig(env);
   const routerDeps: ModelRouterDeps = { config: modelConfig, tracer, budget, getAgent: (id) => org.getAgent(id) };

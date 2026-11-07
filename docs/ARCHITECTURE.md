@@ -274,7 +274,7 @@ answered, the task is not escalated again (BRAIN.md → escalation budget).
 | `memory_search {query, scope?, kind?, limit?}` | all | ranked memories |
 | `memory_write {content, kind, scope, tags?}` | all (global semantic/procedural: managers+) | stored + `memory.written` event |
 | `blackboard_read {key?}` / `blackboard_write {key, value}` | all / managers+ | global working memory |
-| `workspace_write_file {path, content}` / `workspace_read_file {path}` / `workspace_list {dir?}` | all | own workspace; `shared/…` paths go to the company drive; path traversal rejected |
+| `workspace_write_file {path, content}` / `workspace_read_file {path}` / `workspace_list {dir?}` | all | a plain path or `shared/…` is the company drive (colleagues can read it); `private/…` is the agent's own folder. A missed read returns the file a teammate saved under that path or name on the same objective (trace), with a note on where it is. Overwrites keep the previous version in `.history/`. Path traversal is rejected. |
 | `hire_agent {roleId?, title, departmentId, managerId, tier, justification}` | executives | approval or direct create (policy) |
 | `web_fetch {url}` | opt-in (`WEB_FETCH_ENABLED`) | GET, text only, 20 kB cap |
 

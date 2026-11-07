@@ -9,7 +9,8 @@
  * Priority = value / max(estCostUsd, 0.01). Root tasks get a fresh traceId and
  * an `objective` span; subtasks inherit the trace. Platform-owned keys in
  * task.state: objectiveSpanId, delegationSpanId, nextTrigger, recovery,
- * blockedOnApprovalId, answeredApprovalId, emptyWaits.
+ * blockedOnApprovalId, answeredApprovalId, emptyWaits; on an "inputs wait" subtask (tasks/inputs.ts)
+ * inputsWait and waitFor, and on the task that waits, waitedForInputs.
  */
 import type { Approval, ArchiveResult, CreateTaskInput, RunTrigger, Task, TaskStatus } from "../../../../packages/shared/src/index.ts";
 import type { CreateObjectiveInput, TaskView } from "../contracts.ts";
@@ -24,6 +25,7 @@ import type { TracerImpl } from "../middleware/tracer.ts";
 import type { OrgService } from "../org/service.ts";
 import type { ConversationService } from "../runs/conversations.ts";
 import type { TaskFilter } from "../db/repo-work.ts";
+import { isInputsWait, MAX_INPUT_WAITS, waitableInputs, waitDescription, waitResult, waitTitle } from "./inputs.ts";
 
 export const TERMINAL: ReadonlySet<TaskStatus> = new Set(["done", "failed", "cancelled"]);
 export const DEFAULT_MAX_ATTEMPTS = 2;
@@ -111,6 +113,67 @@ export class TaskService implements TaskView {
 
   children(id: string): Task[] {
     return this.deps.repos.tasks.children(id);
+  }
+
+  // ───────────── waiting for colleagues' inputs (tasks/inputs.ts) ─────────────
+
+  /**
+   * Colleague work on the same objective that `agentId`, stuck on `task`, could wait for instead of
+   * escalating — empty when the task already waited (MAX_INPUT_WAITS) or nothing relevant is open.
+   */
+  openInputs(task: Task, agentId: string, text: string): Task[] {
+    if (Number(task.state.waitedForInputs ?? 0) >= MAX_INPUT_WAITS) return [];
+    const all = this.deps.repos.tasks.list({ rootTaskId: task.rootTaskId, limit: 2000 });
+    return waitableInputs(all, task, agentId, text, (id) => this.deps.org.getAgent(id));
+  }
+
+  /**
+   * Puts `caller` on hold for `deps`: an inputs-wait subtask (status waiting, kind "escalation" so the
+   * engines treat its result like an answer), completed by the platform when every dep is finished.
+   */
+  createInputWait(caller: Task, askerId: string, deps: Task[], reason: string): Task {
+    const asker = this.activeAssignee(askerId);
+    const agentOf = (id: string) => this.deps.org.getAgent(id);
+    const id = newId("tsk");
+    const wait = this.buildTask({
+      id,
+      traceId: caller.traceId,
+      parentTaskId: caller.id,
+      rootTaskId: caller.rootTaskId,
+      title: waitTitle(deps, agentOf),
+      description: waitDescription(caller, asker, deps, reason, agentOf),
+      createdBy: asker.id,
+      assigneeId: asker.id,
+      departmentId: asker.departmentId,
+      value: 1,
+      estCostUsd: 0,
+      originConversationId: null,
+      state: { kind: "escalation", inputsWait: true, escalatedBy: asker.id, waitFor: deps.map((t) => t.id) },
+    });
+    wait.status = "waiting";
+    wait.startedAt = this.iso();
+    this.insert(wait);
+    this.patchState(caller.id, { waitedForInputs: Number(caller.state.waitedForInputs ?? 0) + 1 });
+    // Finished in the meantime (same tick): settle now rather than wait for an event that already passed.
+    this.settleInputWait(wait);
+    return this.require(id);
+  }
+
+  /** Completes an inputs wait whose awaited tasks are all finished (no-op otherwise). */
+  private settleInputWait(wait: Task): void {
+    if (wait.status !== "waiting" || !isInputsWait(wait)) return;
+    const ids = Array.isArray(wait.state.waitFor) ? (wait.state.waitFor as unknown[]).map(String) : [];
+    const deps = ids.map((id) => this.get(id)).filter((t): t is Task => !!t);
+    if (deps.some((t) => !TERMINAL.has(t.status))) return;
+    this.complete(wait.id, waitResult(deps, (id) => this.deps.org.getAgent(id)));
+  }
+
+  /** A task finished: settle every inputs wait on the same objective that was waiting for it. */
+  private settleWaitsFor(finished: Task): void {
+    const waits = this.deps.repos.tasks
+      .list({ rootTaskId: finished.rootTaskId, status: "waiting", limit: 500 })
+      .filter((t) => isInputsWait(t) && Array.isArray(t.state.waitFor) && (t.state.waitFor as unknown[]).includes(finished.id));
+    for (const w of waits) this.settleInputWait(w);
   }
 
   // ───────────── creation ─────────────
@@ -403,6 +466,7 @@ export class TaskService implements TaskView {
   }
 
   private afterTerminal(task: Task): void {
+    if (!isInputsWait(task)) this.settleWaitsFor(task);
     if (task.parentTaskId) this.maybeWakeParent(task.parentTaskId);
     else this.endObjectiveSpans(task);
     for (const listener of this.terminalListeners) {

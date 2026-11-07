@@ -11,6 +11,7 @@ import type { ApprovalService } from "../tasks/approvals.ts";
 import type { TaskService } from "../tasks/service.ts";
 import type { Workspaces } from "./workspace.ts";
 import type { Catalog } from "../catalog/service.ts";
+import type { FileWrite } from "../db/repo-trace.ts";
 
 export interface ToolServices {
   config: AppConfig;
@@ -26,6 +27,8 @@ export interface ToolServices {
   catalog?: Catalog;
   /** The company handbook for an agent (company_handbook); optional for test wiring. */
   handbook?: (agent: Agent | null) => string;
+  /** Files saved on an objective (trace), oldest first — the file tools' "who saved what" lookup; optional for test wiring. */
+  traceFiles?: (traceId: string) => FileWrite[];
 }
 
 export interface ToolRunContext extends ToolCallContext {

@@ -6,6 +6,31 @@ versioning: [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Test 4 (a one-page plan split across four executives) cost $4.59 over 13 tasks and produced no
+  page. Five fixes:
+  - **Files are shared by default.** A plain path (`launch-plan/gtm.md`) now saves on the company
+    drive, where colleagues can read it; `private/…` is for scratch notes. Before, every section
+    went to its author's private folder and the assembler never found them. Saving over a file
+    keeps the previous version (`.history/`, hidden).
+  - **A missed read finds a teammate's file.** When a file isn't at the path asked for, the file
+    tools look at what was saved on the same objective, including older private files and the same
+    file name under another folder, and return it with a note on where it is. `workspace_list` and a
+    miss also list what has been saved on the objective so far.
+  - **Every owner the request names gets a part.** The plan cap is at least the number of named
+    owners, plus one for an assembly step. The Low Effort candidate no longer trims a named
+    owner's part. The leader's own department name ("executive summary") no longer counts as naming
+    someone; a full name does.
+  - **Assembling and reviewing come in a second round.** A part that works on other parts' output
+    (`"round": 2`, or titled e.g. "Assemble the sections") is handed out only when every round-1
+    part is done, with their results in its brief.
+  - **Waiting instead of escalating.** If someone escalates (or reports a blocker) about a
+    colleague's part on the same objective that is still in progress, they go on hold ("Waiting for
+    T-176 (Kenji Tanaka)"). They resume with that colleague's result when it is finished: no
+    manager run and no escalation budget used. A brain blocked twice in one run escalates instead of
+    re-planning the same blocker again.
+- The out-of-steps wrap-up call (which has no tools) told the model to "finish with
+  complete_task", and a worker answered that complete_task was not among its tools. It now says
+  the plain-text reply is the result.
 - Console showed cancelled tasks "In progress" and stale agent states: on load it seeded its event
   position from the OLDEST events and replayed days-old updates over the current state.
   `/api/events` without `since` now returns the newest events, and the console ignores updates

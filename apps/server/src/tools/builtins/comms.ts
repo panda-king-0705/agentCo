@@ -142,6 +142,18 @@ export const escalate: ToolDefinition = {
     const reason = String(args.reason);
     const question = String(args.question);
     const task = ctx.taskId ? tasks.get(ctx.taskId) : null;
+    // Stuck on a colleague's part that is still being done? Wait for it instead of escalating
+    // (tasks/inputs.ts): resumed with their results when they finish, no manager run needed.
+    const awaited = task ? tasks.openInputs(task, ctx.agent.id, `${reason}\n${question}`) : [];
+    if (task && awaited.length > 0) {
+      const wait = tasks.createInputWait(task, ctx.agent.id, awaited, reason);
+      ctx.span.setAttributes({ "agentco.escalation.deferred": awaited.map((t) => `T-${t.number}`).join(",") });
+      const list = awaited.map((t) => `T-${t.number} "${t.title}" (${org.getAgent(t.assigneeId ?? "")?.name ?? "?"}, ${t.status.replace("_", " ")})`).join("; ");
+      return ok(
+        `Not escalated: colleagues are still working on this objective — ${list}. You are on hold as T-${wait.number} and will be resumed with their results when they finish. Return outcome "waiting".`,
+        [{ kind: "task_created", taskId: wait.id, assigneeId: ctx.agent.id }],
+      );
+    }
     const content = `Escalation${task ? ` on T-${task.number} "${task.title}"` : ""}: ${reason}\nQuestion: ${question}`;
     const effects: ToolEffect[] = [];
     let created: { id: string; number: number } | null = null;
