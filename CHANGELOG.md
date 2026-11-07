@@ -6,6 +6,10 @@ versioning: [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Main stays yours.** On a connection that grants git access, any change aimed straight at `main` or
+  `master` goes to Approvals first, even for tools allowed to run without approval
+  (`protectBranches`, default on). GitHub can't protect a private repository's main branch on the free
+  plan; this works either way. Engineers work on their own branch and open pull requests.
 - **Connections (MCP servers).** Agents can use tools from MCP servers configured in
   `config/mcp.json` on the PC (examples: Firecrawl, GitHub, FMP; keys in `.env`). Each server's tools
   go only to the roles, agents, departments or specialist roles it names. Tools that only read run
