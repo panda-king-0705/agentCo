@@ -588,7 +588,12 @@ export class RunService implements RunControl {
     const { run } = active;
     if (!agent || !run.conversationId) return;
     const reply = (text: string): void => {
-      conversations.postAs(run.conversationId as string, agent.id, text.slice(0, MAX_MESSAGE_CHARS), { runId: run.id, traceId: run.traceId });
+      try {
+        conversations.postAs(run.conversationId as string, agent.id, text.slice(0, MAX_MESSAGE_CHARS), { runId: run.id, traceId: run.traceId });
+      } catch (err) {
+        // e.g. the agent was removed while the run was finishing: it may no longer speak.
+        console.error("[runs] could not post the reply:", err instanceof Error ? err.message : err);
+      }
     };
     if (reason) {
       // An abort that is not the message's fault puts it back in the queue; destroy/interrupt leave it answered.

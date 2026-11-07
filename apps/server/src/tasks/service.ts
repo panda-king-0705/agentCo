@@ -508,7 +508,7 @@ export class TaskService implements TaskView {
   private escalateFailure(task: Task): void {
     const assignee = task.assigneeId ? this.deps.org.getAgent(task.assigneeId) : null;
     const manager = assignee?.managerId ? this.deps.org.getAgent(assignee.managerId) : null;
-    if (!assignee || !manager || manager.status === "terminated") return;
+    if (!assignee || !manager || manager.status === "terminated" || assignee.status === "terminated") return;
     const content = `Escalation: ${taskRef(task)} failed after ${task.attempts} attempt(s). Last error: ${task.error ?? "unknown"}. Please decide how to proceed.`;
     this.deps.conversations.sendAgentMessage(assignee, manager, content, { taskId: task.id, traceId: task.traceId });
   }

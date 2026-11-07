@@ -10,8 +10,20 @@ import { PageHead, byTier, liveAgents } from "./common";
 
 function convLabel(c: Conversation, agents: Record<string, Agent>): string {
   if (c.kind === "boardroom") return "Boardroom";
-  const others = c.participantIds.filter((p) => p !== "human").map((p) => agents[p]?.name ?? p);
+  const others = c.participantIds.filter((p) => p !== "human").map((p) => (agents[p] ? `${agents[p]!.name}${agents[p]!.status === "terminated" ? " (removed)" : ""}` : p));
   return others.join(" and ") || c.title;
+}
+
+/**
+ * Why the Board cannot write in this thread, or null when it can: agent-to-agent threads are
+ * read-only, and a removed agent's thread is kept for the record but closed (2026-11-07).
+ */
+function closedReason(c: Conversation | undefined, agents: Record<string, Agent>): string | null {
+  if (!c) return null;
+  const removed = c.participantIds.map((p) => agents[p]).filter((a): a is Agent => !!a && a.status === "terminated");
+  if (removed.length) return `${removed.map((a) => a.name).join(" and ")} ${removed.length === 1 ? "was" : "were"} removed. This conversation is kept for the record; no new messages can be sent or received.`;
+  if (c.kind === "agent_dm") return "A conversation between agents: you can read it, but only they can write here.";
+  return null;
 }
 
 function ThinkingIndicator({ conversation }: { conversation: Conversation }) {
@@ -42,7 +54,7 @@ function MessageRow({ m }: { m: Message }) {
   const agent = useLive((s) => (m.senderId !== "human" && m.senderId !== "system" ? s.agents[m.senderId] : undefined));
   const task = useLive((s) => (m.taskId ? s.tasks[m.taskId] : undefined));
   const mine = m.senderId === "human";
-  const name = mine ? "Board" : m.senderId === "system" ? "System" : agent?.name ?? m.senderId;
+  const name = mine ? "Board" : m.senderId === "system" ? "System" : agent ? `${agent.name}${agent.status === "terminated" ? " (removed)" : ""}` : m.senderId;
   return (
     <div className={`msg${mine ? " mine" : ""}${m.senderId === "system" ? " sys" : ""}`}>
       <Avatar agent={agent} id={m.senderId} size={28} />
@@ -73,6 +85,8 @@ export function ChatThread({ conversationId, conversation }: { conversationId: s
   const endRef = useRef<HTMLDivElement>(null);
   const convs = useApi("conversations", () => api.conversations(), { refreshOn: ["message.created"] });
   const conv = conversation ?? convs.data?.find((c) => c.id === conversationId);
+  const agents = useLive((s) => s.agents);
+  const closed = closedReason(conv, agents);
 
   useEffect(() => {
     let off = false;
@@ -112,6 +126,11 @@ export function ChatThread({ conversationId, conversation }: { conversationId: s
         {conv ? <ThinkingIndicator conversation={conv} /> : null}
         <div ref={endRef} />
       </div>
+      {closed ? (
+        <div className="composer closed muted small" role="note">
+          <Icon name="alert" size={14} /> {closed}
+        </div>
+      ) : (
       <form
         className="composer"
         onSubmit={(e) => {
@@ -134,6 +153,7 @@ export function ChatThread({ conversationId, conversation }: { conversationId: s
         />
         <Button variant="primary" icon="send" type="submit" disabled={!text.trim() || busy}>Send</Button>
       </form>
+      )}
     </div>
   );
 }
