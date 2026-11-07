@@ -111,6 +111,8 @@ export function describeToolCall(call: ToolCall, ctx: Pick<EngineContext, "platf
   switch (call.name) {
     case "workspace_write_file":
       return `Writing ${s("path") || "a file"}`;
+    case "workspace_edit_file":
+      return `Editing ${s("path") || "a file"}`;
     case "workspace_read_file":
       return `Reading ${s("path") || "a file"}`;
     case "workspace_list":

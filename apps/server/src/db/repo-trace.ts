@@ -46,14 +46,14 @@ export class SpanRepo {
   }
 
   /**
-   * Files saved with workspace_write_file in a trace (an objective), oldest first: who wrote what,
+   * Files saved with workspace_write_file (or changed with workspace_edit_file) in a trace (an objective), oldest first: who wrote what,
    * where. New spans carry agentco.file.path; older ones are parsed from "Wrote <path> (…)." — a
    * path without an area prefix was written before the drive became the default, i.e. privately.
    */
   filesWritten(traceId: string): FileWrite[] {
     const rows = all(
       this.db,
-      "SELECT agent_id, task_id, output, attributes, started_at FROM spans WHERE trace_id = ? AND kind = 'tool' AND name = 'tool.workspace_write_file' AND status = 'ok' ORDER BY started_at, rowid",
+      "SELECT agent_id, task_id, output, attributes, started_at FROM spans WHERE trace_id = ? AND kind = 'tool' AND name IN ('tool.workspace_write_file', 'tool.workspace_edit_file') AND status = 'ok' ORDER BY started_at, rowid",
       traceId,
     );
     const out: FileWrite[] = [];

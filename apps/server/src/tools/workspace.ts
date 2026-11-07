@@ -14,7 +14,7 @@
  * and symlink escapes are rejected).
  */
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const MAX_FILE_BYTES = 200_000;
 export const MAX_READ_CHARS = 20_000;
@@ -80,7 +80,7 @@ export class Workspaces {
   }
 
   /** Writes the file (company drive unless the path says private/); the previous version is kept in .history/. */
-  write(agentId: string, path: string, content: string): { display: string; area: Area; replaced: boolean } {
+  write(agentId: string, path: string, content: string): { display: string; area: Area; replaced: boolean; previous: string | null } {
     const bytes = Buffer.byteLength(content, "utf8");
     if (bytes > MAX_FILE_BYTES) throw new WorkspaceError(`file too large (${bytes} bytes > ${MAX_FILE_BYTES})`);
     const target = this.resolve(agentId, path);
@@ -88,9 +88,15 @@ export class Workspaces {
     if (target.rel.split("/").some((part) => part.startsWith("."))) throw new WorkspaceError("file and folder names must not start with a dot");
     mkdirSync(dirname(target.absolute), { recursive: true });
     let replaced = false;
+    let previous: string | null = null;
     if (isFile(target.absolute)) {
-      if (readFileSync(target.absolute, "utf8") === content) return { display: target.display, area: target.area, replaced: false };
-      const kept = join(target.base, ".history", `${target.rel}.${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      previous = readFileSync(target.absolute, "utf8");
+      if (previous === content) return { display: target.display, area: target.area, replaced: false, previous };
+      // One file per version, even for two saves in the same millisecond (versions are read back by age).
+      const keptAt = (ms: number) => join(target.base, ".history", `${target.rel}.${new Date(ms).toISOString().replace(/[:.]/g, "-")}`);
+      let ms = Date.now();
+      while (existsSync(keptAt(ms))) ms++;
+      const kept = keptAt(ms);
       mkdirSync(dirname(kept), { recursive: true });
       copyFileSync(target.absolute, kept);
       replaced = true;
@@ -98,14 +104,78 @@ export class Workspaces {
     writeFileSync(target.absolute, content, "utf8");
     // The tool tells the agent the save is verified: make that true.
     if (readFileSync(target.absolute, "utf8") !== content) throw new WorkspaceError(`saved ${target.display} does not read back as written`);
-    return { display: target.display, area: target.area, replaced };
+    return { display: target.display, area: target.area, replaced, previous };
+  }
+
+  /**
+   * Changes part of an existing file and saves it (previous version kept): an exact passage
+   * (find → replace) or a whole section by its heading (2026-11-08, trc_4469…: agents could only
+   * rewrite whole documents; a 19,845-character update came back at 6,385 with three sections gone).
+   */
+  edit(agentId: string, path: string, change: { find: string; replace: string } | { section: string; content: string }): { display: string; area: Area; content: string; previous: string; changed: string } {
+    const target = this.locate(agentId, path);
+    if (!isFile(target.absolute)) throw new WorkspaceError(`no file at ${path} — create it with workspace_write_file`);
+    const previous = readFileSync(target.absolute, "utf8");
+    let next: string;
+    let changed: string;
+    if ("find" in change) {
+      if (!change.find) throw new WorkspaceError('"find" is empty: copy the exact text to change from the file');
+      const count = previous.split(change.find).length - 1;
+      if (count === 0) throw new WorkspaceError(`the "find" text is not in ${target.display}: copy it exactly from the file (workspace_read_file shows it), or change a whole section with "section"`);
+      if (count > 1) throw new WorkspaceError(`the "find" text occurs ${count} times in ${target.display}: include more of the surrounding text so it matches once`);
+      next = previous.replace(change.find, () => change.replace);
+      changed = change.replace ? "replaced 1 passage" : "removed 1 passage";
+    } else {
+      const sections = sectionsOf(previous);
+      const want = headingText(change.section);
+      const exact = sections.filter((s) => s.text.toLowerCase() === want);
+      const loose = exact.length ? exact : sections.filter((s) => s.text.toLowerCase().startsWith(want) || s.text.toLowerCase().includes(want));
+      if (loose.length === 0) throw new WorkspaceError(`no section "${change.section}" in ${target.display}. Its headings: ${sections.map((s) => s.line).join(" | ") || "(none)"}`);
+      if (loose.length > 1) throw new WorkspaceError(`"${change.section}" matches ${loose.length} headings in ${target.display}: ${loose.map((s) => s.line).join(" | ")} — give the whole heading`);
+      const s = loose[0]!;
+      const lines = previous.split("\n");
+      const body = change.content.replace(/\n+$/, "");
+      const replacement = body ? body.split("\n") : [];
+      if (replacement.length && s.end < lines.length) replacement.push("");
+      lines.splice(s.start, s.end - s.start, ...replacement);
+      next = lines.join("\n");
+      changed = body ? `replaced section "${s.line}"` : `removed section "${s.line}"`;
+    }
+    const w = this.write(agentId, target.display, next);
+    return { display: w.display, area: w.area, content: next, previous, changed };
+  }
+
+  /** Earlier versions of a file, newest first (1 = the version the current one replaced). */
+  history(agentId: string, path: string): { at: string; absolute: string }[] {
+    const target = this.locate(agentId, path);
+    const dir = join(target.base, ".history", dirname(target.rel));
+    const name = basename(target.rel);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f) => f.startsWith(`${name}.`) && /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/.test(f.slice(name.length + 1)))
+      .sort()
+      .reverse()
+      .map((f) => {
+        const stamp = f.slice(name.length + 1);
+        return { at: `${stamp.slice(0, 10)}T${stamp.slice(11, 13)}:${stamp.slice(14, 16)}:${stamp.slice(17, 19)}.${stamp.slice(20, 23)}Z`, absolute: join(dir, f) };
+      });
+  }
+
+  /** Version `n` back (1 = the previous one), or null when there is no such version. */
+  readVersion(agentId: string, path: string, n: number): { content: string; truncated: boolean; display: string; at: string; versions: number } | null {
+    const versions = this.history(agentId, path);
+    const v = versions[n - 1];
+    if (!v) return null;
+    const content = readFileSync(v.absolute, "utf8");
+    const display = this.locate(agentId, path).display;
+    return { content: content.length > MAX_READ_CHARS ? content.slice(0, MAX_READ_CHARS) : content, truncated: content.length > MAX_READ_CHARS, display, at: v.at, versions: versions.length };
   }
 
   /**
    * Adds to the end of a file, creating it if needed: a long document saved in parts (a reply has an
    * output limit). The previous version is kept and the whole file verified, as for write.
    */
-  append(agentId: string, path: string, content: string): { display: string; area: Area; replaced: boolean; content: string } {
+  append(agentId: string, path: string, content: string): { display: string; area: Area; replaced: boolean; previous: string | null; content: string } {
     const target = this.resolve(agentId, path);
     const existing = isFile(target.absolute) ? readFileSync(target.absolute, "utf8") : "";
     const joined = existing && !existing.endsWith("\n") && !content.startsWith("\n") ? `${existing}\n${content}` : existing + content;
@@ -187,6 +257,51 @@ export interface ResolvedPath {
   rel: string;
   /** How tools show it: "shared/x/y.md" or "private/x.md". */
   display: string;
+}
+
+interface Section {
+  /** The heading line as written ("## 6. Margins"). */
+  line: string;
+  /** Its text without the #s ("6. margins" is matched case-insensitively). */
+  text: string;
+  level: number;
+  /** Line index of the heading, and of the line after the section (next heading of the same or a higher level). */
+  start: number;
+  end: number;
+}
+
+/** "## 6. Margins ##" → "6. margins" (also accepts the text without #s). */
+function headingText(s: string): string {
+  return s.trim().replace(/^#{1,6}\s+/, "").replace(/\s+#+\s*$/, "").trim().toLowerCase();
+}
+
+/** Markdown sections by ATX heading, outside code fences. */
+export function sectionsOf(text: string): Section[] {
+  const lines = text.split("\n");
+  const found: { line: string; text: string; level: number; start: number }[] = [];
+  let fence = false;
+  lines.forEach((l, i) => {
+    if (/^\s*(```|~~~)/.test(l)) fence = !fence;
+    if (fence) return;
+    const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(l);
+    if (m) found.push({ line: l.trim(), text: m[2]!.trim(), level: m[1]!.length, start: i });
+  });
+  return found.map((h, i) => {
+    const next = found.slice(i + 1).find((x) => x.level <= h.level);
+    return { ...h, end: next ? next.start : lines.length };
+  });
+}
+
+/**
+ * Sections the previous version had that a full rewrite left out, when the new version is also much
+ * shorter (a renamed title alone does not count) — told to the agent right away.
+ */
+export function droppedSections(previous: string, next: string): string[] {
+  if (next.length >= previous.length * 0.8) return [];
+  const kept = new Set(sectionsOf(next).map((s) => s.text.toLowerCase()));
+  return sectionsOf(previous)
+    .filter((s) => s.level > 1 && !kept.has(s.text.toLowerCase()))
+    .map((s) => s.line);
 }
 
 function isFile(path: string): boolean {
