@@ -10,6 +10,7 @@
  * gates (truthful / efficient / good) → accept | revise | rollback | escalate,
  * or fail once nothing is left to try (no revision, rollback or escalation).
  */
+import { LIMITS_LINE } from "../../../org/capabilities.ts";
 import type { ModelTier, Task } from "../../../../../../packages/shared/src/index.ts";
 import type { SpanHandle, ToolEffect } from "../../../contracts.ts";
 import { oneOf, str, strArr, unit } from "../../coerce.ts";
@@ -177,7 +178,7 @@ export async function solving(
         hiring
           ? "You are making a hire: call hire_agent with the recommended catalogId, monthlyBudgetUsd and firstTask (their first piece of work, with the exact file path). Give that work to the new hire as their first task — do not do it yourself first."
           : "",
-        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file. Credit work to whoever actually did it: never write a colleague's name on work they did not do (\"recommended by\", \"written by\", in files, messages or requests to the Board) — if a step meant for someone else ended up with you, say you did it.",
+        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file. Credit work to whoever actually did it: never write a colleague's name on work they did not do (\"recommended by\", \"written by\", in files, messages or requests to the Board) — if a step meant for someone else ended up with you, say you did it. " + LIMITS_LINE + "",
         `[[context:${JSON.stringify({
           mode: "task",
           agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },
@@ -240,6 +241,8 @@ export interface FeedbackResult {
   summary: string;
   teg: TegResult;
   acceptThreshold: number;
+  /** Only when escalating: one question for the Board — what is done and where, then one decision with options. */
+  boardQuestion: string;
 }
 
 export function acceptThreshold(controlLevel: number, strictSelfEvaluation: boolean): number {
@@ -284,6 +287,8 @@ export async function feedback(
     canEscalate: boolean;
     /** The files the work saved, as they are on disk now (reviewFiles). */
     files?: ReviewFile[];
+    /** Steps this company cannot do (org/capabilities.ts): the Board's, never a shortfall. */
+    boardSteps?: string[];
   },
 ): Promise<FeedbackResult> {
   return block(run, "metacognition.solving_evaluation.feedback", "Evaluating the result", async (span) => {
@@ -298,6 +303,11 @@ export async function feedback(
       span,
       instructions:
         `Problem: ${truncate(o.problem, 400)}\nSuccess criteria: ${o.successCriteria.join("; ")}\n` +
+        // 2026-11-07 (test 6): "No email was sent" was the first shortfall a review reported — for a
+        // company that cannot send email.
+        (o.boardSteps?.length
+          ? `Left to the Board — this company cannot do these, so they are never a shortfall (mention them in openPoints as the Board's step): ${o.boardSteps.join("; ")}\n`
+          : "") +
         (results.length
           ? `Subprocess results:\n${results.map((r) => `- [${r.status}] ${oneLine(r.title, 80)}: ${truncate((r.result ?? "").replace(/\s+/g, " "), 400)}`).join("\n")}\n`
           : `Solution:\n${truncate(o.solution ?? "(none)", 2500)}\n`) +
@@ -314,8 +324,12 @@ export async function feedback(
         "Judge only gaps this team can close with its tools. Decisions that belong to the Board (prices, budgets, go/no-go, trade-offs between options), data nobody has, and assumptions or estimates clearly labelled as such are NOT defects: list them in openPoints (and mention them in the summary), and do not revise, roll back or lower the score for them. A word, line or character count reported by a file tool, and a save the file tool confirmed, count as verified. " +
         // 2026-11-07 (test 4, third run): the Finance section went round three times over "three
         // headings, criteria say exactly two" and tag placement — $0.48 of a $1.03 run.
-        "Judge substance — is it correct, complete, consistent and honest? — not formatting (exact heading counts, tag placement, wording, layout): a formatting slip is at most a note in issues, never on its own a reason to revise, unless the Board's original request demands that exact format.",
-      shape: '{"score":number,"truthful":number,"good":boolean,"issues":string[],"openPoints":string[],"decision":"accept"|"revise"|"rollback"|"escalate","summary":string}',
+        "Judge substance — is it correct, complete, consistent and honest? — not formatting (exact heading counts, tag placement, wording, layout): a formatting slip is at most a note in issues, never on its own a reason to revise, unless the Board's original request demands that exact format. " +
+        // 2026-11-07 (test 6): legal review went round four times over who signed, a dated
+        // confirmation and "6,386 characters, but the file is 6,432".
+        `Never count paperwork against the work: signatures or sign-offs, dated confirmations, who saved a file, or small differences in word or character counts (only a length limit the request itself set counts). ${LIMITS_LINE} ` +
+        "If you escalate, write boardQuestion: one question for the Board — first what is done and where it is saved, then the single decision you need, with two or three options (under 90 words).",
+      shape: '{"score":number,"truthful":number,"good":boolean,"issues":string[],"openPoints":string[],"decision":"accept"|"revise"|"rollback"|"escalate","summary":string,"boardQuestion":string}',
       context: { mode: "task", task: { title: run.task?.title }, results, solution: o.solution ?? "", files: files.map((f) => f.display) },
       maxOutputTokens: 1000,
     });
@@ -345,7 +359,8 @@ export async function feedback(
     const summary = str(json.summary, results.length ? `${results.filter((r) => r.status === "done").length}/${results.length} parts delivered.` : truncate(o.solution ?? "", 300), 1200);
     span.setAttributes({ "agentco.score": score, "agentco.decision": decision, "agentco.decision.model": modelDecision, "agentco.accept_threshold": threshold, "agentco.feedback.degraded": degraded });
     const openPoints = strArr(json.openPoints, 8, 240);
-    return { score, truthfulScore, issues, openPoints, modelDecision, decision, summary, teg, acceptThreshold: threshold };
+    const boardQuestion = typeof json.boardQuestion === "string" ? json.boardQuestion.trim().slice(0, 1200) : "";
+    return { score, truthfulScore, issues, openPoints, modelDecision, decision, summary, teg, acceptThreshold: threshold, boardQuestion };
   });
 }
 

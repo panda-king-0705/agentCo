@@ -2,6 +2,7 @@
  * Metacognition › Target Understanding:
  * Problem Definition → Literature Review → Analysis (Perspectives) → Understanding.
  */
+import { LIMITS_LINE, needsBoardStep } from "../../../org/capabilities.ts";
 import { arr, obj, oneOf, str, strArr, unit } from "../../coerce.ts";
 import { oneLine, truncate } from "../../text.ts";
 import { readGlobalLongTerm, readGlobalWorking } from "../global-memory.ts";
@@ -15,6 +16,8 @@ export interface ProblemDefinition {
   successCriteria: string[];
   constraints: string[];
   unknowns: string[];
+  /** Steps the request needs that this company cannot do (org/capabilities.ts): left to the Board. */
+  boardSteps: string[];
 }
 
 export interface Perspective {
@@ -48,13 +51,21 @@ export function requestText(run: BrainRun): string {
 }
 
 export function coerceProblem(json: Record<string, unknown>, fallbackTitle: string, defaultIntent: "chat" | "work"): ProblemDefinition {
+  const criteria = strArr(json.successCriteria, 5, 200);
+  // Backstop: a criterion that is itself an outside step ("the email reaches the investor list") is
+  // the Board's step, not something to be judged against (2026-11-07, test 6).
+  const outside = criteria.filter(needsBoardStep);
+  const named = strArr(json.boardSteps, 4, 200);
+  // The model's own wording of the step reads better; the criterion stands in only when it named none.
+  const boardSteps = (named.length ? named : outside).slice(0, 4);
   return {
     intent: oneOf(json.intent, ["chat", "work"] as const, defaultIntent),
     problem: str(json.problem, fallbackTitle, 500),
     title: truncate(str(json.title, fallbackTitle, 140), 140),
-    successCriteria: strArr(json.successCriteria, 5, 200),
+    successCriteria: criteria.filter((c) => !outside.includes(c)),
     constraints: strArr(json.constraints, 5, 200),
     unknowns: strArr(json.unknowns, 5, 200),
+    boardSteps,
   };
 }
 
@@ -71,12 +82,14 @@ export async function problemDefinition(run: BrainRun, gaps: string[] = []): Pro
       stage: "metacognition.target_understanding.problem_definition",
       span,
       instructions:
-        `${requestText(run)}\n\nDefine the problem.` +
+        `${requestText(run)}\n\nDefine the problem.\n${LIMITS_LINE}\n` +
+        "Success criteria are what this company can deliver. A step it cannot do goes in boardSteps (e.g. \"Send the update to the investors\"), and its criterion becomes that it is ready for the Board (e.g. \"The update is drafted, checked and ready for the Board to send\"). " +
+        "The title says what we will deliver (\"Draft the monthly investor update\", not \"Send…\")." +
         (gaps.length ? ` Your previous understanding was evaluated as insufficient; re-define the problem around these gaps: ${gaps.join("; ")}.` : "") +
         (isMessage
           ? ' intent = "work" if the message asks for anything to be done or changed — including small actions such as recording, saving, setting, updating, sending or deleting something — not only big projects (build, plan, write, research, …); greetings, questions and chat = "chat".'
           : ""),
-      shape: '{"intent":"chat"|"work","title":string,"problem":string,"successCriteria":string[],"constraints":string[],"unknowns":string[]}',
+      shape: '{"intent":"chat"|"work","title":string,"problem":string,"successCriteria":string[],"constraints":string[],"unknowns":string[],"boardSteps":string[]}',
       context: {
         mode: isMessage ? "message" : "task",
         message: isMessage ? input.message.content : undefined,
@@ -89,11 +102,15 @@ export async function problemDefinition(run: BrainRun, gaps: string[] = []): Pro
     const p = coerceProblem(json, fallbackTitle, isMessage ? "chat" : "work");
     if (!isMessage) p.intent = "work";
     if (p.successCriteria.length === 0) {
-      const ac = !isMessage && input.task.acceptanceCriteria ? input.task.acceptanceCriteria : null;
-      p.successCriteria = ac ? [truncate(ac, 200)] : [`A concrete deliverable for "${truncate(p.title, 80)}"`];
+      const ac = !isMessage && input.task.acceptanceCriteria && !needsBoardStep(input.task.acceptanceCriteria) ? input.task.acceptanceCriteria : null;
+      p.successCriteria = ac
+        ? [truncate(ac, 200)]
+        : p.boardSteps.length
+          ? [`Everything up to "${truncate(p.boardSteps[0]!, 80)}" is done and ready for the Board`]
+          : [`A concrete deliverable for "${truncate(p.title, 80)}"`];
     }
     if (gaps.length) p.unknowns = p.unknowns.filter((u) => !gaps.includes(u));
-    span.setAttributes({ "agentco.intent": p.intent, "agentco.fallback.gaps": gaps.length });
+    span.setAttributes({ "agentco.intent": p.intent, "agentco.fallback.gaps": gaps.length, ...(p.boardSteps.length ? { "agentco.board_steps": p.boardSteps.join(" | ") } : {}) });
     return p;
   });
 }

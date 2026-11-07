@@ -16,7 +16,7 @@ import type { EngineResult, ModelProvider, SavedFiles } from "../../src/contract
 import { gist, guidanceLines } from "../../src/cognition/brain/metacognition/solving-evaluation.ts";
 import { Q6_EXECUTION } from "../../src/cognition/brain/interpretation.ts";
 import type { Agent, Task } from "../../../../packages/shared/src/index.ts";
-import { FakePlatform, makeAgent, makeTask, taskInput } from "./fakes.ts";
+import { FakePlatform, makeAgent, makeTask, messageInput, taskInput } from "./fakes.ts";
 
 const BRAIN_TOOLS = ["delegate_task", "send_message", "escalate", "ask_human", "memory_search", "memory_write", "workspace_write_file", "blackboard_write"];
 const SOLVING = "metacognition.solving_evaluation.solving";
@@ -494,6 +494,91 @@ test("the reviewer sees the objective's hire records — who, role, budget, firs
     prompts[0]!,
     /Hires on this objective, from the platform's hire records \(verified — no other proof is needed\): Avery Singh \(engineering\/engineering-mobile-release-engineer, agt_avery\) has joined \(on T-242\) with a \$10\/month model budget, first task "iOS and Android release checklist"; their first task is assigned\./,
   );
+});
+
+// ── Test 6 (2026-11-07, trc_1a51…): "Email our investors this month's update." No agent can send email,
+// yet "the send is confirmed" became a success criterion: four rounds of legal review, $3.41, 46 min,
+// and a Board question that opened "No email was sent", cut off mid-word.
+
+test("a step the company can't do is said in the first reply and left to the Board, never made a criterion", async () => {
+  const p = new FakePlatform({
+    providers: {
+      mock: provider({
+        "metacognition.target_understanding.problem_definition": () => ({
+          intent: "work",
+          title: "Draft the monthly investor update",
+          problem: "Investors expect this month's update.",
+          successCriteria: ["The draft reflects current company results.", "The email reaches the full investor list and the send is confirmed."],
+          constraints: [],
+          unknowns: [],
+          boardSteps: ["Send the update to the investors"],
+        }),
+      }),
+    },
+  });
+  const { ceo } = company(p);
+  const r = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, messageInput("Email our investors this month's update.")));
+  assert.equal(r.outcome, "completed", r.error ?? r.output);
+  assert.match(r.output, /^Opened T-\d+: Draft the monthly investor update\. I'll work it through and report back here when it's done\. One thing up front: this company can't do this step, so it is left to you: Send the update to the investors\. I'll prepare everything up to it\.$/);
+  const [objective] = [...p.taskMap.values()];
+  assert.deepEqual(objective!.state.boardSteps, ["Send the update to the investors"]);
+  assert.equal(objective!.acceptanceCriteria, "The draft reflects current company results.", "the send is not a criterion");
+  const { coerceProblem } = await import("../../src/cognition/brain/metacognition/target-understanding.ts");
+  const backstop = coerceProblem({ successCriteria: ["The update is drafted.", "The update is sent to all investors."] }, "x", "work");
+  assert.deepEqual([backstop.successCriteria, backstop.boardSteps], [["The update is drafted."], ["The update is sent to all investors."]], "the model named no step: the criterion becomes it");
+});
+
+test("the review is told the Board's steps and to ignore paperwork; the report lists what is left for the Board", async () => {
+  const prompts: string[] = [];
+  const p = new FakePlatform({
+    providers: { mock: provider({ "metacognition.solving_evaluation.feedback": (_c, _n, prompt) => (prompts.push(prompt), { score: 0.9, truthful: 0.95, good: true, issues: [], openPoints: [], decision: "accept", summary: "The update is drafted and checked." }) }) },
+  });
+  const { ceo, cfo } = company(p);
+  const task = p.addTask(makeTask({ id: "tsk_247", number: 247, title: "Draft the monthly investor update", description: "Email our investors this month's update.", assigneeId: ceo.id, traceId: "trc_247", value: 500, estCostUsd: 0.4 }));
+  task.state.plan = { problem: "Investor update", successCriteria: ["drafted"], chosen: "low_cost", mode: "delegate", subprocesses: [], confidence: 0.7, feedback: [], rejected: [], revision: 0, costSoFarUsd: 0, estimateUsd: 0.4, boardSteps: ["Send the update to the investors"] };
+  const draft = p.addTask(makeTask({ id: "tsk_248", number: 248, parentTaskId: task.id, rootTaskId: task.id, traceId: "trc_247", title: "Draft November update", description: "d", assigneeId: cfo.id, status: "done", result: "Saved investor-updates/2026-11.md." }));
+  const r = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: [draft] })));
+  assert.equal(r.outcome, "completed", r.error ?? r.output);
+  assert.match(prompts[0]!, /Left to the Board — this company cannot do these, so they are never a shortfall \(mention them in openPoints as the Board's step\): Send the update to the investors/);
+  assert.match(prompts[0]!, /Never count paperwork against the work: signatures or sign-offs, dated confirmations, who saved a file, or small differences in word or character counts/);
+  assert.match(r.output, /\n## Left for you\nThis company can't do this, so it is yours to do:\n- Send the update to the investors$/);
+});
+
+test("after one round of fixes, what is still open goes to the Board with the work — no further round", async () => {
+  const p = new FakePlatform({
+    providers: { mock: provider({ "metacognition.solving_evaluation.feedback": () => ({ score: 0.45, truthful: 0.6, good: false, issues: ["Legal wants Elena's own dated sign-off in the confirmation file"], openPoints: [], decision: "revise", summary: "Drafted and reviewed once; one sign-off point remains." }) }) },
+  });
+  const { ceo, cfo } = company(p);
+  const task = p.addTask(makeTask({ id: "tsk_257", number: 257, title: "Investor update", description: "Draft it.", assigneeId: ceo.id, traceId: "trc_257", value: 500, estCostUsd: 0.4 }));
+  task.state.plan = { problem: "Investor update", successCriteria: ["drafted"], chosen: "low_cost", mode: "delegate", subprocesses: [], confidence: 0.7, feedback: ["earlier issue"], rejected: [], revision: 1, costSoFarUsd: 0, estimateUsd: 0.4 };
+  const fix = p.addTask(makeTask({ id: "tsk_258", number: 258, parentTaskId: task.id, rootTaskId: task.id, traceId: "trc_257", title: "Fix: apply Legal's points", description: "d", assigneeId: cfo.id, status: "done", result: "Applied." }));
+  const before = p.taskMap.size;
+  const r = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: [fix] })));
+  assert.equal(r.outcome, "completed", r.error ?? r.output);
+  assert.match(r.output, /## Open points for the Board\n- Legal wants Elena's own dated sign-off in the confirmation file/);
+  assert.equal(p.taskMap.size, before, "no new round of fix tasks");
+  assert.ok(p.tracer.spans.some((s) => s.attributes["agentco.rework_cap"] === 1));
+});
+
+test("a review that escalates asks the Board one clear question: the reviewer's own, or what is done and still open", async () => {
+  const asked = "The update is saved at investor-updates/2026-11.md and Legal approved it. Should I (a) finish with it as it is, or (b) add the Q4 goal figures first?";
+  const run = async (verdict: Record<string, unknown>) => {
+    const p = new FakePlatform({ providers: { mock: provider({ "metacognition.solving_evaluation.feedback": () => verdict }) } });
+    const { ceo, cfo } = company(p);
+    const task = p.addTask(makeTask({ id: "tsk_300", number: 300, title: "Draft the monthly investor update", description: "d", assigneeId: ceo.id, traceId: "trc_300", value: 500, estCostUsd: 0.4 }));
+    task.state.plan = { problem: "Investor update", successCriteria: ["drafted"], chosen: "low_cost", mode: "delegate", subprocesses: [], confidence: 0.7, feedback: [], rejected: [], revision: 0, costSoFarUsd: 0, estimateUsd: 0.4 };
+    const part = p.addTask(makeTask({ id: "tsk_301", number: 301, parentTaskId: task.id, rootTaskId: task.id, traceId: "trc_300", title: "Draft", description: "d", assigneeId: cfo.id, status: "done", result: "Saved." }));
+    const r = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: [part] })));
+    return { r, question: String(p.approvals[0]?.payload.question ?? "") };
+  };
+  const own = await run({ score: 0.5, truthful: 0.9, good: false, issues: ["Goal figures missing"], openPoints: [], decision: "escalate", summary: "Drafted.", boardQuestion: asked });
+  assert.equal(own.r.outcome, "blocked", own.r.error ?? own.r.output);
+  assert.equal(own.question, asked);
+  const long = "The 26% goal-attainment and 14% spend-vs-plan figures are in the CEO's OKRs but not in the update. Section 2 reports no goal progress, so the first criterion is only partly met and needs a decision from the Board before anything else changes in the draft.";
+  const built = await run({ score: 0.5, truthful: 0.9, good: false, issues: [long, "Legal's approval cites 6,386 characters, but the file is 6,432."], openPoints: [], decision: "escalate", summary: "The update is drafted at investor-updates/2026-11.md and Legal approved it." });
+  assert.match(built.question, /^The update is drafted at investor-updates\/2026-11\.md and Legal approved it\. Still open: The 26% goal-attainment and 14% spend-vs-plan figures are in the CEO's OKRs but not in the update\. .* Should I finish with it as it is \(open points listed\), or what should change\?$/);
+  assert.doesNotMatch(built.question, /T-300/, "the task is named where the question is shown, not repeated in it");
+  assert.doesNotMatch(built.question, /\w…/, "never cut mid-word");
 });
 
 test("mentionedPeople: full names, or a capitalised first name only one person has", () => {

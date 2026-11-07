@@ -5,6 +5,24 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (test 6, trc_1a51…: "Email our investors this month's update")
+- **The company knows what it can't do.** Every agent is told it cannot send email or other messages
+  outside the company, browse the web, run code, make payments, or use outside accounts. A request
+  that needs one of those becomes "prepared for the Board": the reply that opens the objective says
+  so up front ("this company can't do this step, so it is left to you: …"), the step never becomes
+  a success criterion, reviews never count it short, and the final report lists it under "Left for
+  you". Before, "the send is confirmed" was a criterion, so every review failed the work.
+- **Reviews stop going round.** Reviews judge content, never paperwork: signatures, dated
+  confirmations, who saved a file, small differences in counts. After one round of fixes, whatever is
+  still open goes to the Board with the finished work instead of another round. Legal had reviewed
+  the investor update four times ($2.06 of the run's $3.41) over sign-offs and a character count.
+- **Long files.** If a reply is cut off at its length limit, the agent is told exactly that, not
+  "missing required argument path". `workspace_write_file` takes `append: true`, so a long document
+  can be saved in parts. Two workers had resent the same cut-off save until their runs timed out.
+- **Questions to the Board.** A review that needs the Board writes one question: what is done and
+  where it is saved, then one decision with options. The task is no longer named twice, and the
+  question is never cut off mid-word.
+
 ### Fixed (hiring test, trc_005b…)
 - **Choosing the new hire's manager.** `hire_agent` accepts "me" (or the hirer's own id) and a
   report's name. If the manager given isn't in the hirer's subtree, the error now states the hirer's
