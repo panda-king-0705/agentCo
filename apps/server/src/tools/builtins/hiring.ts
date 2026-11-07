@@ -108,13 +108,21 @@ export function readFirstTask(v: unknown): FirstTask | null {
   return { title: title.slice(0, 300), description: description.slice(0, 20_000), acceptanceCriteria: typeof o.acceptanceCriteria === "string" && o.acceptanceCriteria.trim() ? o.acceptanceCriteria.trim().slice(0, 4000) : null };
 }
 
+/** A request to hire someone (the tools and the plan then follow the hiring flow). */
+export function isHiringRequest(text: string): boolean {
+  // "Recruiter recommends…" is a recommendation step, not a hire (2026-11-07, trc_617b…: the CMO was
+  // offered hire_agent on it and hired before the recruiter had been asked).
+  return /\b(hire|hires|hiring|hired|recruit(?!ers?\b)\w*|headcount|new (agent|specialist|employee|team member))\b/i.test(text);
+}
+
 export const hireAgent: ToolDefinition = {
   name: "hire_agent",
   description:
     "Hire a new agent into your own team (or under one of your reports). For a specialist worker pass catalogId (find one with catalog_search); " +
     "title, department and persona then come from the catalog, and the manager defaults to that department's lead (you, when you lead it). Pass managerId \"me\" (or your own id) to have them report to you, or a report's id or name. " +
     "Otherwise give title, departmentId, managerId and tier. monthlyBudgetUsd sets their monthly model budget; firstTask {title, description, acceptanceCriteria} " +
-    "assigns their first piece of work (name the exact file path) — you are resumed with their result. Requires Board approval when hiring approval is on or headcount is at the cap; the first task is then assigned when the Board approves.",
+    "assigns their first piece of work (name the exact file path) — you are resumed with their result. Requires Board approval when hiring approval is on or headcount is at the cap; the first task is then assigned when the Board approves. " +
+    "Hire only when the request asks for a hire, or no one on your team — you included — can do the work: a one-off task you or your team can do is done, not hired for (a hire waits for the Board and stays on the payroll).",
   parameters: {
     type: "object",
     properties: {
@@ -209,9 +217,17 @@ export const hireAgent: ToolDefinition = {
         `Already done ${here ? "for this task" : "on this objective"}: ${describeHire(here ? { ...already, taskNumber: undefined } : already)}. Do not hire again — work with them (they report to their manager). If you truly need a second ${role}, explain why to your manager.`,
       );
     }
-    // Someone on the receiving team already holds this catalog role: give them the work.
+    // Someone on the receiving team already holds this catalog role: give them the work. The hirer
+    // counts too (2026-11-08, trc_6a25…: the General Counsel — herself the Legal Compliance Checker —
+    // hired a second one for a one-off review of a 200-word draft; the work waited 11 minutes for the Board).
     if (input.catalogId && args.additional !== true) {
       const managerId = input.managerId ?? ctx.agent.id;
+      if (ctx.agent.catalogId === input.catalogId) {
+        return fail(
+          `You hold ${input.catalogId} yourself: do this work yourself, or give it to someone on your team. ` +
+            "Only if the request explicitly asks for another person in this role, call hire_agent again with additional: true and say why in justification.",
+        );
+      }
       const holder = org.listActiveAgents().find((a) => a.catalogId === input.catalogId && a.managerId === managerId);
       if (holder) {
         return fail(
@@ -229,7 +245,8 @@ export const hireAgent: ToolDefinition = {
         requestedBy: ctx.agent.id,
         taskId: ctx.taskId,
         traceId: ctx.traceId,
-        summary: `${ctx.agent.name} wants to hire a ${label}${atCap ? " — headcount cap reached" : ""}: ${String(args.justification).slice(0, 200)}`,
+        // The Board sees when a hire is not something its request asked for.
+        summary: `${ctx.agent.name} wants to hire a ${label}${atCap ? " — headcount cap reached" : ""}${root && !isHiringRequest(`${root.title}\n${root.description}`) ? ` (not asked for: the request was "${root.title.slice(0, 80)}")` : ""}: ${String(args.justification).slice(0, 200)}`,
         payload: {
           input,
           justification: String(args.justification),

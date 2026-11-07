@@ -27,7 +27,7 @@ test("a cut-off save says so and nothing is written; a long file can be saved in
     assert.equal(out[1]!.ok, true);
     assert.equal(out[2]!.ok, true, out[2]!.content);
     assert.match(out[2]!.content, /^Added 22 chars to shared\/investor-updates\/reconciliation\.md; the whole file is now \d+ chars, \d+ words, 5 lines\. Saved and verified on disk\./);
-    assert.match(out[3]!.content, /^# Reconciliation\n\| claim \| source \|\n\|---\|---\|\n\| ARR \| finance\.md \|\n\| Runway \| budget\.md \|\n\[end of shared\/investor-updates\/reconciliation\.md — complete:/);
+    assert.match(out[3]!.content, /^# Reconciliation\n\| claim \| source \|\n\|---\|---\|\n\| ARR \| finance\.md \|\n\| Runway \| budget\.md \|\n\[read tool's note, not part of the file: end of shared\/investor-updates\/reconciliation\.md — complete:/);
   } finally {
     await t.close();
   }

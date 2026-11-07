@@ -12,6 +12,14 @@ versioning: [SemVer](https://semver.org/).
   as a dashed leaf under that manager instead of a line across the tree; repeat hand-offs show "×n";
   a wide team scrolls sideways instead of shrinking.
 
+### Fixed (trc_6a25…, the investor update's fourth run: $0.44, 6 tasks, no fix rounds)
+- **No hiring for one-off work you can do.** The General Counsel, herself the Legal Compliance
+  Checker, hired a second one for a review of a 200-word draft, and the work waited 11 minutes for
+  the Board. A hirer who holds the role is now told to do the work. Hires are for requests that ask
+  for one, or work no one on the team can do. A hire the request didn't ask for says so in Approvals.
+- **The read tool's footer is marked as its own note.** A reviewer took the "[end of …]" line for
+  part of the investor update.
+
 ### Fixed (trc_4469…, the investor update's third run)
 - **Edit in place.** New `workspace_edit_file`: change one exact passage or one whole section (by its
   heading) without rewriting the document. An analyst asked to fix section 6 rewrote the whole
