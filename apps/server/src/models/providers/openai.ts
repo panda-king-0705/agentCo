@@ -50,6 +50,15 @@ export function isResponseFormatRejection(status: number, body: string): boolean
   return status === 400 && /response_format/i.test(body);
 }
 
+/**
+ * A 400 refusing function tools while the model's default reasoning is on (2026-11-07, gpt-6.1-sol
+ * on /v1/chat/completions: "Function tools with reasoning_effort are not supported … set
+ * reasoning_effort to 'none'"). Every tool step of a fallback run failed on it.
+ */
+export function isToolsReasoningRejection(status: number, body: string): boolean {
+  return status === 400 && /reasoning_effort/i.test(body) && /tool/i.test(body);
+}
+
 export function toOpenAIMessages(messages: ChatMessage[]): Record<string, unknown>[] {
   return messages.map((m) => {
     if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
@@ -68,13 +77,14 @@ export function toOpenAIMessages(messages: ChatMessage[]): Record<string, unknow
   });
 }
 
-export function buildRequestBody(profile: ModelProfile, request: ChatRequest): Record<string, unknown> {
+export function buildRequestBody(profile: ModelProfile, request: ChatRequest, options: { toolsWithoutReasoning?: boolean } = {}): Record<string, unknown> {
   const quirks = QUIRKS[profile.provider] ?? DEFAULT_QUIRKS;
   const body: Record<string, unknown> = { model: profile.model, messages: toOpenAIMessages(request.messages) };
   const tools = request.tools ?? [];
   if (tools.length > 0) {
     body.tools = tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
     body.tool_choice = "auto";
+    if (options.toolsWithoutReasoning) body.reasoning_effort = "none";
   } else if (request.responseFormat === "json" && quirks.jsonObject) {
     body.response_format = { type: "json_object" };
   }
@@ -148,10 +158,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly noTemperature = new Set<string>();
   /** Profiles learned at runtime to reject `response_format`; JSON is then asked for by the prompt only. */
   private readonly noResponseFormat = new Set<string>();
+  /** Profiles learned at runtime to need `reasoning_effort: "none"` whenever tools are sent. */
+  private readonly toolsWithoutReasoning = new Set<string>();
 
   /**
    * One chat completion with self-healing retries for live-provider quirks:
-   * a 400 rejecting `temperature` or `response_format` is retried without it (and remembered), and a
+   * a 400 rejecting `temperature` or `response_format` is retried without it (and remembered), a 400
+   * refusing tools while reasoning is on is retried with `reasoning_effort: "none"` (remembered), and a
    * response cut off by the output limit before any content is retried once with a
    * larger budget (reasoning models spend tokens thinking before they answer).
    */
@@ -159,7 +172,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     let req = this.noTemperature.has(profile.id) ? { ...request, temperature: undefined } : request;
     if (this.noResponseFormat.has(profile.id) && req.responseFormat === "json") req = { ...req, responseFormat: "text" };
     for (let attempt = 0; attempt < 4; attempt++) {
-      const result = await this.send(profile, req, signal);
+      const result = await this.send(profile, req, signal, { toolsWithoutReasoning: this.toolsWithoutReasoning.has(profile.id) });
       if (result.kind === "ok") {
         const r = result.value;
         const empty = !r.content.trim() && r.toolCalls.length === 0;
@@ -179,6 +192,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
         req = { ...req, responseFormat: "text" };
         continue;
       }
+      if (attempt < 3 && (req.tools?.length ?? 0) > 0 && !this.toolsWithoutReasoning.has(profile.id) && isToolsReasoningRejection(result.status, result.body)) {
+        this.toolsWithoutReasoning.add(profile.id);
+        continue;
+      }
       if (attempt < 2 && isOutputLimitRejection(result.status, result.body)) {
         req = { ...req, maxOutputTokens: Math.max((req.maxOutputTokens ?? 512) * 4, LENGTH_RETRY_MIN_TOKENS) };
         continue;
@@ -192,6 +209,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     profile: ModelProfile,
     request: ChatRequest,
     signal: AbortSignal,
+    options: { toolsWithoutReasoning?: boolean } = {},
   ): Promise<
     | { kind: "ok"; value: ReturnType<typeof parseResponseBody> }
     | { kind: "http"; status: number; body: string; error: Error }
@@ -205,7 +223,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       response = await this.fetchFn(url, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${provider.apiKey}` },
-        body: JSON.stringify(buildRequestBody(profile, request)),
+        body: JSON.stringify(buildRequestBody(profile, request, options)),
         signal,
       });
     } catch (err) {

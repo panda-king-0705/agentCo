@@ -77,6 +77,22 @@ function promptChars(request: ChatRequest): number {
   );
 }
 
+/** How long a provider is skipped after an account-level failure. */
+export const PROVIDER_COOLDOWN_MS = 10 * 60_000;
+
+/** No credit, quota used up, or a key the provider refuses: every call to that provider will fail. */
+export function isAccountError(err: unknown): boolean {
+  const m = err instanceof Error ? err.message : String(err);
+  return /credit balance is too low|insufficient_quota|exceeded your current quota|HTTP 401|HTTP 403|invalid[ _-]?(x-)?api[ _-]?key|incorrect api key/i.test(m);
+}
+
+export function accountErrorReason(err: unknown): string {
+  const m = err instanceof Error ? err.message : String(err);
+  if (/credit balance is too low/i.test(m)) return "credit balance too low (top up the provider account)";
+  if (/insufficient_quota|exceeded your current quota/i.test(m)) return "quota used up (check the provider's billing)";
+  return "API key refused (check the key in .env)";
+}
+
 class ModelRouterImpl implements ModelRouter {
   private readonly deps: ModelRouterDeps & { config: ModelConfig };
   private readonly config: ModelConfig;
@@ -135,18 +151,56 @@ class ModelRouterImpl implements ModelRouter {
 
   async chat(request: ChatRequest, ctx: ChatCallContext): Promise<ChatResponse> {
     const first = this.resolve(request.tier, request.modelOverride ?? null);
+    const fallback = this.fallbackFor(first, request.tier);
+    // A provider that failed on the ACCOUNT (no credit, bad key) fails every call the same way:
+    // skip it for a while instead of paying a failed round trip on each call (2026-11-07).
+    const down = this.downReason(first.provider);
+    if (down && fallback && !this.downReason(fallback.provider)) return this.attempt(fallback, request, ctx, first.id, down);
     try {
       return await this.attempt(first, request, ctx, null);
     } catch (err) {
       // Only the caller's own signal is an abort; a provider timeout goes to the fallback profile.
       if (isBudgetError(err) || ctx.signal.aborted) throw err;
-      const fallback = this.fallbackFor(first, request.tier);
+      if (isAccountError(err)) this.markDown(first.provider, err);
       if (!fallback) throw err;
-      return this.attempt(fallback, request, ctx, first.id);
+      try {
+        return await this.attempt(fallback, request, ctx, first.id);
+      } catch (second) {
+        if (isAccountError(second)) this.markDown(fallback.provider, second);
+        throw second;
+      }
     }
   }
 
-  private async attempt(profile: ModelProfile, request: ChatRequest, ctx: ChatCallContext, fallbackFrom: string | null): Promise<ChatResponse> {
+  /** Providers skipped until a time, after an account-level failure: provider → {until, reason}. */
+  private readonly providersDown = new Map<string, { until: number; reason: string }>();
+
+  private downReason(provider: string): string | null {
+    const d = this.providersDown.get(provider);
+    if (!d) return null;
+    if (Date.now() >= d.until) {
+      this.providersDown.delete(provider);
+      return null;
+    }
+    return d.reason;
+  }
+
+  private markDown(provider: string, err: unknown): void {
+    if (provider === "mock") return;
+    const reason = accountErrorReason(err);
+    const fresh = !this.providersDown.has(provider);
+    this.providersDown.set(provider, { until: Date.now() + PROVIDER_COOLDOWN_MS, reason });
+    if (fresh) console.warn(`[models] ${provider}: ${reason} — using fallback models for ${PROVIDER_COOLDOWN_MS / 60_000} minutes`);
+  }
+
+  /** Providers currently skipped (for status pages and audits). */
+  unavailableProviders(): { provider: string; reason: string; until: string }[] {
+    return [...this.providersDown.entries()]
+      .filter(([p]) => this.downReason(p) !== null)
+      .map(([provider, d]) => ({ provider, reason: d.reason, until: new Date(d.until).toISOString() }));
+  }
+
+  private async attempt(profile: ModelProfile, request: ChatRequest, ctx: ChatCallContext, fallbackFrom: string | null, primaryDown: string | null = null): Promise<ChatResponse> {
     if (ctx.signal.aborted) throw ctx.signal.reason instanceof Error ? ctx.signal.reason : Object.assign(new Error("aborted"), { name: "AbortError" });
     const maxOutputTokens = request.maxOutputTokens ?? this.config.defaultMaxOutputTokens;
     const estimate =
@@ -154,7 +208,7 @@ class ModelRouterImpl implements ModelRouter {
     const reservationId = `rsv_${ctx.runId}_${++this.reservationSeq}`;
     this.deps.budget.assertCanSpend(ctx.agentId, estimate, reservationId);
     try {
-      return await this.call(profile, request, ctx, fallbackFrom, maxOutputTokens, estimate, reservationId);
+      return await this.call(profile, request, ctx, fallbackFrom, maxOutputTokens, estimate, reservationId, primaryDown);
     } finally {
       this.deps.budget.release?.(reservationId);
     }
@@ -168,6 +222,7 @@ class ModelRouterImpl implements ModelRouter {
     maxOutputTokens: number,
     estimate: number,
     reservationId: string,
+    primaryDown: string | null = null,
   ): Promise<ChatResponse> {
     const span: SpanHandle = this.deps.tracer.startSpan({
       traceId: ctx.traceId,
@@ -191,6 +246,7 @@ class ModelRouterImpl implements ModelRouter {
         "agentco.tools": request.tools?.length ?? 0,
         "agentco.estimate_usd": round(estimate),
         ...(fallbackFrom ? { "agentco.fallback_from": fallbackFrom } : {}),
+        ...(primaryDown ? { "agentco.primary_skipped": primaryDown } : {}),
       },
     });
 

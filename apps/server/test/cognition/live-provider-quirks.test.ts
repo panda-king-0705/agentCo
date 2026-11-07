@@ -119,3 +119,26 @@ test("any provider: a 400 rejecting response_format is retried without it and re
     assert.equal("response_format" in bodies[2]!, false);
   });
 });
+
+// Live (2026-11-07, test 5): with Anthropic out of credit, the standard tier fell back to gpt-6.1-sol,
+// which refuses function tools on /v1/chat/completions unless reasoning is turned off — every tool step failed.
+const TOOLS_REASONING_400: Reply = {
+  status: 400,
+  json: { error: { message: "Function tools with reasoning_effort are not supported for gpt-6.1-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.", type: "invalid_request_error", param: "reasoning_effort", code: null } },
+};
+
+test("openai: tools refused while reasoning is on → retried with reasoning_effort 'none', remembered; plain requests unchanged", async () => {
+  const tools = [{ name: "workspace_write_file", description: "save", parameters: { type: "object", properties: {} } }];
+  await withServer((body) => (body.tools && body.reasoning_effort !== "none" ? TOOLS_REASONING_400 : ok("OK")), async (base, bodies) => {
+    const p = new OpenAICompatibleProvider({ providers: { openai: { name: "openai", baseUrl: base, apiKey: "k" } } } as never);
+    const r1 = await p.complete(profile("openai"), { ...request, tools }, new AbortController().signal);
+    assert.equal(r1.content, "OK");
+    assert.equal(bodies.length, 2);
+    assert.equal(bodies[1]?.reasoning_effort, "none");
+    await p.complete(profile("openai"), { ...request, tools }, new AbortController().signal);
+    assert.equal(bodies.length, 3, "the next tool call sends reasoning_effort 'none' up front");
+    assert.equal(bodies[2]?.reasoning_effort, "none");
+    await p.complete(profile("openai"), request, new AbortController().signal);
+    assert.equal(bodies[3]?.reasoning_effort, undefined, "requests without tools keep the model's own reasoning");
+  });
+});
