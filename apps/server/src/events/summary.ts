@@ -16,6 +16,8 @@ export const summaries = {
   spanStarted: (s: Span) => `${s.kind} ${s.name} started`,
   spanEnded: (s: Span) => `${s.kind} ${s.name} ${s.status}${s.durationMs !== null ? ` in ${Math.round(s.durationMs)} ms` : ""}`,
   messageCreated: (m: Message, sender: string) => `${sender}: ${oneLine(m.content, 100)}`,
+  conversationDeleted: (title: string, cleared: boolean, messages: number) =>
+    cleared ? `The Board cleared ${title} (${messages} message${messages === 1 ? "" : "s"} deleted)` : `Chat ${title} deleted (${messages} message${messages === 1 ? "" : "s"})`,
   approvalCreated: (a: Approval) => `Approval requested (${a.kind}): ${oneLine(a.summary, 100)}`,
   approvalDecided: (a: Approval) => `Board ${a.status} ${a.kind}: ${oneLine(a.summary, 100)}`,
 };

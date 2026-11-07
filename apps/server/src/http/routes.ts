@@ -8,6 +8,7 @@ import type {
   DecideApprovalInput,
   DecideManyInput,
   MemoryKind,
+  DeleteConversationResult,
   PostMessageResult,
   RoleTemplate,
   TaskDetail,
@@ -132,6 +133,8 @@ export function buildRouter(platform: Platform): Router {
     return conversations.directMessage(agent);
   });
   router.get("/api/conversations/:id/messages", ({ params, query }) => conversations.messages(param(params, "id"), query.get("after") || undefined));
+  // Deleted for good (the Boardroom is cleared instead): messages, the agent's notes from it, its context summary.
+  router.delete("/api/conversations/:id", ({ params }): DeleteConversationResult => platform.chats.deleteConversation(param(params, "id")));
   router.post("/api/conversations/:id/messages", ({ params, body }): PostMessageResult => {
     const content = object(body).content;
     if (typeof content !== "string") throw badRequest("content must be a non-empty string");

@@ -20,7 +20,7 @@ test("destroying an agent aborts its run, re-assigns tasks and reports to the ma
     await waitFor("lead busy", () => platform.runs.isBusy(lead.id));
 
     const result = platform.org.destroyAgent(lead.id);
-    assert.deepEqual({ ...result }, { agentId: lead.id, cancelledRuns: 1, reassignedTasks: 2, reassignedReports: 1 });
+    assert.deepEqual({ ...result }, { agentId: lead.id, cancelledRuns: 1, reassignedTasks: 2, reassignedReports: 1, deletedChats: 2, deletedMemories: 0, withdrawnRequests: 0 }, "the welcome DMs from their manager and to their report are deleted");
     await platform.runs.idle();
 
     const gone = platform.org.getAgent(lead.id);

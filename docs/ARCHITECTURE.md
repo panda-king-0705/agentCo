@@ -129,8 +129,17 @@ Destroy = terminate: abort active run, cancel its queued runs, re-assign its
 open tasks (through `TaskService.reassign`: an in-flight attempt is refunded,
 the old assignee's run-scoped state — checkpoint, recovery — is dropped,
 waiting/blocked tasks keep their status so their wake-ups still fire) and its
-direct reports to its manager, set status `terminated`, keep rows for audit,
-archive its workspace to `data/workspaces/.terminated/<agentId>`. An agent
+direct reports to its manager, set status `terminated`, archive its workspace
+to `data/workspaces/.terminated/<agentId>`, then clean up (`runs/chat-cleanup.ts`):
+delete its chats (with the Board and with other agents) and its private
+memories, and withdraw its pending Board requests (rejected by the system with
+a note; the blocked task, now the manager's, wakes with it). Its history stays —
+the agent row (marked removed), runs, spans, spend and tasks — so traces and
+spending totals stay true. Agents removed before the clean-up existed are
+cleaned up at boot. Deleting a chat (`DELETE /api/conversations/:id`) removes
+its messages, the private memories written by runs that answered in it, and its
+context checkpoint and folded transcripts; replies in progress stop, objectives
+it started keep running. The Boardroom is cleared, never deleted. An agent
 with no active manager to inherit (the CEO) can't be destroyed while it has
 reports **or open tasks** — 409, so work is never orphaned. (Fixes the
 reference repo's orphaned-memory limitation with an explicit policy.)
@@ -369,6 +378,7 @@ GET    /api/conversations                 Conversation[] (?agentId=)
 POST   /api/conversations                 {agentId} → Conversation (get-or-create DM; agentId="ceo" or kind boardroom)
 GET    /api/conversations/:id/messages    Message[] (?after=<iso>)
 POST   /api/conversations/:id/messages    {content} → PostMessageResult (a reply where open Board questions were asked answers them: answeredApprovalIds, no chat run)
+DELETE /api/conversations/:id             DeleteConversationResult (deleted for good; the Boardroom is cleared instead)
 GET    /api/tasks                         Task[] (?status=&assigneeId=&rootTaskId=&traceId=)
 POST   /api/tasks                         CreateTaskInput → Task
 GET    /api/tasks/:id                     TaskDetail

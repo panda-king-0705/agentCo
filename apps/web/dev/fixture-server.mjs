@@ -315,8 +315,34 @@ export async function startFixtureServer({ port = 5173, host = "127.0.0.1", org 
       emit("agent.updated", `${r.name} now reports to ${nameOf(a.managerId)}`, structuredClone(r));
     }
     Object.assign(a, { status: "terminated", terminatedAt: iso(), activity: null, brainBlock: null, currentRunId: null, currentTaskId: null, updatedAt: iso() });
+    // Removal clean-up: their chats and private memories go; pending requests are withdrawn.
+    let deletedChats = 0;
+    for (const c of S.conversations.filter((c) => c.kind !== "boardroom" && c.participantIds.includes(id))) {
+      deleteConversation(c.id);
+      deletedChats++;
+    }
+    const before = S.memories.length;
+    S.memories = S.memories.filter((m) => !(m.scope === "agent" && m.agentId === id));
+    let withdrawnRequests = 0;
+    for (const ap of S.approvals.filter((x) => x.status === "pending" && x.requestedBy === id)) {
+      Object.assign(ap, { status: "rejected", decidedBy: "system", note: `Withdrawn: ${a.name} was removed.`, decidedAt: iso() });
+      emit("approval.decided", `Withdrawn: ${a.name} was removed`, structuredClone(ap));
+      withdrawnRequests++;
+    }
     emit("agent.terminated", `${a.name} (${a.title}) was terminated`, structuredClone(a));
-    return { agentId: id, cancelledRuns, reassignedTasks, reassignedReports: reports.length };
+    return { agentId: id, cancelledRuns, reassignedTasks, reassignedReports: reports.length, deletedChats, deletedMemories: before - S.memories.length, withdrawnRequests };
+  }
+
+  function deleteConversation(cid) {
+    const c = S.conversations.find((x) => x.id === cid);
+    if (!c) throw new HttpError(404, "not_found", `Conversation ${cid} not found`);
+    const cleared = c.kind === "boardroom";
+    const deletedMessages = S.messages.filter((m) => m.conversationId === cid).length;
+    S.messages = S.messages.filter((m) => m.conversationId !== cid);
+    if (cleared) c.lastMessageAt = null;
+    else S.conversations = S.conversations.filter((x) => x.id !== cid);
+    emit("conversation.deleted", cleared ? "The Board cleared the Boardroom" : `Chat ${c.title} deleted`, { id: cid, cleared, kind: c.kind, participantIds: c.participantIds });
+    return { conversationId: cid, cleared, deletedMessages, deletedMemories: 0, abortedRuns: 0 };
   }
   // ───────────── specialist catalog (docs/CATALOG.md) ─────────────
   const catalogEntry = (id) => S.catalog.agents.find((c) => c.agent.id === id);
@@ -718,6 +744,7 @@ export async function startFixtureServer({ port = 5173, host = "127.0.0.1", org 
     const after = q.get("after");
     return S.messages.filter((m) => m.conversationId === p.id && (!after || m.createdAt > after)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   });
+  route("DELETE", "/api/conversations/:id", ({ p }) => deleteConversation(p.id));
   route("POST", "/api/conversations/:id/messages", ({ p, body }) => {
     const c = need(S.conversations.find((x) => x.id === p.id), `Conversation ${p.id}`);
     if (c.kind === "agent_dm") throw new HttpError(403, "forbidden", "Agent-to-agent threads are read-only for the Board");

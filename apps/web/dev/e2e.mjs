@@ -123,6 +123,15 @@ async function run(scheme, interactive) {
       await S("chat");
     });
 
+    await step("delete the chat", async () => {
+      await page.getByRole("button", { name: "Delete chat" }).click();
+      const dlg = page.getByRole("dialog");
+      await dlg.getByText(/cannot be undone/).waitFor();
+      await S("chat-delete");
+      await dlg.getByRole("button", { name: "Delete chat" }).click();
+      await page.waitForFunction(() => location.hash === "#/chat" && ![...document.querySelectorAll(".chat-list .conv-name")].some((n) => n.textContent.includes("E2E Tester")));
+    });
+
     await step("pause, resume, destroy", async () => {
       await go(page, "/org");
       await page.getByRole("button", { name: "Pause E2E Tester" }).click();
@@ -131,6 +140,7 @@ async function run(scheme, interactive) {
       await page.getByText(/aborted/).first().waitFor();
       await page.getByRole("button", { name: "Destroy agent" }).click();
       await page.waitForSelector('[data-testid="destroy-result"]');
+      await page.getByText("Chats deleted").waitFor();
       await page.getByRole("button", { name: "Done" }).click();
       await page.waitForFunction(() => !document.querySelector('.org-card a.oc-name')?.parentElement || ![...document.querySelectorAll(".org-card a.oc-name")].some((a) => a.textContent === "E2E Tester"));
     });

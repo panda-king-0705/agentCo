@@ -5,6 +5,7 @@
  *   createPlatform(config, overrides) is the only place concrete classes meet;
  *   tests inject fake engines / a fake model router through `overrides`.
  */
+import { ChatCleanup } from "./runs/chat-cleanup.ts";
 import type { Agent, CognitionKind, CompanySnapshot, ModelsInfo } from "../../../packages/shared/src/index.ts";
 import type { AppConfig } from "./config.ts";
 import type { CognitiveEngine, ModelProvider, ModelRouter, ModelRouterDeps, PlatformServices, SavedFiles } from "./contracts.ts";
@@ -63,6 +64,8 @@ export interface Platform {
   budget: BudgetService;
   org: OrgService;
   conversations: ConversationService;
+  /** Deleting chats, and what removing an agent clears (runs/chat-cleanup.ts). */
+  chats: ChatCleanup;
   memory: MemoryServiceImpl;
   tasks: TaskService;
   approvals: ApprovalService;
@@ -170,6 +173,8 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
     now,
   });
   org.attachRunControl(runs);
+  const chats = new ChatCleanup({ repos, bus, governor, runs, approvals });
+  org.attachRemovalCleanup((agent) => chats.removeAgent(agent));
   const scheduler = new Scheduler({ repos, bus, org, company, conversations, runs, tickMs: config.schedulerTickMs });
   runs.setSettledHook(() => scheduler.nudge());
 
@@ -178,6 +183,9 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   if (bootstrapResult && !bootstrapResult.created) org.backfillCatalog();
   // An explicit MANAGER_MODEL_TIER also re-tiers managers created before it was set (like company env overrides).
   if (config.explicitKeys.has("MANAGER_MODEL_TIER")) org.applyManagerModelTier(config.managerModelTier);
+  // Agents removed before removal cleaned up after them: their chats, private memories and pending requests.
+  const cleaned = chats.cleanUpRemovedAgents();
+  if (cleaned.agents) console.log(`[org] cleaned up after ${cleaned.agents} removed agent(s): ${cleaned.deletedChats} chats, ${cleaned.deletedMemories} memories, ${cleaned.withdrawnRequests} requests`);
 
   // Onboarding: every agent hired from now on finds the handbook in its inbox, from its manager, on day one.
   bus.subscribe((ev) => {
@@ -197,7 +205,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   let lastBeat = now().getTime();
 
   const platform: Platform = {
-    config, db, repos, bus, tracer, company, budget, org, conversations, memory, tasks, approvals, tools, models, metrics,
+    config, db, repos, bus, tracer, company, budget, org, conversations, chats, memory, tasks, approvals, tools, models, metrics,
     traces: new TraceService(repos), runs, scheduler, workspaces, catalog, services, bootstrapResult, modelsInfo,
     snapshot() {
       const at = now();

@@ -158,6 +158,29 @@ export class ApprovalService {
     return closed;
   }
 
+  /**
+   * Withdraws what a removed agent was still asking the Board (questions, hires, budget): rejected
+   * by the system with a note saying why, and the blocked task — now its manager's — wakes with it.
+   * Never the approval being decided right now (a terminate_agent request about the agent itself).
+   */
+  withdrawRequestsBy(agent: { id: string; name: string }): number {
+    const note = `Withdrawn: ${agent.name} was removed, so this request no longer stands. Ask again if the work still needs it.`;
+    let n = 0;
+    for (const a of this.deps.repos.approvals.list("pending")) {
+      if (a.requestedBy !== agent.id || (a.kind === "terminate_agent" && a.payload.agentId === agent.id)) continue;
+      if (a.kind === "hire_agent" && a.taskId) {
+        const asker = this.deps.tasks.get(a.taskId);
+        if (asker) this.deps.tasks.patchState(asker.id, { hires: withHire(hiresOf(asker), { role: hireRole(a.payload), status: "declined", approvalId: a.id }) });
+      }
+      this.deps.repos.approvals.update(a.id, { status: "rejected", decidedBy: "system", note, decidedAt: this.deps.now().toISOString() });
+      const decided = this.require(a.id);
+      this.deps.bus.emit("approval.decided", { agentId: decided.requestedBy, taskId: decided.taskId, traceId: decided.traceId, summary: summaries.approvalDecided(decided), data: decided });
+      this.deps.tasks.answerApproval(decided);
+      n += 1;
+    }
+    return n;
+  }
+
   /** The open Board question for an objective (root task), if any. */
   pendingQuestionFor(rootTaskId: string): Approval | null {
     return this.deps.repos.approvals.findPending("question", "rootTaskId", rootTaskId);

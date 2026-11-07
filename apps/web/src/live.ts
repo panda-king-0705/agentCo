@@ -185,6 +185,15 @@ export function applyEvent(ev: CompanyEvent): void {
         patch.messages = { ...state.messages, [m.conversationId]: mergeMessages(state.messages[m.conversationId] ?? [], [m]) };
       }
       break;
+    case "conversation.deleted":
+      // Deleted for good (or, the Boardroom, cleared): drop what we hold of it.
+      if (isObj(d) && typeof d.id === "string") {
+        const messages = { ...state.messages };
+        if (d.cleared === true) messages[d.id] = [];
+        else delete messages[d.id];
+        patch.messages = messages;
+      }
+      break;
     case "approval.created":
     case "approval.decided":
       // A replayed "created" must not reopen an approval we already hold as decided.
@@ -209,7 +218,7 @@ export function applyEvent(ev: CompanyEvent): void {
 // ───────────── connection ─────────────
 const EVENT_TYPES: CompanyEventType[] = [
   "agent.created", "agent.updated", "agent.status", "agent.terminated", "task.created", "task.updated", "run.started",
-  "run.completed", "span.started", "span.ended", "message.created", "approval.created", "approval.decided",
+  "run.completed", "span.started", "span.ended", "message.created", "conversation.deleted", "approval.created", "approval.decided",
   "memory.written", "budget.alert", "company.updated",
 ];
 

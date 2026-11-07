@@ -36,12 +36,13 @@ export function useAgentActions() {
       {destroying ? (
         <ConfirmDialog title={`Destroy ${destroying.name}?`} confirmLabel="Destroy agent" danger busy={busy} onConfirm={confirmDestroy} onClose={() => setDestroying(null)}>
           <p>
-            <strong>{destroying.name}</strong> ({destroying.title}) will be terminated and kept in the audit trail.
+            <strong>{destroying.name}</strong> ({destroying.title}) will be removed from the company.
           </p>
           <ul className="plain-list">
             <li>Any run in progress is aborted.</li>
             <li>Open tasks and direct reports move to their manager.</li>
-            <li>Their traces, memory and spend stay readable.</li>
+            <li>Their chats and private memories are deleted, and anything they were still asking the Board is withdrawn.</li>
+            <li>Their past work stays in traces, tasks and costs, marked removed, so spending totals stay correct.</li>
           </ul>
           <p className="muted small">This cannot be undone. Hire a new agent if you need the role back.</p>
         </ConfirmDialog>
@@ -49,12 +50,15 @@ export function useAgentActions() {
       {result ? (
         <Modal title="Agent destroyed" onClose={() => setResult(null)} width={440} footer={<Button variant="primary" onClick={() => setResult(null)}>Done</Button>}>
           <p>
-            <strong>{result.agent.name}</strong> was terminated.
+            <strong>{result.agent.name}</strong> was removed.
           </p>
           <dl className="kv" data-testid="destroy-result">
             <div className="kv-row"><dt>Runs cancelled</dt><dd className="num">{result.res.cancelledRuns}</dd></div>
             <div className="kv-row"><dt>Tasks moved to manager</dt><dd className="num">{result.res.reassignedTasks}</dd></div>
             <div className="kv-row"><dt>Reports re-parented</dt><dd className="num">{result.res.reassignedReports}</dd></div>
+            <div className="kv-row"><dt>Chats deleted</dt><dd className="num">{result.res.deletedChats ?? 0}</dd></div>
+            <div className="kv-row"><dt>Memories deleted</dt><dd className="num">{result.res.deletedMemories ?? 0}</dd></div>
+            <div className="kv-row"><dt>Requests withdrawn</dt><dd className="num">{result.res.withdrawnRequests ?? 0}</dd></div>
           </dl>
         </Modal>
       ) : null}
