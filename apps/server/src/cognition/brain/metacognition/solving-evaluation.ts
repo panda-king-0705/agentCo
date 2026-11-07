@@ -20,6 +20,7 @@ import { Q4_CONTROL, Q6_EXECUTION, q6SubprocessCount, type CandidateName } from 
 import { block, llmJson, recordCall, toolContext, type BrainRun } from "../runtime.ts";
 import type { Subprocess } from "./cognitive-control.ts";
 import { truthfulEfficientGood, type TegResult } from "./monitoring.ts";
+import { measure } from "../../../tools/builtins/files.ts";
 
 const TIERS: ModelTier[] = ["economy", "standard", "frontier"];
 
@@ -124,7 +125,7 @@ export async function solving(
         `Solve: ${plan.problem}\nSuccess criteria: ${plan.successCriteria.join("; ")}\nApproach (${plan.candidate.replace("_", " ")}): ${exec.verify ? "be thorough and verify your claims" : "be efficient"}.`,
         plan.memory.length ? `What you know:\n${plan.memory.slice(0, 10).join("\n")}` : "",
         guidance.length ? `Guidance you asked for (follow it):\n${guidance.join("\n")}` : "",
-        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified.",
+        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it.",
         `[[context:${JSON.stringify({
           mode: "task",
           agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },
@@ -176,6 +177,8 @@ export interface FeedbackResult {
   score: number;
   truthfulScore: number;
   issues: string[];
+  /** Decisions or data only the Board (or someone outside the team) can supply — reported, never revised for. */
+  openPoints: string[];
   modelDecision: Decision;
   decision: Decision;
   summary: string;
@@ -223,10 +226,14 @@ export async function feedback(
     revisionsLeft: number;
     rollbackAvailable: boolean;
     canEscalate: boolean;
+    /** The files the work saved, as they are on disk now (reviewFiles). */
+    files?: ReviewFile[];
   },
 ): Promise<FeedbackResult> {
   return block(run, "metacognition.solving_evaluation.feedback", "Evaluating the result", async (span) => {
     const results = summarizeResults(o.subtasks);
+    const files = o.files ?? [];
+    span.setAttributes({ "agentco.feedback.files": files.map((f) => f.display).join(", ") });
     const json = await llmJson(run, {
       stage: "metacognition.solving_evaluation.feedback",
       span,
@@ -235,13 +242,21 @@ export async function feedback(
         (results.length
           ? `Subprocess results:\n${results.map((r) => `- [${r.status}] ${oneLine(r.title, 80)}: ${truncate((r.result ?? "").replace(/\s+/g, " "), 400)}`).join("\n")}\n`
           : `Solution:\n${truncate(o.solution ?? "(none)", 2500)}\n`) +
+        (files.length
+          ? "Files as saved on disk — this IS the read-back: judge these files themselves, and never ask the author to read a file back, paste it or count its words again:\n" +
+            files.map((f) => `=== ${f.display} — saved by ${f.by} (${f.words} words, ${f.lines} lines${f.truncated ? "; shown in part" : ""}) ===\n${f.content}`).join("\n") +
+            "\n"
+          : "") +
         "Evaluate: score 0-1 against the criteria; truthful 0-1 (claims supported by the results/sources); good (meets the criteria and our values); issues; decision accept | revise | rollback (the approach is wrong) | escalate; and a 2-4 sentence summary for the requester. " +
         // 2026-11-07 (test 4): a one-page plan was sent back twice for "modeled pricing" and an "open
         // caps-or-prices decision" — things only the Board can settle — and for a "tool word count"
         // no tool could give.
-        "Judge only gaps this team can close with its tools. Decisions that belong to the Board (prices, budgets, go/no-go, trade-offs between options), data nobody has, and assumptions or estimates clearly labelled as such are NOT defects: name them in the summary as open points for the Board, and do not revise, roll back or lower the score for them. A word, line or character count reported by a file tool, and a save the file tool confirmed, count as verified.",
-      shape: '{"score":number,"truthful":number,"good":boolean,"issues":string[],"decision":"accept"|"revise"|"rollback"|"escalate","summary":string}',
-      context: { mode: "task", task: { title: run.task?.title }, results, solution: o.solution ?? "" },
+        "Judge only gaps this team can close with its tools. Decisions that belong to the Board (prices, budgets, go/no-go, trade-offs between options), data nobody has, and assumptions or estimates clearly labelled as such are NOT defects: list them in openPoints (and mention them in the summary), and do not revise, roll back or lower the score for them. A word, line or character count reported by a file tool, and a save the file tool confirmed, count as verified. " +
+        // 2026-11-07 (test 4, third run): the Finance section went round three times over "three
+        // headings, criteria say exactly two" and tag placement — $0.48 of a $1.03 run.
+        "Judge substance — is it correct, complete, consistent and honest? — not formatting (exact heading counts, tag placement, wording, layout): a formatting slip is at most a note in issues, never on its own a reason to revise, unless the Board's original request demands that exact format.",
+      shape: '{"score":number,"truthful":number,"good":boolean,"issues":string[],"openPoints":string[],"decision":"accept"|"revise"|"rollback"|"escalate","summary":string}',
+      context: { mode: "task", task: { title: run.task?.title }, results, solution: o.solution ?? "", files: files.map((f) => f.display) },
       maxOutputTokens: 1000,
     });
     const nonEmpty = results.length ? results.some((r) => (r.result ?? "").trim()) : !!(o.solution ?? "").trim();
@@ -269,24 +284,104 @@ export async function feedback(
     const decision = decide({ modelDecision, score, teg, revisionsLeft: o.revisionsLeft, rollbackAvailable: o.rollbackAvailable, canEscalate: o.canEscalate });
     const summary = str(json.summary, results.length ? `${results.filter((r) => r.status === "done").length}/${results.length} parts delivered.` : truncate(o.solution ?? "", 300), 1200);
     span.setAttributes({ "agentco.score": score, "agentco.decision": decision, "agentco.decision.model": modelDecision, "agentco.accept_threshold": threshold, "agentco.feedback.degraded": degraded });
-    return { score, truthfulScore, issues, modelDecision, decision, summary, teg, acceptThreshold: threshold };
+    const openPoints = strArr(json.openPoints, 8, 240);
+    return { score, truthfulScore, issues, openPoints, modelDecision, decision, summary, teg, acceptThreshold: threshold };
   });
 }
 
-/** The integrated deliverable a manager reports upward after accepting its subprocesses. */
-export function integrateResults(title: string, summary: string, subtasks: Task[], agentName: string): string {
+/**
+ * The integrated deliverable a manager reports upward after accepting its subprocesses: the
+ * summary, the open points for the Board, the files saved, and a few lines per contribution (the
+ * files hold the detail). It used to paste every contribution in full, nested reports included, so
+ * the Board's reply ran to pages (2026-11-07).
+ */
+export function integrateResults(
+  title: string,
+  summary: string,
+  subtasks: Task[],
+  agentName: string,
+  extras: { openPoints?: string[]; files?: ReviewFile[]; names?: (agentId: string | null) => string } = {},
+): string {
   const parts = subtasks
-    .filter((s) => s.status === "done" && s.result)
-    .map((s) => `### ${s.title}\n${truncate(s.result!.trim(), 1600)}`);
-  const missing = subtasks.filter((s) => s.status !== "done").map((s) => `- ${s.title}: ${s.status}${s.error ? ` (${oneLine(s.error, 120)})` : ""}`);
+    .filter((s) => s.status === "done" && s.result && s.state.kind !== "escalation")
+    .map((s) => `- **${s.title}**${extras.names ? ` (${extras.names(s.assigneeId)})` : ""}: ${gist(s.result!)}`);
+  const missing = subtasks.filter((s) => s.status !== "done" && s.state.kind !== "escalation").map((s) => `- ${s.title}: ${s.status}${s.error ? ` (${oneLine(s.error, 120)})` : ""}`);
+  const points = extras.openPoints ?? [];
+  const files = extras.files ?? [];
   return [
     `# ${title}`,
     `${summary}`,
-    parts.length ? `## Contributions\n${parts.join("\n\n")}` : "",
+    points.length ? `## Open points for the Board\n${points.map((p) => `- ${p}`).join("\n")}` : "",
+    files.length ? `## Files\n${files.map((f) => `- ${f.display} (${f.by}, ${f.words} words)`).join("\n")}` : "",
+    parts.length ? `## Contributions\n${parts.join("\n")}` : "",
     missing.length ? `## Not delivered\n${missing.join("\n")}` : "",
     `— ${agentName}`,
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/** A contribution's first point: its own heading and any nested "Contributions" section dropped, one line. */
+export function gist(result: string, max = 320): string {
+  let text = result.trim().replace(/^#{1,3} [^\n]*\n+/, "");
+  const nested = text.search(/\n#{1,3} Contributions\b/);
+  if (nested >= 0) text = text.slice(0, nested);
+  return oneLine(text, max);
+}
+
+export interface ReviewFile {
+  display: string;
+  by: string;
+  content: string;
+  truncated: boolean;
+  words: number;
+  lines: number;
+}
+
+const REVIEW_FILE_CHARS = 6000;
+const REVIEW_TOTAL_CHARS = 16000;
+const REVIEW_MAX_FILES = 6;
+
+/**
+ * The files a piece of work saved, newest first, as they are on disk now (one entry per location,
+ * capped in count and size) — what Feedback judges instead of asking for a read-back.
+ */
+export function reviewFiles(run: BrainRun, writes: { agentId: string; display: string }[]): ReviewFile[] {
+  const drive = run.platform.drive;
+  if (!drive || writes.length === 0) return [];
+  const seen = new Set<string>();
+  const out: ReviewFile[] = [];
+  let total = 0;
+  for (const w of [...writes].reverse()) {
+    const key = w.display.startsWith("private/") ? `${w.agentId}:${w.display}` : w.display;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const file = drive.read(w.agentId, w.display);
+    if (!file) continue;
+    const room = Math.min(REVIEW_FILE_CHARS, REVIEW_TOTAL_CHARS - total);
+    if (room < 500) break;
+    const m = measure(file.content);
+    const content = file.content.length > room ? file.content.slice(0, room) : file.content;
+    total += content.length;
+    out.push({ display: w.display, by: run.platform.org.getAgent(w.agentId)?.name ?? w.agentId, content, truncated: file.truncated || content.length < file.content.length, words: m.words, lines: m.lines });
+    if (out.length >= REVIEW_MAX_FILES) break;
+  }
+  return out;
+}
+
+/** Files saved under these tasks or anywhere below them (a report's own reports included). */
+export function filesUnderTasks(run: BrainRun, roots: Task[]): ReviewFile[] {
+  const drive = run.platform.drive;
+  const task = run.task;
+  if (!drive || !task || roots.length === 0) return [];
+  const ids = new Set<string>();
+  const queue = roots.map((t) => t.id);
+  while (queue.length > 0 && ids.size < 200) {
+    const id = queue.shift()!;
+    if (ids.has(id)) continue;
+    ids.add(id);
+    for (const c of run.platform.tasks.children(id)) queue.push(c.id);
+  }
+  return reviewFiles(run, drive.written(task.traceId).filter((w) => w.taskId !== null && ids.has(w.taskId)));
 }
 

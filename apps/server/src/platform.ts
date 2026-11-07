@@ -7,7 +7,7 @@
  */
 import type { Agent, CognitionKind, CompanySnapshot, ModelsInfo } from "../../../packages/shared/src/index.ts";
 import type { AppConfig } from "./config.ts";
-import type { CognitiveEngine, ModelProvider, ModelRouter, ModelRouterDeps, PlatformServices } from "./contracts.ts";
+import type { CognitiveEngine, ModelProvider, ModelRouter, ModelRouterDeps, PlatformServices, SavedFiles } from "./contracts.ts";
 import { openDatabase, type Db } from "./db/index.ts";
 import { createRepositories, type Repositories } from "./db/index.ts";
 import { EventBus } from "./events/bus.ts";
@@ -145,7 +145,19 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   const modelsInfo = overrides.modelsInfo ?? (() => buildModelsInfo(modelConfig ?? loadModelConfig(env)));
 
   const metrics = new MetricsService(repos, now);
-  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, now };
+  const drive: SavedFiles = {
+    written: (traceId) => repos.spans.filesWritten(traceId),
+    read: (agentId, display) => {
+      try {
+        if (!workspaces.exists(agentId, display)) return null;
+        const r = workspaces.read(agentId, display);
+        return { content: r.content, truncated: r.truncated };
+      } catch {
+        return null;
+      }
+    },
+  };
+  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, drive, now };
   const engines = overrides.engines ?? (await loadEngines(config));
   const governor = new ContextGovernor(repos.settings, { dataDir: config.dataDir, triggerPct: config.contextTriggerPct, carryTurns: config.contextCarryTurns }, now);
   const runs = new RunService({

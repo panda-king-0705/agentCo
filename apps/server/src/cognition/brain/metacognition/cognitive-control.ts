@@ -168,7 +168,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
           (canDelegate
             ? `Your direct reports:\n${reports.map((r) => `- ${r.id}: ${r.title} — ${oneLine(r.identity.mission, 120)}`).join("\n")}\n` +
               `Decompose into at most ${max} subprocesses, each for ONE report (assigneeId), with value 0-1000, estCostUsd and acceptanceCriteria; mode "delegate". ` +
-              "Write acceptance criteria the assignee's tools can check: the file tools confirm every save and report word, line and character counts — there is no other measuring tool — so do not ask for a separate read-back or a word count \"from a tool\" beyond that. " +
+              "Write acceptance criteria about content — what must be covered, correct and consistent — not formatting (exact heading counts, tag placement, layout). Keep them checkable with the assignee's tools: the file tools confirm every save and report word, line and character counts, and the reviewer sees the saved files themselves, so never ask for a read-back, a pasted copy or a separate word count. " +
               "If the request names a department or person (\"have Finance…\", \"ask the CTO…\"), assign that part to them. " +
               (named.length
                 ? `The request names these owners — give each of them their own part (at least one part each): ${named.map((r) => `${r.id} (${r.title})`).join(", ")}. `
