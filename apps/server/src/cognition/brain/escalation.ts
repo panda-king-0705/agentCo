@@ -25,7 +25,8 @@ export interface EscalationState {
 /** From task.state.escalation, cross-checked with the task's escalation subtasks (never lower). */
 export function readEscalation(task: Task | null, children: Task[], agentId: string): EscalationState {
   const saved = obj(task?.state.escalation);
-  const mine = children.filter((c) => c.state.kind === "escalation" && (c.state.escalatedBy ?? agentId) === agentId);
+  // An inputs wait (tasks/inputs.ts) is not an escalation: it spends no budget and answers nothing.
+  const mine = children.filter((c) => c.state.kind === "escalation" && c.state.inputsWait !== true && (c.state.escalatedBy ?? agentId) === agentId);
   return {
     count: Math.max(num(saved.count, 0, 0, 1000), mine.length),
     answered: saved.answered === true || mine.some((c) => c.status === "done"),

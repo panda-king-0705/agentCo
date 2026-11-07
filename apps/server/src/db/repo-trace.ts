@@ -5,6 +5,15 @@ import type { Db } from "./database.ts";
 import { toEvent, toSpan, type Row } from "./mappers.ts";
 import { all, insertRow, one, updateRow } from "./sql.ts";
 
+export interface FileWrite {
+  agentId: string;
+  area: "shared" | "private";
+  /** Path inside the area. */
+  rel: string;
+  display: string;
+  at: string;
+}
+
 export class SpanRepo {
   private readonly db: Db;
   constructor(db: Db) {
@@ -26,6 +35,34 @@ export class SpanRepo {
 
   byTrace(traceId: string): Span[] {
     return all(this.db, "SELECT * FROM spans WHERE trace_id = ? ORDER BY started_at, rowid", traceId).map(toSpan);
+  }
+
+  /**
+   * Files saved with workspace_write_file in a trace (an objective), oldest first: who wrote what,
+   * where. New spans carry agentco.file.path; older ones are parsed from "Wrote <path> (…)." — a
+   * path without an area prefix was written before the drive became the default, i.e. privately.
+   */
+  filesWritten(traceId: string): FileWrite[] {
+    const rows = all(
+      this.db,
+      "SELECT agent_id, output, attributes, started_at FROM spans WHERE trace_id = ? AND kind = 'tool' AND name = 'tool.workspace_write_file' AND status = 'ok' ORDER BY started_at, rowid",
+      traceId,
+    );
+    const out: FileWrite[] = [];
+    for (const r of rows) {
+      let attrs: Record<string, unknown> = {};
+      try {
+        attrs = JSON.parse(String(r.attributes ?? "{}")) as Record<string, unknown>;
+      } catch {
+        attrs = {};
+      }
+      const path = typeof attrs["agentco.file.path"] === "string" ? (attrs["agentco.file.path"] as string) : (/^Wrote (\S+) \(/.exec(String(r.output ?? ""))?.[1] ?? "");
+      if (!path || !r.agent_id) continue;
+      const area = path.startsWith("shared/") ? "shared" : "private";
+      const rel = path.replace(/^(shared|private)\//, "");
+      out.push({ agentId: String(r.agent_id), area, rel, display: `${area}/${rel}`, at: String(r.started_at) });
+    }
+    return out;
   }
 
   byRun(runId: string): Span[] {

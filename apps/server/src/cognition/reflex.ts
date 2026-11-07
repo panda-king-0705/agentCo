@@ -57,7 +57,8 @@ export class ReflexEngine implements CognitiveEngine {
     const inbox = platform.memory.inbox(agent.id, 5);
     if (inbox.length) platform.memory.markRead(inbox.map((m) => m.id));
     // Escalation budget for this task: the agent's escalation subtasks so far.
-    const escalations = task && input.trigger !== "message" ? input.subtasks.filter((c) => c.state.kind === "escalation" && (c.state.escalatedBy ?? agent.id) === agent.id) : [];
+    // An inputs wait (tasks/inputs.ts) is not an escalation: it spends no budget and answers nothing.
+    const escalations = task && input.trigger !== "message" ? input.subtasks.filter((c) => c.state.kind === "escalation" && c.state.inputsWait !== true && (c.state.escalatedBy ?? agent.id) === agent.id) : [];
     const openEscalation = escalations.find((c) => !TERMINAL.has(c.status)) ?? null;
     const escalationAnswered = escalations.some((c) => c.status === "done");
     const mayEscalate = !escalationAnswered && escalations.length < MAX_ESCALATIONS_PER_TASK;
@@ -72,7 +73,7 @@ export class ReflexEngine implements CognitiveEngine {
           (task.acceptanceCriteria ? `\nAcceptance criteria: ${truncate(task.acceptanceCriteria, 500)}` : ""),
       );
       parts.push(
-        "Do the work with your tools (save substantial documents under shared/<your-department>/), then call complete_task with the concrete deliverable. Call report_blocker only if the task truly cannot be done.",
+        "Do the work with your tools, then call complete_task with the concrete deliverable. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes). Call report_blocker only if the task truly cannot be done.",
       );
     } else if (input.trigger === "message") {
       const recent = input.history.messages.slice(-6).map((m) => `${m.senderId === agent.id ? "you" : m.senderId}: ${oneLine(m.content, 300)}`);
@@ -83,7 +84,11 @@ export class ReflexEngine implements CognitiveEngine {
     if (inbox.length) parts.push(`Unread messages:\n${inbox.map((m) => `- ${m.senderId}: ${oneLine(m.content, 200)}`).join("\n")}`);
     if (input.trigger !== "message" && input.recoveryNotice) parts.push(`RECOVERY NOTICE: ${input.recoveryNotice}`);
     if (input.trigger === "subtasks_completed" && input.subtasks.length) {
-      const answers = input.subtasks.filter((c) => c.state.kind === "escalation");
+      const answers = input.subtasks.filter((c) => c.state.kind === "escalation" && c.state.inputsWait !== true);
+      const waits = input.subtasks.filter((c) => c.state.inputsWait === true && c.status === "done");
+      // The newest finished wait only: earlier ones were already acted on.
+      const lastWait = waits.sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""))[0];
+      if (lastWait) parts.push(truncate(lastWait.result ?? "", 2400));
       for (const c of answers) {
         const who = c.assigneeId ? (platform.org.getAgent(c.assigneeId)?.name ?? "your manager") : "your manager";
         parts.push(`Answer to your escalation from ${who} (${c.status}): ${truncate(c.result ?? c.error ?? "(no answer)", 1500)}\nContinue the task using this answer; do not escalate the same question again.`);

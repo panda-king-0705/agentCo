@@ -68,6 +68,13 @@ export const Q4_CONTROL = {
   reverseThinkingAt: 0.4,
   /** evaluation strictness: accept threshold += strictness · c (tuning) */
   strictness: 0.1,
+  /**
+   * Owners the request names each get a part (founder, 2026-11-07): max subprocesses is at least
+   * the named owners, plus one for a round-2 step (assembly/review) when two or more are named —
+   * never more than maxParts. Overrides essentialOnly (the Board's explicit split wins).
+   */
+  namedRound2Slack: 1,
+  maxParts: 8,
 } as const;
 
 // ── Q5 — "BIO / Asserts…" = BIO / Assets.

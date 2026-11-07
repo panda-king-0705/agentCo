@@ -26,6 +26,13 @@ export const REPORT_BLOCKER: ToolSpec = {
 
 const TOOL_RESULT_CHARS = 3000;
 
+/**
+ * The wrap-up call has no tools: say plainly that the reply itself is the result (2026-11-07: a
+ * worker told to "finish with complete_task" in a no-tools call answered "complete_task is not
+ * among my tools" instead of giving its result).
+ */
+export const PLAIN_TEXT_COMPLETES = "Your plain-text reply then IS your result and completes the task — no complete_task call is needed.";
+
 export interface ToolLoopOptions {
   ctx: EngineContext;
   stage: string;
@@ -159,7 +166,7 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
     if (ctx.signal.aborted) throw abortErrorFrom(ctx.signal);
     out.steps = step;
     if (o.wrapUp && step === o.maxSteps && step > 1) {
-      messages.push({ role: "user", content: o.terminal.complete ? "Last step: finish now with complete_task (or report_blocker)." : "Last step: give your answer now." });
+      messages.push({ role: "user", content: o.terminal.complete ? `Last step: finish now with complete_task (or report_blocker). After this step your tools switch off; ${PLAIN_TEXT_COMPLETES}` : "Last step: give your answer now." });
     }
     ctx.platform.agents.setActivity(agent.id, "thinking", `${o.activityLabel} (step ${step})`, o.block ?? null);
     const started = Date.now();
@@ -253,7 +260,12 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
   }
   if (!o.wrapUp) return out;
   if (ctx.signal.aborted) throw abortErrorFrom(ctx.signal);
-  messages.push({ role: "user", content: "You are out of tool steps. Give your result now from what you have: what is done (and where it was recorded) and what is still open." });
+  messages.push({
+    role: "user",
+    content: o.terminal.complete
+      ? `You are out of tool steps and your tools are now off, including complete_task. ${PLAIN_TEXT_COMPLETES} Give your result now from what you have: what is done (and where it was saved) and what is still open.`
+      : "You are out of tool steps and your tools are now off. Reply in plain text with your answer from what you have.",
+  });
   ctx.platform.agents.setActivity(agent.id, "thinking", `${o.activityLabel} (wrapping up)`, o.block ?? null);
   const started = Date.now();
   const wrap = await ctx.platform.models.chat(

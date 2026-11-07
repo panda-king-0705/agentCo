@@ -51,6 +51,13 @@ const ROLE_WORDS: Record<string, string> = {
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
+/** "Chief Financial Officer" → "cfo" (null when the title has no common short form). */
+export function roleWordFor(title: string): string | null {
+  const t = norm(title);
+  for (const [word, full] of Object.entries(ROLE_WORDS)) if (full === t && !word.includes(" ")) return word;
+  return null;
+}
+
 /**
  * Resolve a colleague from an id, a name ("Ava Chen", "Ava"), a title ("Chief Financial Officer"),
  * a role word ("ceo", "cfo") or "manager" / "my manager" (relative to `self`). Ambiguous → null.

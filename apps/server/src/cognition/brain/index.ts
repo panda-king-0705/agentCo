@@ -20,7 +20,7 @@ import type { CognitiveEngine, CognitiveStatePatch, EngineContext, EngineResult,
 import { arr, num, obj, str, strArr } from "../coerce.ts";
 import { agentFacts } from "../prompt.ts";
 import { oneLine, truncate } from "../text.ts";
-import { canEscalate, escalationSettled, readEscalation } from "./escalation.ts";
+import { canEscalate, escalationSettled, hasEscalationTools, readEscalation } from "./escalation.ts";
 import { writeReport } from "./global-memory.ts";
 import { CANDIDATE_NAMES, Q2_OOD, Q3_FALLBACK, Q4_CONTROL, Q8_HUMAN_NATURE, type CandidateName } from "./interpretation.ts";
 import { assessConfidence, fallbackTarget, proceedOnAssumptions, shouldEarlyStop, type ConfidenceAssessment, type FallbackTarget } from "./metacognition/confidence.ts";
@@ -36,7 +36,7 @@ import {
   rollbackRecovery,
 } from "./metacognition/project-management.ts";
 import { selfAbility, type Competence } from "./metacognition/self-ability.ts";
-import { feedback, integrateResults, solving, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
+import { delegateParts, feedback, integrateResults, solving, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
 import { analysis, literatureReview, problemDefinition, requestText, type ProblemDefinition, type Understanding } from "./metacognition/target-understanding.ts";
 import { block, llmJson, mustPropagate, phase, toolContext, YieldSignal, type BrainRun } from "./runtime.ts";
 import { feedbackUpdate } from "./self-management/emotion.ts";
@@ -292,7 +292,10 @@ export class BrainEngine implements CognitiveEngine {
       // An escalation to the manager was answered: treat the result like a human answer and
       // resume at the checkpointed block with the answer in local working memory.
       const cp = selection.checkpoint;
-      const answered = children.filter((c) => c.state.kind === "escalation" && ["done", "failed", "cancelled"].includes(c.status));
+      const finishedEsc = children.filter((c) => c.state.kind === "escalation" && ["done", "failed", "cancelled"].includes(c.status));
+      // Only what was answered since this checkpoint: an earlier wait or answer is old news.
+      const recent = cp ? finishedEsc.filter((c) => !c.completedAt || c.completedAt >= cp.at) : finishedEsc;
+      const answered = recent.length > 0 ? recent : finishedEsc;
       if (cp && cp.reason === ESCALATION_CHECKPOINT && answered.length > 0) {
         const good = answered.filter((c) => c.status === "done");
         if (good.length === 0) {
@@ -300,18 +303,30 @@ export class BrainEngine implements CognitiveEngine {
           this.patch(run, { checkpoint: null });
           return { outcome: "failed", output: "", error: `My manager could not answer the escalation on T-${task.number}: ${truncate(why, 300)}`, taskState: { checkpoint: null } };
         }
-        const answer = good.map((c) => c.result ?? "").filter(Boolean).join("\n").trim() || "Proceed with your best judgment.";
-        run.wm = { ...resumeWorkingMemory(cp, "answer"), escalationAnswer: answer };
-        if (run.escalation) run.escalation.answered = true; // a manager answered: no re-escalation of this task
-        run.ctx.span.setAttributes({ "agentco.resumed_at": cp.block, "agentco.escalation.answered": good.length });
+        const waits = good.filter((c) => c.state.inputsWait === true);
+        const answers = good.filter((c) => c.state.inputsWait !== true);
+        const answer = answers.map((c) => c.result ?? "").filter(Boolean).join("\n").trim();
+        const inputs = waits.map((c) => c.result ?? "").filter(Boolean).join("\n").trim();
+        run.wm = {
+          ...resumeWorkingMemory(cp, "answer"),
+          ...(answers.length ? { escalationAnswer: answer || "Proceed with your best judgment." } : {}),
+          ...(inputs ? { inputsReady: inputs } : {}),
+        };
+        // A manager answered: no re-escalation of this task. A finished inputs wait answers nothing.
+        if (run.escalation && answers.length > 0) run.escalation.answered = true;
+        run.ctx.span.setAttributes({ "agentco.resumed_at": cp.block, "agentco.escalation.answered": answers.length, "agentco.inputs_ready": waits.length });
         this.patch(run, { checkpoint: null });
         const other = children.filter((c) => c.state.kind !== "escalation");
+        const guidance = [
+          ...(answers.length ? [`Guidance from my manager: ${truncate(answer || "Proceed with your best judgment.", 400)}`] : []),
+          ...(inputs ? [`Colleague work I was waiting for is done: ${truncate(inputs, 400)}`] : []),
+        ];
         if (other.length > 0 && plan.subprocesses.length > 0) {
           // Escalated while evaluating subtask results: re-evaluate them with the guidance in hand.
-          return this.evaluateSubprocesses(run, { ...plan, feedback: [...plan.feedback, `Guidance from my manager: ${truncate(answer, 400)}`].slice(-8) }, other);
+          return this.evaluateSubprocesses(run, { ...plan, feedback: [...plan.feedback, ...guidance].slice(-8) }, other);
         }
         return this.fullPass(run, plan, {
-          feedback: [...plan.feedback, `Guidance from my manager: ${truncate(answer, 400)}`].slice(-8),
+          feedback: [...plan.feedback, ...guidance].slice(-8),
           rejected: plan.rejected,
           revision: plan.revision,
           boardApproved: true,
@@ -475,6 +490,7 @@ export class BrainEngine implements CognitiveEngine {
     let rejected = [...state.rejected];
     let revision = state.revision;
     const maxRevisions = run.drives.conservation ? 0 : run.maxRevisions;
+    let blockedSolves = 0;
 
     for (let attempt = 0; attempt < maxRevisions + CANDIDATE_NAMES.length + 1; attempt++) {
       // Resumed at Solving: the chosen plan is in working memory — no re-planning.
@@ -516,6 +532,19 @@ export class BrainEngine implements CognitiveEngine {
       if (solution.kind === "escalated") {
         // escalate / ask_human inside the Solving loop: wait for the answer, never carry on without it.
         return this.escalateOutcome(run, `While solving T-${task.number}: ${solution.text}`, u.confidence.calibrated, [], solutionEscalation(solution), "metacognition.solving_evaluation.solving");
+      }
+
+      if (solution.kind === "failed" && solution.text.startsWith("Blocked:")) {
+        // report_blocker. Blocked on a colleague's part still in progress → go on hold for it
+        // (the escalate tool turns this into an inputs wait); blocked twice → re-planning will not
+        // fix an outside blocker, so escalate (2026-11-07: 6–7 report_blocker rounds in one run).
+        blockedSolves++;
+        const blocker = solution.text.slice("Blocked:".length).trim();
+        const inputs = run.platform.tasks.openInputs?.(task, run.agent.id, blocker) ?? [];
+        if ((inputs.length > 0 && hasEscalationTools(run.agent)) || (blockedSolves >= 2 && canEscalate(run))) {
+          run.ctx.span.setAttributes({ "agentco.blocked.escalated": true, "agentco.blocked.inputs": inputs.length });
+          return this.escalateOutcome(run, `Blocked on T-${task.number}: ${truncate(blocker, 600)}`, u.confidence.calibrated, [], null, "metacognition.solving_evaluation.solving");
+        }
       }
 
       const fb = await phase(run, "evaluation", () =>
@@ -660,6 +689,9 @@ export class BrainEngine implements CognitiveEngine {
   /** trigger subtasks_completed (and recovery with finished subtasks): Feedback on the subprocesses. */
   private async evaluateSubprocesses(run: BrainRun, plan: PersistedPlan, children: Task[]): Promise<EngineResult> {
     const task = run.task!;
+    // Round 1 done → hand out the round-2 steps (assembly, review) before judging the whole.
+    const round2 = await this.secondRound(run, plan, children);
+    if (round2) return round2;
     const finished = children.filter((c) => ["done", "failed", "cancelled", "blocked"].includes(c.status));
     const events: ProcessEvent[] = eventsFromSubtasks(finished);
     const maxRevisions = run.drives.conservation ? 0 : run.maxRevisions;
@@ -714,6 +746,37 @@ export class BrainEngine implements CognitiveEngine {
   }
 
   /**
+   * Round 2 (founder, 2026-11-07): when every round-1 part is done, the steps that work on their
+   * output — assembling, reconciling, reviewing — are delegated, with the round-1 results in their
+   * brief. Before, the assembler started alongside the parts and spent its runs searching for
+   * sections that did not exist yet. Null when there is nothing to start (no pending round-2 step,
+   * or a round-1 part did not finish done): Feedback then judges the parts as usual.
+   */
+  private async secondRound(run: BrainRun, plan: PersistedPlan, children: Task[]): Promise<EngineResult | null> {
+    const pending = plan.subprocesses.filter((s) => s.round === 2 && !s.taskId && s.assigneeId);
+    if (pending.length === 0) return null;
+    const parts = children.filter((c) => c.state.kind !== "escalation");
+    if (parts.length === 0 || !parts.every((c) => c.status === "done")) return null;
+    const task = run.task!;
+    const who = (id: string | null) => run.platform.org.getAgent(id ?? "")?.name ?? "someone";
+    const inputs = parts.map((c) => `- T-${c.number} "${truncate(c.title, 80)}" by ${who(c.assigneeId)}: ${truncate(oneLine(c.result ?? ""), 700)}`).join("\n");
+    const briefed = pending.map((s) => ({ ...s, description: `${s.description}\n\nRound-1 results to work from (their files are on the company drive):\n${inputs}` }));
+    const out = await block(run, "metacognition.solving_evaluation.solving", `Delegating round 2 of T-${task.number}`, async (span) => {
+      const r = await delegateParts(run, span, briefed, children.map((c) => c.title));
+      span.setAttributes({ "agentco.delegated": r.delegated.length, "agentco.round": 2 });
+      return r;
+    });
+    if (out.delegated.length === 0) return null;
+    const started = new Map(out.delegated.map((s) => [s.title, s.taskId]));
+    const subprocesses = plan.subprocesses.map((s) => (s.round === 2 && !s.taskId && started.has(s.title) ? { ...s, taskId: started.get(s.title) ?? null } : s));
+    return {
+      outcome: "waiting",
+      output: `Round 1 of T-${task.number} is done (${parts.length} part(s)); delegated round 2: ${out.delegated.map((s) => `"${truncate(s.title, 60)}" → ${who(s.assigneeId)}`).join("; ")}.`,
+      taskState: { plan: { ...plan, subprocesses, costSoFarUsd: plan.costSoFarUsd + run.costUsd }, checkpoint: null },
+    };
+  }
+
+  /**
    * Human Nature › recognition: the manager's Feedback accepted these subtasks, which moves each
    * WORKER's valence (recognizedBy "manager"). Each worker is updated once per acceptance.
    */
@@ -758,16 +821,17 @@ export class BrainEngine implements CognitiveEngine {
         span.setAttributes({ "agentco.early_stop": true, "agentco.early_stop.reason": truncate(reason, 300) });
         return this.escalate(run, reason, span);
       }));
-    if ((esc.approvalId || esc.subtaskId) && run.escalation) run.escalation.count += 1;
+    const onHold = !!esc.subtaskId && run.platform.tasks.get(esc.subtaskId)?.state.inputsWait === true;
+    if ((esc.approvalId || esc.subtaskId) && run.escalation && !onHold) run.escalation.count += 1;
     const approvalId = esc.approvalId;
     const plan = readPlan(run.task!);
     const result = await this.report(run, {
       outcome: "blocked",
-      output: `I need guidance on T-${task.number} "${task.title}": ${reason}`,
+      output: onHold ? `Waiting for colleagues' work before continuing T-${task.number} "${task.title}": ${reason}` : `I need guidance on T-${task.number} "${task.title}": ${reason}`,
       score: 0.3,
       summary: reason,
       predicted,
-      events: [...events, { outcome: "escalated", source: "own", recognizedBy: "self" }],
+      events: onHold ? events : [...events, { outcome: "escalated", source: "own", recognizedBy: "self" }],
       estimateUsd: plan?.estimateUsd ?? task.estCostUsd,
       plan,
     });

@@ -285,6 +285,11 @@ export interface TaskView {
    * subtasks), aborting any running run on it. No-op on terminal tasks.
    */
   cancel(taskId: string, reason: string): void;
+  /**
+   * Colleague work on the same objective an agent stuck on `task` could wait for instead of
+   * escalating (tasks/inputs.ts); optional for test wiring.
+   */
+  openInputs?(task: Task, agentId: string, text: string): Task[];
 }
 
 export interface CognitiveStatePatch {

@@ -15,6 +15,13 @@ import type { Competence } from "./self-ability.ts";
 import type { ProblemDefinition, Understanding } from "./target-understanding.ts";
 
 export interface Subprocess {
+  /**
+   * 1 = handed out now; 2 = needs the round-1 parts' output (assembling, reconciling, reviewing):
+   * handed out only after every round-1 part is done, with their results in its brief.
+   */
+  round?: 1 | 2;
+  /** The assignee is an owner the request names (never trimmed by the candidate's subprocess share). */
+  named?: boolean;
   title: string;
   description: string;
   value: number;
@@ -49,8 +56,24 @@ export function controlLevel(uncertainty: number, pressureSignals = 0): number {
   return Math.min(1, q4ControlLevel(uncertainty) + Q2_OOD.controlBoostPerSignal * Math.max(0, pressureSignals));
 }
 
-export function maxSubprocessesFor(c: number, essentialOnly: boolean): number {
-  return essentialOnly ? 1 : 1 + Math.round(Q4_CONTROL.granularity * c);
+export function maxSubprocessesFor(c: number, essentialOnly: boolean, namedOwners = 0): number {
+  const base = essentialOnly ? 1 : 1 + Math.round(Q4_CONTROL.granularity * c);
+  const named = namedOwners > 0 ? namedOwners + (namedOwners >= 2 ? Q4_CONTROL.namedRound2Slack : 0) : 0;
+  return Math.max(base, Math.min(Q4_CONTROL.maxParts, named));
+}
+
+/** A step that works on the other parts' output: assemble/merge/reconcile/review … the sections/drafts/inputs. */
+const DEPENDENT_VERB = /\b(assembl\w*|compil\w*|merg\w*|integrat\w*|consolidat\w*|reconcil\w*|review\w*|stitch\w*|collat\w*|combin\w*|proofread\w*|sign[- ]?off|final (edit|check|qa|pass))\b/i;
+const DEPENDENT_OBJECT = /\b(sections?|parts?|drafts?|inputs?|outputs?|deliverables?|contributions?|results|one[- ]pager?|one[- ]page|final (plan|document|doc|page|version))\b/i;
+
+export function isDependentStep(title: string, description: string): boolean {
+  return DEPENDENT_VERB.test(title) && DEPENDENT_OBJECT.test(`${title} ${description}`);
+}
+
+/** Round 2 only makes sense with round-1 work to wait for: a plan that is all round 2 runs as one round. */
+export function settleRounds(subprocesses: Subprocess[]): Subprocess[] {
+  if (subprocesses.length < 2 || subprocesses.every((s) => s.round === 2)) for (const s of subprocesses) s.round = 1;
+  return subprocesses;
 }
 
 export function coerceSubprocesses(json: Record<string, unknown>, max: number, fallbackValue: number): Subprocess[] {
@@ -59,9 +82,13 @@ export function coerceSubprocesses(json: Record<string, unknown>, max: number, f
     const s = obj(raw);
     const title = str(s.title, "", 140);
     if (!title) continue;
+    const description = str(s.description, title, 2000);
+    const given = Number(s.round);
     out.push({
+      round: given === 2 ? 2 : given === 1 ? 1 : isDependentStep(title, description) ? 2 : 1,
+      named: false,
       title: truncate(title, 140),
-      description: str(s.description, title, 2000),
+      description,
       value: num(s.value, fallbackValue, 0, 1000),
       estCostUsd: num(s.estCostUsd ?? s.cost, 0.05, 0.001, 50),
       acceptanceCriteria: str(s.acceptanceCriteria, `A concrete written deliverable for "${truncate(title, 80)}"`, 600),
@@ -72,7 +99,7 @@ export function coerceSubprocesses(json: Record<string, unknown>, max: number, f
     });
     if (out.length >= max) break;
   }
-  return out;
+  return settleRounds(out);
 }
 
 /** Always the diagram's three candidates, in order, with defaults scaled from the task. */
@@ -117,10 +144,12 @@ export interface DecomposeArgs {
 /** Blocks: decomposition (+ role arrangement) and candidate solutions, from one agent-tier call. */
 export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise<ControlOutput> {
   const c = controlLevel(a.uncertainty, a.pressureSignals);
-  const max = maxSubprocessesFor(c, run.drives.essentialOnly);
   const reports = run.platform.org.directReports(run.agent.id).filter((r) => r.status !== "terminated" && r.status !== "paused");
   const canDelegate = reports.length > 0 && run.platform.tools.specsFor(run.agent).some((t) => t.name === "delegate_task");
   const task = run.task!;
+  // Owners the request names (the Board's split) each get a part: the cap never merges them away.
+  const named = canDelegate && task.state.kind !== "escalation" ? namedReports(run, reports, `${task.title} ${task.description}`) : [];
+  const max = maxSubprocessesFor(c, run.drives.essentialOnly, named.length);
 
   const decomposition = await block(
     run,
@@ -136,6 +165,10 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
             ? `Your direct reports:\n${reports.map((r) => `- ${r.id}: ${r.title} — ${oneLine(r.identity.mission, 120)}`).join("\n")}\n` +
               `Decompose into at most ${max} subprocesses, each for ONE report (assigneeId), with value 0-1000, estCostUsd and acceptanceCriteria; mode "delegate". ` +
               "If the request names a department or person (\"have Finance…\", \"ask the CTO…\"), assign that part to them. " +
+              (named.length
+                ? `The request names these owners — give each of them their own part (at least one part each): ${named.map((r) => `${r.id} (${r.title})`).join(", ")}. `
+                : "") +
+              'Parts that need other parts\' output — assembling, merging, reconciling, reviewing, final QA — are round 2 ("round":2): they are handed out only after every round-1 part is done, and their owner gets those results. You may instead do the assembly yourself: you are resumed with every part\'s result when they finish. ' +
               "Work that spans several departments' expertise (e.g. marketing + pricing + engineering) is delegated: one part per owning report — do not write other departments' parts yourself; reports run on cheaper models, so delegating is usually cheaper than doing it all yourself. " +
               (a.preferDelegation ? "Prefer delegating: your own competence is limited here. " : "") +
               `Use mode "direct" (no subprocesses) when you can do it yourself quickly with your own tools — e.g. recording a fact, a short note or decision, a lookup — never split such a task across reports.\n` +
@@ -145,12 +178,13 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
           (a.lessons.length ? `From past runs:\n${a.lessons.slice(0, 5).map((l) => `- ${l}`).join("\n")}\n` : "") +
           "Also give exactly three candidate solutions: high_cost (thorough: higher tier, more steps, extra verification), low_cost (same scope, cheaper tiers, fewer steps), low_effort (smallest change that meets the criteria: reuse memory, existing files and subtask results); each {approach, estCostUsd, expectedValue 0-1000, meetsCriteria}.",
         shape:
-          '{"mode":"delegate"|"direct","subprocesses":[{"title":string,"description":string,"assigneeId":string,"value":number,"estCostUsd":number,"acceptanceCriteria":string}],"candidates":[{"name":"high_cost"|"low_cost"|"low_effort","approach":string,"estCostUsd":number,"expectedValue":number,"meetsCriteria":boolean}],"rationale":string}',
+          '{"mode":"delegate"|"direct","subprocesses":[{"title":string,"description":string,"assigneeId":string,"round":1|2,"value":number,"estCostUsd":number,"acceptanceCriteria":string}],"candidates":[{"name":"high_cost"|"low_cost"|"low_effort","approach":string,"estCostUsd":number,"expectedValue":number,"meetsCriteria":boolean}],"rationale":string}',
         context: {
           mode: "task",
           task: { number: task.number, title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria },
           reports: canDelegate ? reports.map((r) => reportView(run, r)) : [],
           maxSubprocesses: max,
+          ...(named.length ? { namedOwners: named.map((r) => r.id) } : {}),
           feedback: a.feedback,
         },
         // Room for the whole plan: a cut-off reply lost every subprocess (json.ts now returns null for it).
@@ -162,7 +196,13 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
       if (mode === "delegate") await arrangeRoles(run, subprocesses, reports);
       const assigned = subprocesses.filter((s) => s.assigneeId);
       if (mode === "delegate" && assigned.length === 0) mode = "direct";
-      span.setAttributes({ "agentco.control_level": c, "agentco.decomposition.mode": mode, "agentco.decomposition.count": subprocesses.length });
+      span.setAttributes({
+        "agentco.control_level": c,
+        "agentco.decomposition.mode": mode,
+        "agentco.decomposition.count": subprocesses.length,
+        "agentco.decomposition.round2": subprocesses.filter((s) => s.round === 2).length,
+        ...(named.length ? { "agentco.decomposition.named_owners": named.map((r) => r.id).join(",") } : {}),
+      });
       return { json, subprocesses: mode === "delegate" ? assigned : subprocesses, mode, rationale: str(json.rationale, "", 400) };
     },
     { attributes: { "agentco.control_level": c, "agentco.uncertainty": a.uncertainty } },
@@ -177,6 +217,14 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
   return { controlLevel: c, maxSubprocesses: max, mode: decomposition.mode, subprocesses: decomposition.subprocesses, candidates, rationale: decomposition.rationale };
 }
 
+/** The leader's direct reports whose department, role or name the request names. */
+export function namedReports(run: BrainRun, reports: Agent[], text: string): Agent[] {
+  const ownDepartment = run.platform.org.departmentName(run.agent.departmentId);
+  const candidates: Candidate[] = reports.map((agent) => ({ agent, departmentName: run.platform.org.departmentName(agent.departmentId), catalogProfile: null }));
+  const ids = namedCandidates(text, candidates, { ownDepartment });
+  return reports.filter((r) => ids.has(r.id));
+}
+
 /** Block: Role Arrangement assigns each subprocess ("Assign Suitable Role to Workers"). */
 export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], reports: Agent[]): Promise<void> {
   await block(run, "self_management.role_arrangement", `Assigning ${subprocesses.length} subprocess(es) to the best-fit roles`, (span) => {
@@ -189,16 +237,18 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
     const used = new Map<string, number>();
     // A department/role named in the request (the Board's words) routes a subprocess that names none itself.
     const task = run.task;
-    const namedInRequest = task ? namedCandidates(`${task.title} ${task.description}`, candidates) : new Set<string>();
+    const ownDepartment = run.platform.org.departmentName(run.agent.departmentId);
+    const namedInRequest = task && task.state.kind !== "escalation" ? namedCandidates(`${task.title} ${task.description}`, candidates, { ownDepartment }) : new Set<string>();
     for (const s of subprocesses) {
       if (candidates.length === 0) break;
       // The part's TITLE says whose it is ("Engineering scope…"); descriptions mention other departments in passing.
-      const own = namedCandidates(s.title, candidates);
+      const own = namedCandidates(s.title, candidates, { ownDepartment });
       const namedIds = own.size ? own : namedInRequest.size === 1 ? namedInRequest : undefined;
       const scores = scoreCandidates(`${s.title} ${s.description}`, candidates, { suggestedId: s.suggestedAssigneeId, usedCounts: used, fallbackDepartment: run.facts.department, ...(namedIds ? { namedIds } : {}) });
       const best = scores[0]!;
       s.assigneeId = best.agentId;
       s.fit = best.fit;
+      s.named = namedInRequest.has(best.agentId);
       used.set(best.agentId, (used.get(best.agentId) ?? 0) + 1);
     }
     span.setAttributes({

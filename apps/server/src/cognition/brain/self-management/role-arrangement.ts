@@ -126,19 +126,24 @@ const ROLE_ACRONYMS: Record<string, string> = {
 };
 
 /**
- * Candidates whose department or role the text names explicitly — "Have Finance write…", "ask the
- * CTO", "engineering should…". Keyword fit put a finance budget with the CTO because it mentioned
- * "model spend"; an explicit name from the Board now decides (Q9_ROLE.namedBonus).
+ * Candidates whose department, role or full name the text names explicitly — "Have Finance write…",
+ * "ask the CTO", "engineering should…", "Noah Patel assembles". Keyword fit put a finance budget with
+ * the CTO because it mentioned "model spend"; an explicit name from the Board now decides
+ * (Q9_ROLE.namedBonus). The leader's own department is not matched by its department name (the CEO's
+ * "executive summary" is not a request for the Executive Office's Chief of Staff).
  */
-export function namedCandidates(text: string, candidates: Candidate[]): Set<string> {
-  const t = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
+export function namedCandidates(text: string, candidates: Candidate[], options: { ownDepartment?: string | null } = {}): Set<string> {
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const t = ` ${norm(text)} `;
   const has = (w: string) => w.length >= 3 && t.includes(` ${w} `);
+  const own = options.ownDepartment ? norm(options.ownDepartment) : null;
   const ids = new Set<string>();
   for (const c of candidates) {
-    const dept = c.departmentName.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    const title = c.agent.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const dept = norm(c.departmentName);
+    const title = norm(c.agent.title);
     const acronym = ROLE_ACRONYMS[title];
-    if ((dept && has(dept)) || (dept && has(dept.split(" ")[0]!) && dept.split(" ")[0]!.length >= 5) || has(title) || (acronym && has(acronym))) ids.add(c.agent.id);
+    const byDept = !!dept && dept !== own && (has(dept) || (has(dept.split(" ")[0]!) && dept.split(" ")[0]!.length >= 5));
+    if (byDept || has(title) || (acronym && has(acronym)) || has(norm(c.agent.name))) ids.add(c.agent.id);
   }
   return ids;
 }
