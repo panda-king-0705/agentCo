@@ -477,6 +477,25 @@ test("a part naming someone on the leader's chosen team stays with that leader, 
   assert.match(String(arranged.attributes["agentco.role_arrangement.named"]), /agt_cpo/, "Jasmine's head of People counts as named");
 });
 
+// Live (2026-11-07, trc_005b…): the CTO's own review, and then the CEO's, called a finished hire
+// "not evidenced" — no result showed the budget or first task — and the CEO re-did work to prove it.
+test("the reviewer sees the objective's hire records — who, role, budget, first task — as verified evidence", async () => {
+  const prompts: string[] = [];
+  const verdict = { score: 0.9, truthful: 0.95, good: true, issues: [], openPoints: [], decision: "accept", summary: "Hired and delivered." };
+  const p = new FakePlatform({ providers: { mock: provider({ "metacognition.solving_evaluation.feedback": (_c, _n, prompt) => (prompts.push(prompt), verdict) }) } });
+  const { ceo, cto } = company(p);
+  const task = p.addTask(makeTask({ id: "tsk_237", number: 237, title: "Hire a mobile release engineer", description: "Hire one with a $10 monthly budget.", assigneeId: ceo.id, traceId: "trc_237", value: 600, estCostUsd: 0.3 }));
+  task.state.plan = { problem: "Hire", successCriteria: ["hired", "checklist saved"], chosen: "low_cost", mode: "delegate", subprocesses: [], confidence: 0.7, feedback: [], rejected: [], revision: 0, costSoFarUsd: 0, estimateUsd: 0.3 };
+  const hire = p.addTask(makeTask({ id: "tsk_242", number: 242, parentTaskId: task.id, rootTaskId: task.id, traceId: "trc_237", title: "Hire mobile release engineer into Engineering", description: "Hire.", assigneeId: cto.id, status: "done", result: "The checklist is saved." }));
+  hire.state.hires = [{ role: "engineering/engineering-mobile-release-engineer", status: "hired", approvalId: "apr_1", agentId: "agt_avery", name: "Avery Singh", monthlyBudgetUsd: 10, firstTaskId: "tsk_246", firstTaskTitle: "iOS and Android release checklist" }];
+  const r = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: [hire] })));
+  assert.equal(r.outcome, "completed", r.error ?? r.output);
+  assert.match(
+    prompts[0]!,
+    /Hires on this objective, from the platform's hire records \(verified — no other proof is needed\): Avery Singh \(engineering\/engineering-mobile-release-engineer, agt_avery\) has joined \(on T-242\) with a \$10\/month model budget, first task "iOS and Android release checklist"; their first task is assigned\./,
+  );
+});
+
 test("mentionedPeople: full names, or a capitalised first name only one person has", () => {
   const ag = (id: string, name: string) => makeAgent({ id, name });
   const people = [ag("a", "Jasmine Lee"), ag("b", "Will Turner"), ag("c", "Ava Chen"), ag("d", "Ava Stone")];

@@ -5,6 +5,15 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (hiring test, trc_005b…)
+- **Choosing the new hire's manager.** `hire_agent` accepts "me" (or the hirer's own id) and a
+  report's name. If the manager given isn't in the hirer's subtree, the error now states the hirer's
+  own id. The CTO's first three attempts had named his own manager, then "me".
+- **Reviews can see the hire.** Each hire's record now keeps its monthly budget and first task, and
+  whoever reviews the work sees every hire on the objective as verified evidence. Before, both the
+  hirer's review and the CEO's called a finished hire "not evidenced", and the CEO redid work to
+  prove it.
+
 ### Fixed (test 5 rerun, trc_617b…)
 - **A network outage no longer fails work.** When no AI provider can be reached (the PC's hotspot
   dropped for six minutes), the run's task goes back in the queue with its attempt refunded, and

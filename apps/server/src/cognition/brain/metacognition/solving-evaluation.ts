@@ -289,7 +289,10 @@ export async function feedback(
   return block(run, "metacognition.solving_evaluation.feedback", "Evaluating the result", async (span) => {
     const results = summarizeResults(o.subtasks);
     const files = o.files ?? [];
-    span.setAttributes({ "agentco.feedback.files": files.map((f) => f.display).join(", ") });
+    // The platform's own hire records: the evidence for a hire (2026-11-07, trc_005b…: the hirer and
+    // the CEO both reviewed a finished hire as "not evidenced" and the CEO re-did work to prove it).
+    const hires = run.task ? objectiveHires(run.platform.tasks, run.platform.tasks.get(run.task.id) ?? run.task) : [];
+    span.setAttributes({ "agentco.feedback.files": files.map((f) => f.display).join(", "), ...(hires.length ? { "agentco.feedback.hires": hires.length } : {}) });
     const json = await llmJson(run, {
       stage: "metacognition.solving_evaluation.feedback",
       span,
@@ -303,6 +306,7 @@ export async function feedback(
             files.map((f) => `=== ${f.display} — saved by ${f.by} (${f.words} words, ${f.lines} lines${f.truncated ? "; shown in part" : ""}) ===\n${f.content}`).join("\n") +
             "\n"
           : "") +
+        (hires.length ? `Hires on this objective, from the platform's hire records (verified — no other proof is needed): ${hires.map(describeHire).join("; ")}.\n` : "") +
         "Evaluate: score 0-1 against the criteria; truthful 0-1 (claims supported by the results/sources); good (meets the criteria and our values); issues; decision accept | revise | rollback (the approach is wrong) | escalate; and a 2-4 sentence summary for the requester. " +
         // 2026-11-07 (test 4): a one-page plan was sent back twice for "modeled pricing" and an "open
         // caps-or-prices decision" — things only the Board can settle — and for a "tool word count"

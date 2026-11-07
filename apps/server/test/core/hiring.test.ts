@@ -96,6 +96,8 @@ test("with Board approval on, the first task is assigned when the Board approves
     assert.equal(first.parentTaskId, task.id, "a subtask of the hiring task");
     assert.equal(first.assigneeId, hiredId);
     assert.equal(platform.org.getAgent(hiredId)!.monthlyBudgetUsd, 10);
+    const record = (platform.tasks.get(task.id)!.state.hires as { status: string; monthlyBudgetUsd?: number; firstTaskTitle?: string }[])[0]!;
+    assert.deepEqual([record.status, record.monthlyBudgetUsd, record.firstTaskTitle], ["hired", 10, "SEO keyword brief"], "the hire's terms are on its record");
     await t.drain();
     assert.equal(platform.tasks.get(firstId)!.status, "done");
     assert.equal(platform.tasks.get(task.id)!.status, "done", "resumed after the Board, waited for the first task, then finished");
@@ -214,7 +216,7 @@ test("one hire per role per objective; someone on the team already in the role g
     assert.equal(results.a!.ok, true, results.a!.content);
     assert.match(results.a!.content, /with a \$10\/month budget/, "no budget given: the request's");
     assert.equal(results.b!.ok, false);
-    assert.match(results.b!.content, new RegExp(`^Already done on this objective: .* \\(${HIRE.catalogId.replace("/", "\\/")}, agt_\\w+\\) has joined \\(on T-${a.number}\\)\\. Do not hire again`));
+    assert.match(results.b!.content, new RegExp(`^Already done on this objective: .* \\(${HIRE.catalogId.replace("/", "\\/")}, agt_\\w+\\) has joined \\(on T-${a.number}\\) with a \\$10\\/month model budget\\. Do not hire again`));
     const seo = platform.org.listActiveAgents().filter((x) => x.catalogId === HIRE.catalogId);
     assert.equal(seo.length, 1);
 
@@ -284,6 +286,43 @@ test("the directory shows who hired someone, when, their budget and catalog role
     assert.match(out["seo-specialist"]!, new RegExp(`^1 person matching "seo-specialist":\\n- .* — SEO Specialist, Marketing \\(reports to ${cmo.name}\\) — id agt_\\w+ — joined ${today}, hired by ${cmo.name}, \\$10/month model budget, catalog role marketing/marketing-seo-specialist$`));
     assert.match(out[cmo.id]!, new RegExp(`^1 person matching "${cmo.id}":\\n- ${cmo.name} — Chief Marketing Officer, .* hired by the founding team`));
     assert.match(out[gone.id]!, new RegExp(`^${gone.id} was Casey Diaz \\(Content Creator, Marketing\\), removed ${today} — no longer in the company\\.$`));
+  } finally {
+    await t.close();
+  }
+});
+
+// Live (2026-11-07, trc_005b…): the CTO named his own manager as the new hire's manager twice, then
+// "me", and only then his own id — the error said "pass managerId = yourself" without saying his id.
+test("hire_agent: managerId \"me\" or a report's name works; a manager outside the subtree is refused with the hirer's own id", async () => {
+  const results: { ok: boolean; content: string; data?: unknown }[] = [];
+  let ids = { cto: "", ceo: "", report: "" };
+  const t = await createTestApp({
+    env: { HIRING_REQUIRES_APPROVAL: "false" },
+    brain: async (ctx) => {
+      if (ctx.input.trigger !== "task" || ctx.agent.id !== ids.cto) return done();
+      const hire = (managerId: string, catalogId: string) => callTool(ctx, "hire_agent", { catalogId, managerId, monthlyBudgetUsd: 10, justification: "Release work for the launch." });
+      results.push(await hire(ids.ceo, "engineering/engineering-mobile-release-engineer"));
+      results.push(await hire("me", "engineering/engineering-mobile-release-engineer"));
+      results.push(await hire(ids.report, "engineering/engineering-code-reviewer"));
+      return done();
+    },
+  });
+  try {
+    const { platform } = t.app;
+    const cto = t.agentByRole("cto");
+    const report = platform.org.directReports(cto.id).find((a) => a.status !== "terminated")!;
+    ids = { cto: cto.id, ceo: t.agentByRole("ceo").id, report: report.name };
+    rootTask(t, cto.id, "Hire a mobile release engineer");
+    await t.drain();
+    assert.equal(results[0]!.ok, false);
+    assert.match(results[0]!.content, new RegExp(`who is not in your subtree\\. Pass managerId "me" \\(your id is ${cto.id}\\) or one of your reports`));
+    assert.equal(results[1]!.ok, true, results[1]!.content);
+    assert.equal(platform.org.getAgent((results[1]!.data as { agentId: string }).agentId)!.managerId, cto.id, '"me" is the hirer');
+    assert.equal(results[2]!.ok, true, results[2]!.content);
+    assert.equal(platform.org.getAgent((results[2]!.data as { agentId: string }).agentId)!.managerId, report.id, "a report, by name");
+    const task = platform.tasks.list({ assigneeId: cto.id }).find((x) => x.title === "Hire a mobile release engineer")!;
+    const recorded = (task.state.hires as { role: string; monthlyBudgetUsd?: number }[]).find((h) => h.role === "engineering/engineering-mobile-release-engineer")!;
+    assert.equal(recorded.monthlyBudgetUsd, 10, "the budget is on the hire record");
   } finally {
     await t.close();
   }

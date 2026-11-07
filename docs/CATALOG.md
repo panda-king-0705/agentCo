@@ -195,7 +195,9 @@ one monthly budget ("a $10 monthly budget"), that is the budget: a different fig
 an omitted one is filled in. `hire_agent` is offered only on steps that ask to hire, not on a
 recruiter's recommendation step. The justification must name who recommended the pick only if they
 did. `company_directory` shows each person's join date, hirer, monthly budget and catalog role, finds
-people by catalog role, and looks up an agent id — including someone who has left.
+people by catalog role, and looks up an agent id — including someone who has left. `managerId`
+accepts "me" or a report's name. Hire records keep the budget and first task, and reviews (Feedback)
+are shown every hire on the objective as verified evidence.
 
 **Console.** `#/catalog` browses by division (optional departments are marked *new*) and searches; a
 card opens a drawer with the compiled playbook (with its token meter) and the full text; *Hire into…*
