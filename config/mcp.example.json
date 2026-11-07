@@ -9,7 +9,7 @@
         "catalog": ["marketing/marketing-seo-specialist", "finance/finance-fpa-analyst", "product/product-manager"]
       },
       "tools": ["firecrawl_search", "firecrawl_scrape"],
-      "dailyCallLimit": 40
+      "dailyCallLimit": 50
     },
     "github": {
       "url": "https://api.githubcopilot.com/mcp/",
@@ -26,7 +26,7 @@
         "push_files", "create_pull_request", "update_pull_request"
       ],
       "noApproval": ["create_branch", "create_or_update_file", "push_files", "create_pull_request", "update_pull_request"],
-      "dailyCallLimit": 100
+      "dailyCallLimit": 1000
     },
     "fmp": {
       "url": "https://financialmodelingprep.com/mcp?apikey=${FMP_API_KEY}",

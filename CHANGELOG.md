@@ -5,6 +5,10 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Daily call limits: GitHub 1000, Firecrawl 50 per agent** (the founder, 2026-11-08). The example
+  config now uses these, and the README documents the limits, what counts toward them and how to change them.
+
 ### Fixed (trc_7b9b…, the scalper follow-up: GitHub's daily limit stopped the work; $3.04, one file committed)
 - **Reads are shared.** A read made through a connection is answered from a shared copy when anyone
   asks again: a file's contents for an hour, and listings, commits, pull requests and searches for 15

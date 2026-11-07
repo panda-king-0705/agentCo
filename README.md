@@ -82,6 +82,28 @@ Vite dev origin `http://localhost:5173` (plus `ALLOWED_ORIGINS`). State-changing
 `Content-Type: application/json` from an allowed Origin, and the Host header must name this server — see
 [SECURITY.md](SECURITY.md).
 
+### Connections and daily call limits
+
+Outside services (MCP servers) are set up in `config/mcp.json` on the PC. That file is git-ignored;
+start from [`config/mcp.example.json`](config/mcp.example.json), and see
+[`config/README.md`](config/README.md) for every field. Each server has a `dailyCallLimit`: how many
+calls **each agent** may make to it in any 24 hours (a rolling window, not a calendar day; `0` = no limit).
+
+| server | `dailyCallLimit` | why |
+|---|---|---|
+| `github` | **1000** per agent | Engineers read many files to change one. At 100, three engineers ran out partway through a single objective (trc_7b9b…). GitHub's own limit for a token is about 5,000 requests an hour, so 1000 is still well inside it. |
+| `firecrawl` | **50** per agent | Each search or page scraped uses Firecrawl credits. |
+| `fmp` | **100** per agent | Market and financial data for Finance. |
+
+- **What counts:** only calls that reach the server. A read someone made lately is answered from a
+  shared copy: a file for an hour, listings for 15 minutes, until a commit changes it. Shared reads,
+  failed calls and calls waiting for your approval don't count.
+- **At the limit:** the agent is told when its next call frees up and not to retry. Code goes to a
+  colleague who still has calls. If no one does, the review doesn't send the work back: it tells you
+  when the work can go on.
+- **To change a limit:** edit `config/mcp.json`, then run `docker compose restart`. The file is read at
+  start-up, and no rebuild is needed.
+
 ## Architecture in one page
 
 ```
