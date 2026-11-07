@@ -4,7 +4,7 @@ import { api } from "../api";
 import { href, navigate } from "../router";
 import { seed, useApi, useLive } from "../live";
 import { Markdown } from "../ui/markdown";
-import { Avatar, Button, Empty, Field, Icon, Modal, RelTime, Skeleton, StatusGlyph, useAction } from "../ui/kit";
+import { Avatar, Button, ConfirmDialog, Empty, Field, Icon, Modal, RelTime, Skeleton, StatusGlyph, useAction } from "../ui/kit";
 import type { Agent, Conversation, Message } from "../types";
 import { PageHead, byTier, liveAgents } from "./common";
 
@@ -16,12 +16,13 @@ function convLabel(c: Conversation, agents: Record<string, Agent>): string {
 
 /**
  * Why the Board cannot write in this thread, or null when it can: agent-to-agent threads are
- * read-only, and a removed agent's thread is kept for the record but closed (2026-11-07).
+ * read-only, and a removed agent can neither send nor receive (removal deletes their chats; this
+ * covers one still on screen).
  */
 function closedReason(c: Conversation | undefined, agents: Record<string, Agent>): string | null {
   if (!c) return null;
   const removed = c.participantIds.map((p) => agents[p]).filter((a): a is Agent => !!a && a.status === "terminated");
-  if (removed.length) return `${removed.map((a) => a.name).join(" and ")} ${removed.length === 1 ? "was" : "were"} removed. This conversation is kept for the record; no new messages can be sent or received.`;
+  if (removed.length) return `${removed.map((a) => a.name).join(" and ")} ${removed.length === 1 ? "was" : "were"} removed, so no new messages can be sent or received here.`;
   if (c.kind === "agent_dm") return "A conversation between agents: you can read it, but only they can write here.";
   return null;
 }
@@ -83,7 +84,7 @@ export function ChatThread({ conversationId, conversation }: { conversationId: s
   const [text, setText] = useState("");
   const { busy, run } = useAction();
   const endRef = useRef<HTMLDivElement>(null);
-  const convs = useApi("conversations", () => api.conversations(), { refreshOn: ["message.created"] });
+  const convs = useApi("conversations", () => api.conversations(), { refreshOn: ["message.created", "conversation.deleted"] });
   const conv = conversation ?? convs.data?.find((c) => c.id === conversationId);
   const agents = useLive((s) => s.agents);
   const closed = closedReason(conv, agents);
@@ -184,8 +185,9 @@ function NewChatModal({ onClose }: { onClose: () => void }) {
 
 export function ChatView({ conversationId }: { conversationId: string | null }) {
   const agents = useLive((s) => s.agents);
-  const convs = useApi("conversations", () => api.conversations(), { refreshOn: ["message.created"] });
+  const convs = useApi("conversations", () => api.conversations(), { refreshOn: ["message.created", "conversation.deleted"] });
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<Conversation | null>(null);
   const sorted = useMemo(() => {
     const l = [...(convs.data ?? [])];
     return l.sort((a, b) => (a.kind === "boardroom" ? -1 : b.kind === "boardroom" ? 1 : (b.lastMessageAt ?? b.createdAt).localeCompare(a.lastMessageAt ?? a.createdAt)));
@@ -211,9 +213,12 @@ export function ChatView({ conversationId }: { conversationId: string | null }) 
         <section className="chat-main panel">
           {active ? (
             <>
-              <header className="panel-head">
+              <header className="panel-head chat-head">
                 <h2>{convLabel(active, agents)}</h2>
                 <span className="muted small">{active.kind === "boardroom" ? "The Board and the leadership team" : active.kind === "agent_dm" ? "Agent-to-agent (read only for you)" : "Direct message"}</span>
+                <Button size="sm" variant="ghost" icon="trash" onClick={() => setDeleting(active)}>
+                  {active.kind === "boardroom" ? "Clear chat" : "Delete chat"}
+                </Button>
               </header>
               <ChatThread key={active.id} conversationId={active.id} conversation={active} />
             </>
@@ -225,7 +230,33 @@ export function ChatView({ conversationId }: { conversationId: string | null }) 
         </section>
       </div>
       {creating ? <NewChatModal onClose={() => setCreating(false)} /> : null}
+      {deleting ? <DeleteChatDialog c={deleting} agents={agents} onClose={() => setDeleting(null)} onDone={() => convs.reload()} /> : null}
     </>
+  );
+}
+
+/** Delete a chat for good — or clear the Boardroom, which stays (2026-11-07). */
+function DeleteChatDialog({ c, agents, onClose, onDone }: { c: Conversation; agents: Record<string, Agent>; onClose: () => void; onDone: () => void }) {
+  const { busy, run } = useAction();
+  const board = c.kind === "boardroom";
+  const label = convLabel(c, agents);
+  const confirm = async () => {
+    const res = await run(() => api.deleteConversation(c.id), board ? "Boardroom cleared" : `Chat with ${label} deleted`);
+    if (!res) return;
+    onClose();
+    onDone();
+    if (!board) navigate("/chat");
+  };
+  return (
+    <ConfirmDialog title={board ? "Clear the Boardroom?" : `Delete the chat with ${label}?`} confirmLabel={board ? "Clear chat" : "Delete chat"} danger busy={busy} onConfirm={confirm} onClose={onClose}>
+      <ul className="plain-list">
+        <li>{board ? "Every message in the Boardroom is deleted; the Boardroom itself stays." : "The chat and every message in it are deleted."}</li>
+        <li>{c.kind === "agent_dm" ? "Neither agent will see these messages again." : "The agent forgets this conversation, including the notes it made while answering in it."}</li>
+        <li>Work started from it keeps going; results show on the Tasks page. Company-wide knowledge and files stay.</li>
+        {!board && c.kind === "dm" ? <li>Messaging them again starts a new, empty chat.</li> : null}
+      </ul>
+      <p className="muted small">This cannot be undone.</p>
+    </ConfirmDialog>
   );
 }
 

@@ -108,6 +108,24 @@ export class ConversationRepo {
     const statement = this.db.prepare("UPDATE messages SET read_at = ? WHERE id = ? AND read_at IS NULL");
     for (const id of ids) statement.run(at, id);
   }
+
+  /** Deletes every message in the conversation (it stays, empty); returns how many. */
+  clearMessages(id: string): number {
+    const n = Number(this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id).changes);
+    this.db.prepare("UPDATE conversations SET last_message_at = NULL WHERE id = ?").run(id);
+    return n;
+  }
+
+  /**
+   * Deletes the conversation and its messages; returns how many messages. Objectives started from it
+   * keep running, with nowhere to post their report (origin cleared).
+   */
+  delete(id: string): number {
+    const n = Number(this.db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id).changes);
+    this.db.prepare("UPDATE tasks SET origin_conversation_id = NULL WHERE origin_conversation_id = ?").run(id);
+    this.db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
+    return n;
+  }
 }
 
 export class MemoryRepo {
@@ -166,6 +184,27 @@ export class MemoryRepo {
   bumpAccess(ids: string[], at: string): void {
     const statement = this.db.prepare("UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?");
     for (const id of ids) statement.run(at, id);
+  }
+
+  /** An agent's private memories (scope agent); company-wide ones they wrote stay. Returns how many. */
+  deleteAgentScoped(agentId: string): number {
+    return this.deleteWhere("scope = 'agent' AND agent_id = ?", agentId);
+  }
+
+  /** Private memories written by runs that answered in this conversation. Returns how many. */
+  deleteFromConversation(conversationId: string): number {
+    return this.deleteWhere("scope = 'agent' AND source_run_id IN (SELECT id FROM runs WHERE conversation_id = ?)", conversationId);
+  }
+
+  private deleteWhere(where: string, param: string): number {
+    const ids = (this.db.prepare(`SELECT id FROM memories WHERE ${where}`).all(param) as Row[]).map((r) => String(r.id));
+    const fts = this.db.prepare("DELETE FROM memories_fts WHERE memory_id = ?");
+    const row = this.db.prepare("DELETE FROM memories WHERE id = ?");
+    for (const id of ids) {
+      fts.run(id);
+      row.run(id);
+    }
+    return ids.length;
   }
 }
 

@@ -59,10 +59,14 @@ const COGNITIONS: readonly string[] = ["brain", "reflex"];
 const OPEN = new Set<Task["status"]>(["todo", "in_progress", "waiting", "blocked"]);
 const STATUS_THROTTLE_MS = 250;
 
+/** Clears what a removed agent leaves outside the org (see runs/chat-cleanup.ts). */
+export type RemovalCleaner = (agent: Agent) => { deletedChats: number; deletedMemories: number; withdrawnRequests: number };
+
 export class OrgService implements OrgView, AgentStateWriter {
   private readonly deps: OrgDeps;
   private runControl: RunControl | null = null;
   private reassignTask: TaskReassigner | null = null;
+  private removalCleanup: RemovalCleaner | null = null;
   private readonly lastStatusEmit = new Map<string, { at: number; key: string }>();
 
   constructor(deps: OrgDeps) {
@@ -77,6 +81,11 @@ export class OrgService implements OrgView, AgentStateWriter {
   /** Late-bound: TaskService is created after OrgService; destroy routes re-assignment through it. */
   attachTaskReassigner(reassign: TaskReassigner): void {
     this.reassignTask = reassign;
+  }
+
+  /** Late-bound: what removal clears beyond the org (chats, memories, pending requests — runs/chat-cleanup.ts). */
+  attachRemovalCleanup(cleanup: RemovalCleaner): void {
+    this.removalCleanup = cleanup;
   }
 
   // ───────────── queries (OrgView) ─────────────
@@ -279,7 +288,9 @@ export class OrgService implements OrgView, AgentStateWriter {
   /**
    * Destroy = terminate (docs/ARCHITECTURE.md → Lifecycle): abort the active run, re-assign
    * open tasks (through TaskService: attempt refunded, run-scoped state cleaned) and direct
-   * reports to the manager, mark terminated (rows kept for audit) and archive the workspace.
+   * reports to the manager, mark terminated and archive the workspace; then delete their chats and
+   * private memories and withdraw their pending requests (the removal clean-up). The agent row,
+   * runs, traces, spend and tasks are kept, so history and spending totals stay true.
    * With no active manager to inherit (the CEO reports to the Board) it is refused with 409
    * while it still has direct reports or open tasks — never orphan work.
    */
@@ -306,8 +317,15 @@ export class OrgService implements OrgView, AgentStateWriter {
     const { reassignedTasks, reassignedReports } = this.deps.repos.tx(() => this.reassignAll(agent, inheritor, reports));
     const terminated = this.terminateRow(agent);
     this.deps.workspaces.archive(id);
+    let cleaned = { deletedChats: 0, deletedMemories: 0, withdrawnRequests: 0 };
+    try {
+      if (this.removalCleanup) cleaned = this.removalCleanup(terminated);
+    } catch (error) {
+      // The agent is already out; a failed clean-up is redone at the next boot (cleanUpRemovedAgents).
+      console.error(`[org] clean-up after removing ${agent.name} failed:`, error instanceof Error ? error.message : error);
+    }
     this.deps.bus.emit("agent.terminated", { agentId: id, summary: summaries.agentTerminated(terminated), data: terminated });
-    return { agentId: id, cancelledRuns, reassignedTasks, reassignedReports };
+    return { agentId: id, cancelledRuns, reassignedTasks, reassignedReports, ...cleaned };
   }
 
   // ───────────── AgentStateWriter ─────────────

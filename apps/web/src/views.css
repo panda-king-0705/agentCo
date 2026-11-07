@@ -394,3 +394,4 @@ a.kpi:hover { border-color: var(--accent-line); text-decoration: none; }
 /* Drawer bodies are flex columns that scroll: tab strips must not shrink to nothing. */
 .drawer-body > .tabs { flex: none; }
 .drawer-body > .playbook, .drawer-body > .kv { flex: none; }
+.chat-head { flex-wrap: wrap; row-gap: 4px; }

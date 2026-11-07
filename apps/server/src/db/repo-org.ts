@@ -26,6 +26,10 @@ export class SettingsRepo {
       .run(key, JSON.stringify(value));
   }
 
+  delete(key: string): void {
+    this.db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+  }
+
   /** Atomically increments and returns a named counter (task numbers). */
   nextCounter(name: string): number {
     const row = one(

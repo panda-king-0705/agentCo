@@ -5,6 +5,21 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Delete a chat.** Every chat has a "Delete chat" button (the Boardroom has "Clear chat"). A
+  deleted chat is gone for good: its messages, the notes the agent wrote while answering in it,
+  and the context summary it would otherwise be shown again. A reply in progress stops; work the
+  chat started keeps going, and its results show on the Tasks page. Company-wide knowledge and
+  files stay. The Boardroom keeps existing and is only emptied. `DELETE /api/conversations/:id`.
+
+### Changed
+- **Removing an agent cleans up after it.** Their chats (with the Board and with other agents)
+  and their private memories are deleted, and anything they were still asking the Board is
+  withdrawn: the request is closed with a note saying why, and the task, now their manager's,
+  wakes with it instead of waiting forever. Their past work stays in traces, tasks and costs,
+  marked removed, so spending totals stay correct. The removal dialog says so and reports what
+  was cleaned up. Agents removed earlier (Riley Chen, Casey Diaz) are cleaned up at the next start.
+
 ### Fixed
 - **Removed agents are out of the conversation.** The conversation layer now refuses any message
   sent as a removed agent, and won't open or write to an agent-to-agent thread with one. Messages

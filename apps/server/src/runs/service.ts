@@ -121,6 +121,18 @@ export class RunService implements RunControl {
     return n;
   }
 
+  /** Stops the replies in progress in a conversation (it is being deleted). */
+  abortConversation(conversationId: string, reason: AbortReason): number {
+    let n = 0;
+    for (const active of this.active.values()) {
+      if (active.run.conversationId === conversationId) {
+        this.abort(active, reason);
+        n += 1;
+      }
+    }
+    return n;
+  }
+
   abortTask(taskId: string, reason: AbortReason): number {
     let n = 0;
     for (const active of this.active.values()) {

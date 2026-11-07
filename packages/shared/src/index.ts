@@ -493,6 +493,7 @@ export type CompanyEventType =
   | "span.started"
   | "span.ended"
   | "message.created"
+  | "conversation.deleted"
   | "approval.created"
   | "approval.decided"
   | "memory.written"
@@ -590,6 +591,24 @@ export interface DestroyAgentResult {
   cancelledRuns: number;
   reassignedTasks: number; // open tasks handed to the manager
   reassignedReports: number; // direct reports re-parented to the manager
+  /** Their chats (with the Board and with other agents), deleted with every message in them. */
+  deletedChats: number;
+  /** Their private memories, plus their notes from deleted chats. Company-wide knowledge stays. */
+  deletedMemories: number;
+  /** Their pending requests to the Board (questions, hires, budget), withdrawn. */
+  withdrawnRequests: number;
+}
+
+/** DELETE /api/conversations/:id — a chat is deleted for good; the Boardroom is cleared instead. */
+export interface DeleteConversationResult {
+  conversationId: string;
+  /** true for the Boardroom: its messages are deleted, the conversation stays. */
+  cleared: boolean;
+  deletedMessages: number;
+  /** The agents' own notes written while answering in this chat. */
+  deletedMemories: number;
+  /** Replies in progress in this chat, stopped. */
+  abortedRuns: number;
 }
 
 export interface CreateTaskInput {

@@ -12,7 +12,7 @@
  * system span per conversation. Checkpoints are epochs (persisted), so a
  * conversation is only re-folded when the checkpoint + tail overflows again.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Conversation, Message } from "../../../../packages/shared/src/index.ts";
 import type { ConversationHistory, SpanHandle } from "../contracts.ts";
@@ -93,6 +93,17 @@ export class ContextGovernor {
     const view = [this.preambleMessage(conversation, state, messages), ...messages.slice(to)];
     this.traceCompaction(span, state, before, tokensOf(view), trigger, contextWindow);
     return { conversation, messages: view, compacted: true };
+  }
+
+  /**
+   * Forgets a deleted (or cleared) conversation: its checkpoint summary — otherwise injected as
+   * "Restored conversation context" on the next turn — and the folded transcripts.
+   */
+  forget(conversationId: string): void {
+    if (!/^[\w-]+$/.test(conversationId)) return;
+    this.settings.delete(`compaction:${conversationId}`);
+    this.settings.delete(`compaction_disabled:${conversationId}`);
+    rmSync(join(this.config.dataDir, "artifacts", conversationId), { recursive: true, force: true });
   }
 
   /** The persisted checkpoint for a conversation, if any. */
