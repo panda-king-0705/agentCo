@@ -7,13 +7,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BrainEngine } from "../../src/cognition/brain/index.ts";
 import { measure } from "../../src/tools/builtins/files.ts";
-import { coerceSubprocesses, isDependentStep, maxSubprocessesFor } from "../../src/cognition/brain/metacognition/cognitive-control.ts";
+import { coerceSubprocesses, isDependentStep, maxSubprocessesFor, mentionedPeople } from "../../src/cognition/brain/metacognition/cognitive-control.ts";
 import { namedCandidates, type Candidate } from "../../src/cognition/brain/self-management/role-arrangement.ts";
 import { ReflexEngine } from "../../src/cognition/reflex.ts";
 import { MockProvider } from "../../src/models/providers/mock.ts";
 import { readContext, readStage } from "../../src/models/protocol.ts";
 import type { EngineResult, ModelProvider, SavedFiles } from "../../src/contracts.ts";
-import { gist } from "../../src/cognition/brain/metacognition/solving-evaluation.ts";
+import { gist, guidanceLines } from "../../src/cognition/brain/metacognition/solving-evaluation.ts";
 import { Q6_EXECUTION } from "../../src/cognition/brain/interpretation.ts";
 import type { Agent, Task } from "../../../../packages/shared/src/index.ts";
 import { FakePlatform, makeAgent, makeTask, taskInput } from "./fakes.ts";
@@ -426,4 +426,75 @@ test("the tool loop states the step budget up front, and the last step may save 
 
 test("step budgets: room to read, save and finish", () => {
   assert.deepEqual(Object.fromEntries(Object.entries(Q6_EXECUTION).map(([k, v]) => [k, v.directSteps])), { high_cost: 8, low_cost: 6, low_effort: 4 });
+});
+
+// ── Test 5 (2026-11-07): "Jasmine should hire an SEO specialist into Marketing" went to the CMO with
+// "have Jasmine hire" (Jasmine is a recruiter two levels down, with no hiring tools), and a brain
+// could not hire at all (hire_agent was never offered in Solving). Founder: "managers hire, recruiter sources".
+
+function hiringCompany(p: FakePlatform) {
+  const base = company(p);
+  p.addDepartment("dep_ppl", "people", "People");
+  const cpo = p.addAgent(makeAgent({ id: "agt_cpo", name: "Natalie Brooks", title: "Chief People Officer", departmentId: "dep_ppl", managerId: base.ceo.id, tier: "executive", cognition: "brain", modelTier: "frontier", tools: [...BRAIN_TOOLS, "hire_agent", "catalog_search"], identity: { mission: "Own the agent lifecycle." } as never }));
+  const jasmine = p.addAgent(makeAgent({ id: "agt_jas", name: "Jasmine Lee", title: "Recruiter Agent", departmentId: "dep_ppl", managerId: cpo.id, tools: ["catalog_search", "workspace_write_file"], identity: { mission: "Draft role specs and onboard new agents." } as never }));
+  return { ...base, cpo, jasmine };
+}
+
+test("a person named outside the leader's reports routes to the report whose team they are in; hiring requests get the hiring flow", async () => {
+  const prompts: string[] = [];
+  const ctxs: Record<string, unknown>[] = [];
+  const p = new FakePlatform({ providers: { mock: provider({ "metacognition.cognitive_control": (c, _n, prompt) => (ctxs.push(c), prompts.push(prompt), undefined) }) } });
+  const { ceo, cmo, cpo } = hiringCompany(p);
+  const task = p.addTask(makeTask({ id: "tsk_217", number: 217, title: "Hire an SEO specialist", description: "We need an SEO specialist in Marketing for the meeting-notes launch. Jasmine should hire one from the specialist catalog with a $10 monthly budget, and give them a first task.", assigneeId: ceo.id, value: 600, estCostUsd: 0.3 }));
+  await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task)));
+  assert.deepEqual([...(ctxs[0]!.namedOwners as string[])].sort(), [cmo.id, cpo.id].sort());
+  assert.match(prompts[0]!, /agt_cpo \(Chief People Officer — Jasmine Lee is in their team; the part is for them\)/);
+  assert.match(prompts[0]!, /Hiring: the head of the team the new hire joins makes the hire — hire_agent places people only in the hirer's own team .* Plan the recommendation as round 1 \(to the head of People, for their recruiter\) and the hire — with budget and first task — as round 2 \(to the receiving department's head\)\./);
+  assert.equal(ctxs[0]!.hiring, true);
+});
+
+test("mentionedPeople: full names, or a capitalised first name only one person has", () => {
+  const ag = (id: string, name: string) => makeAgent({ id, name });
+  const people = [ag("a", "Jasmine Lee"), ag("b", "Will Turner"), ag("c", "Ava Chen"), ag("d", "Ava Stone")];
+  assert.deepEqual(mentionedPeople("Jasmine should hire one", people).map((a) => a.id), ["a"]);
+  assert.deepEqual(mentionedPeople("we will hire", people).map((a) => a.id), [], "a lowercase word is not a name");
+  assert.deepEqual(mentionedPeople("Ava should decide", people).map((a) => a.id), [], "two Avas: the first name alone is ambiguous");
+  assert.deepEqual(mentionedPeople("ask ava chen", people).map((a) => a.id), ["c"]);
+});
+
+test("Solving offers hire_agent on a hiring task only, and waits for a new hire's open first task", async () => {
+  const toolSets: string[][] = [];
+  const mock = new MockProvider({ latencyMs: 0 });
+  const recording: ModelProvider = {
+    name: "mock",
+    async complete(profile, request, signal) {
+      if (readStage(request.messages) === SOLVING && request.tools?.length) toolSets.push(request.tools.map((t) => t.name));
+      const r = await mock.complete(profile, request, signal);
+      if (request.responseFormat === "json" && readStage(request.messages) === "metacognition.cognitive_control") return { ...r, content: JSON.stringify({ mode: "direct", subprocesses: [], candidates: CANDIDATES, rationale: "myself" }) };
+      return r;
+    },
+  };
+  const p = new FakePlatform({ providers: { mock: recording } });
+  const { cpo } = hiringCompany(p);
+  const hireTask = p.addTask(makeTask({ id: "tsk_h", number: 501, title: "Hire an SEO specialist into Marketing", description: "Hire one from the catalog with a $10 budget.", assigneeId: cpo.id }));
+  await new BrainEngine({ maxRevisions: 0 }).run(p.context(cpo, taskInput(hireTask)));
+  const otherTask = p.addTask(makeTask({ id: "tsk_o", number: 502, title: "Write the onboarding checklist", description: "One page.", assigneeId: cpo.id }));
+  await new BrainEngine({ maxRevisions: 0 }).run(p.context(cpo, taskInput(otherTask)));
+  assert.ok(toolSets[0]!.includes("hire_agent"), "offered on the hiring task");
+  assert.ok(!toolSets.at(-1)!.includes("hire_agent"), "not on other work");
+
+  // After the Board approves a hire, its first task already exists: the manager waits, no Solving call.
+  const waiting = p.addTask(makeTask({ id: "tsk_w2", number: 503, title: "Hire an SEO specialist", description: "Hire one.", assigneeId: cpo.id }));
+  p.addTask(makeTask({ id: "tsk_first", number: 504, parentTaskId: waiting.id, rootTaskId: waiting.id, title: "SEO keyword brief", description: "Save launch-plan/seo-keywords.md.", assigneeId: "agt_jas", status: "todo", state: { firstTask: true } }));
+  const before = toolSets.length;
+  const r = await new BrainEngine({ maxRevisions: 0 }).run(p.context(cpo, taskInput(waiting)));
+  assert.equal(r.outcome, "waiting", r.error ?? r.output);
+  assert.match(r.output, /"SEO keyword brief"/);
+  assert.equal(toolSets.length, before, "no Solving call while the first task is open");
+});
+
+test("the Board's decision on a hire reaches the hiring manager in plain words", () => {
+  const run = (boardAnswer: unknown) => ({ wm: { boardAnswer } }) as never;
+  assert.deepEqual(guidanceLines(run({ kind: "hire_agent", status: "approved", hired: "Sam Reyes, SEO Specialist (agt_x)", note: null })), ["The Board approved the hire: Sam Reyes, SEO Specialist (agt_x) has joined. Do not hire again."]);
+  assert.match(guidanceLines(run({ kind: "hire_agent", status: "rejected", note: "Not this month." }))[0]!, /^The Board declined the hire\. Do not hire; say so in your result\. Note: Not this month\.$/);
 });

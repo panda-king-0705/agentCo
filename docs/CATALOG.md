@@ -180,7 +180,7 @@ mandate, persona (style from its Communication Style section, traits from "Perso
 vibe, an MBTI type suggested from its mission) and playbook. The department comes from the mapping
 (created on demand); the manager defaults to that department's lead. Explicit fields win.
 
-**Brain.** Executives get `catalog_search {query, division?}` (compact: id, name, department, one-line
+**Brain.** Executives, and recruiters (to recommend candidates to the hiring manager), get `catalog_search {query, division?}` (compact: id, name, department, one-line
 description, how many are on staff) and `hire_agent` accepts `catalogId` (title/department/tier then
 optional; the default manager must be the caller or in its subtree). The approval policy is unchanged:
 an approval when `HIRING_REQUIRES_APPROVAL` is on or headcount is at the cap; the payload carries the

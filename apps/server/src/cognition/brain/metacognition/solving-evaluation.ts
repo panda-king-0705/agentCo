@@ -45,8 +45,15 @@ export function guidanceLines(run: BrainRun): string[] {
   if (typeof esc === "string" && esc.trim()) lines.push(`Answer from your manager: ${truncate(esc, 600)}`);
   const inputs = run.wm.inputsReady;
   if (typeof inputs === "string" && inputs.trim()) lines.push(truncate(inputs, 2400));
-  const board = run.wm.boardAnswer as { status?: unknown; note?: unknown } | undefined;
-  if (board && typeof board === "object") lines.push(`Answer from the Board (${String(board.status ?? "decided")}): ${truncate(typeof board.note === "string" && board.note ? board.note : "(no note)", 600)}`);
+  const board = run.wm.boardAnswer as { status?: unknown; note?: unknown; kind?: unknown; hired?: unknown } | undefined;
+  if (board && typeof board === "object" && board.kind === "hire_agent") {
+    const note = typeof board.note === "string" && board.note ? ` Note: ${truncate(board.note, 400)}` : "";
+    lines.push(
+      board.status === "approved"
+        ? `The Board approved the hire: ${typeof board.hired === "string" && board.hired ? board.hired : "the new agent"} has joined. Do not hire again.${note}`
+        : `The Board declined the hire. Do not hire; say so in your result.${note}`,
+    );
+  } else if (board && typeof board === "object") lines.push(`Answer from the Board (${String(board.status ?? "decided")}): ${truncate(typeof board.note === "string" && board.note ? board.note : "(no note)", 600)}`);
   return lines;
 }
 
@@ -86,6 +93,35 @@ export async function delegateParts(run: BrainRun, span: SpanHandle, parts: Subp
   return { delegated, effects };
 }
 
+/** A request to hire someone (the tools and the plan then follow the hiring flow). */
+export function isHiringRequest(text: string): boolean {
+  return /\b(hire|hires|hiring|hired|recruit\w*|headcount|new (agent|specialist|employee|team member))\b/i.test(text);
+}
+
+/** Open first tasks of agents this task hired (hire_agent firstTask). */
+function openFirstTasks(run: BrainRun): Task[] {
+  const task = run.task;
+  if (!task) return [];
+  return run.platform.tasks.children(task.id).filter((c) => c.state.firstTask === true && !["done", "failed", "cancelled"].includes(c.status));
+}
+
+function firstTaskWait(open: Task[]): Solution {
+  const delegated: Subprocess[] = open.map((c) => ({
+    round: 1,
+    named: false,
+    title: c.title,
+    description: c.description,
+    value: c.value,
+    estCostUsd: c.estCostUsd,
+    acceptanceCriteria: c.acceptanceCriteria ?? "",
+    suggestedAssigneeId: null,
+    assigneeId: c.assigneeId,
+    fit: null,
+    taskId: c.id,
+  }));
+  return { kind: "waiting", text: `Waiting for the new hire's first task (${open.map((c) => `T-${c.number}`).join(", ")}).`, delegated, effects: [] };
+}
+
 /** Block: Solving. */
 export async function solving(
   run: BrainRun,
@@ -112,10 +148,16 @@ export async function solving(
         if (delegated.length > 0) return { kind: "waiting" as const, text: `Delegated ${delegated.length} subprocess(es).`, delegated, effects };
         // Nothing could be delegated: fall through to solving it directly.
       }
+      // A new hire's first task (hire_agent firstTask) is still open: wait for it, as for a delegated
+      // part (after the Board approves a hire, the first task already exists when this run starts).
+      const waitingOn = openFirstTasks(run);
+      if (waitingOn.length > 0) return firstTaskWait(waitingOn);
       const mayEscalate = canEscalate(run);
+      // hire_agent only on a hiring task: the head of the receiving team makes the hire (founder, 2026-11-07).
+      const hiring = isHiringRequest(`${task.title}\n${task.description}`);
       const tools = run.platform.tools
         .specsFor(run.agent)
-        .filter((t) => t.name !== "delegate_task" && t.name !== "hire_agent" && (mayEscalate || !ESCALATION_TOOLS.has(t.name)));
+        .filter((t) => t.name !== "delegate_task" && (t.name !== "hire_agent" || hiring) && (mayEscalate || !ESCALATION_TOOLS.has(t.name)));
       const guidance = guidanceLines(run);
       const tier = shiftTier(run.platform.models.tierForStage("metacognition.solving_evaluation.solving", run.routingAgent), exec.tierShift);
       const steps = Math.min(run.drives.maxSolveSteps, exec.directSteps);
@@ -153,7 +195,11 @@ export async function solving(
         wrapUp: true,
       });
       span.setAttributes({ "agentco.solve.steps": loop.steps, "agentco.solve.status": loop.status, "agentco.solve.tier": tier, "agentco.candidate": plan.candidate, "agentco.solve.wrapped_up": loop.wrappedUp === true });
-      if (loop.status === "completed") return { kind: "solution" as const, text: loop.result, delegated: [], effects: loop.effects };
+      if (loop.status === "completed") {
+        const hired = openFirstTasks(run);
+        if (hired.length > 0) return { ...firstTaskWait(hired), effects: loop.effects };
+        return { kind: "solution" as const, text: loop.result, delegated: [], effects: loop.effects };
+      }
       if (loop.status === "waiting" || (loop.status === "blocked" && loop.approvalId)) {
         return {
           kind: "escalated" as const,

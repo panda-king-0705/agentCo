@@ -138,9 +138,19 @@ reference repo's orphaned-memory limitation with an explicit policy.)
 profile id), `monthlyBudgetUsd` (finite, ≥ 0), department, manager and
 reporting cycles (400).
 
-**Hiring by agents.** `hire_agent` (executives only) creates an approval when
-`hiringRequiresApproval` or headcount ≥ `maxHeadcount`; on approval the agent
-is created under the requested manager.
+**Hiring by agents.** Managers hire and recruiters source (founder, 2026-11-07).
+The head of the team a new hire joins makes the hire. `hire_agent` (executives only)
+places people only in the hirer's own team. It takes `monthlyBudgetUsd` and
+`firstTask`; the first task becomes a subtask of the hiring task, so the manager
+waits for it and reviews it. Recruiters (role `recruiter-agent`) have `catalog_search`
+and recommend a candidate first.
+
+The planner routes a person named in a request to the direct report whose team
+they are in, and plans sourcing as round 1 and the hire as round 2. Brains get
+`hire_agent` in Solving only on a hiring task. `hire_agent` creates an approval when
+`hiringRequiresApproval` is on or headcount ≥ `maxHeadcount`. On approval the agent
+is created under the requested manager, the first task is assigned, and the
+hiring manager resumes.
 
 ## Work model — the company TODO list
 
@@ -275,7 +285,7 @@ answered, the task is not escalated again (BRAIN.md → escalation budget).
 | `memory_write {content, kind, scope, tags?}` | all (global semantic/procedural: managers+) | stored + `memory.written` event |
 | `blackboard_read {key?}` / `blackboard_write {key, value}` | all / managers+ | global working memory |
 | `workspace_write_file {path, content}` / `workspace_read_file {path}` / `workspace_list {dir?}` | all | a plain path or `shared/…` is the company drive (colleagues can read it); `private/…` is the agent's own folder. A missed read returns the file a teammate saved under that path or name on the same objective (trace), with a note on where it is. Overwrites keep the previous version in `.history/`. A write is read back on disk before it is confirmed. Write and read results report words, lines and characters. Path traversal is rejected. |
-| `hire_agent {roleId?, title, departmentId, managerId, tier, justification}` | executives | approval or direct create (policy) |
+| `hire_agent {catalogId? \| roleId?, title, departmentId, managerId, tier, justification, monthlyBudgetUsd?, firstTask?}` | executives | into the hirer's own team; approval or direct create (policy); `firstTask` → a subtask for the new hire under the hiring task |
 | `web_fetch {url}` | opt-in (`WEB_FETCH_ENABLED`) | GET, text only, 20 kB cap |
 
 ## Traceability

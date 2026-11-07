@@ -148,6 +148,18 @@ versioning: [SemVer](https://semver.org/).
   and limit Board questions to irreversible, external or out-of-mandate decisions.
 
 ### Added
+- Hiring: managers hire, and recruiters source candidates (founder's choice after test 5).
+  - **Who hires.** The head of the team a new hire joins makes the hire. `hire_agent` takes a
+    monthly budget and a first task. The first task is assigned at once, or when the Board
+    approves the hire. The hiring manager waits for it and reviews it.
+  - **Recruiters search the catalog.** Recruiters get `catalog_search`. Existing ones get it at
+    the next start.
+  - **Planning follows the hiring flow.** It sends a person the request names (e.g. "Jasmine…")
+    to the direct report whose team they are in. It splits a hiring request into sourcing by
+    People (round 1) and the hire by the receiving department's head (round 2).
+  - **Brains can actually hire.** `hire_agent` was never offered in Solving. It now is, on
+    hiring tasks only.
+  - **The handbook explains hiring,** so new hires learn the rule.
 - Approvals: "Clear history" hides decided approvals (pending ones stay; nothing is deleted), with
   undo and "Restore cleared". Migration v4.
 - Onboarding: a company handbook generated from live data (mission, who's who with ids, how work

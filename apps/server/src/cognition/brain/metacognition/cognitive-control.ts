@@ -13,6 +13,7 @@ import { block, llmJson, type BrainRun } from "../runtime.ts";
 import { candidatePool, namedCandidates, scoreCandidates, type Candidate } from "../self-management/role-arrangement.ts";
 import type { Competence } from "./self-ability.ts";
 import type { ProblemDefinition, Understanding } from "./target-understanding.ts";
+import { isHiringRequest } from "./solving-evaluation.ts";
 
 export interface Subprocess {
   /**
@@ -152,8 +153,10 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
   // (2026-11-07, test 4: a "read it back and count the words" verdict re-delegated all four parts, $1.90).
   const delivered = a.feedback.length > 0 ? deliveredParts(run, task.id) : [];
   // Owners the request names each get a part on the first plan; a fix round only goes to whoever a fix concerns.
-  const named = canDelegate && task.state.kind !== "escalation" && delivered.length === 0 ? namedReports(run, reports, `${task.title} ${task.description}`) : [];
+  const owners = canDelegate && task.state.kind !== "escalation" && delivered.length === 0 ? namedOwners(run, reports, `${task.title} ${task.description}`) : [];
+  const named = owners.map((o) => o.agent);
   const max = maxSubprocessesFor(c, run.drives.essentialOnly, named.length);
+  const hiring = canDelegate && isHiringRequest(`${task.title} ${task.description}`);
   // What is already on the drive, so the plan names paths that update existing documents in place
   // (2026-11-07, test 4 rerun: briefs named no path, and every section got a second and third copy).
   const onDrive = driveOverview(run);
@@ -178,8 +181,12 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
               `Decompose into at most ${max} subprocesses, each for ONE report (assigneeId), with value 0-1000, estCostUsd and acceptanceCriteria; mode "delegate". ` +
               "Write acceptance criteria about content — what must be covered, correct and consistent — not formatting (exact heading counts, tag placement, layout). Keep them checkable with the assignee's tools: the file tools confirm every save and report word, line and character counts, and the reviewer sees the saved files themselves, so never ask for a read-back, a pasted copy or a separate word count. " +
               "If the request names a department or person (\"have Finance…\", \"ask the CTO…\"), assign that part to them. " +
-              (named.length
-                ? `The request names these owners — give each of them their own part (at least one part each): ${named.map((r) => `${r.id} (${r.title})`).join(", ")}. `
+              (owners.length
+                ? `The request names these owners — give each of them their own part (at least one part each): ${owners.map((o) => `${o.agent.id} (${o.agent.title}${o.via ? ` — ${o.via} is in their team; the part is for them` : ""})`).join(", ")}. `
+                : "") +
+              // Founder, 2026-11-07: "managers hire, recruiter sources".
+              (hiring
+                ? "Hiring: the head of the team the new hire joins makes the hire — hire_agent places people only in the hirer's own team and takes monthlyBudgetUsd and firstTask (their first assignment, with the exact file path). A recruiter in People finds and recommends the candidate first (catalog id and why). Plan the recommendation as round 1 (to the head of People, for their recruiter) and the hire — with budget and first task — as round 2 (to the receiving department's head). "
                 : "") +
               "Name the exact file path each part saves to in its description (e.g. launch-plan/finance.md), and the path of the combined document in the round-2 step. If the same document already exists on the drive (listed below), reuse its path: saving replaces it and keeps the previous version. Never ask for a second copy of a document under another name. " +
               'Parts that need other parts\' output — assembling, merging, reconciling, reviewing, final QA — are round 2 ("round":2): they are handed out only after every round-1 part is done, and their owner gets those results. You may instead do the assembly yourself: you are resumed with every part\'s result when they finish. ' +
@@ -199,6 +206,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
           reports: canDelegate ? reports.map((r) => reportView(run, r)) : [],
           maxSubprocesses: max,
           ...(named.length ? { namedOwners: named.map((r) => r.id) } : {}),
+          ...(hiring ? { hiring: true } : {}),
           feedback: a.feedback,
         },
         // Room for the whole plan: a cut-off reply lost every subprocess (json.ts now returns null for it).
@@ -246,12 +254,47 @@ export function deliveredParts(run: BrainRun, taskId: string): string[] {
     .map((c) => `- T-${c.number} "${truncate(c.title, 80)}" by ${run.platform.org.getAgent(c.assigneeId ?? "")?.name ?? "?"}: ${truncate(oneLine(c.result ?? "", 300), 300)}`);
 }
 
-/** The leader's direct reports whose department, role or name the request names. */
-export function namedReports(run: BrainRun, reports: Agent[], text: string): Agent[] {
-  const ownDepartment = run.platform.org.departmentName(run.agent.departmentId);
-  const candidates: Candidate[] = reports.map((agent) => ({ agent, departmentName: run.platform.org.departmentName(agent.departmentId), catalogProfile: null }));
+/**
+ * The leader's direct reports the request names — by department, role or name — plus, for a person
+ * named who is NOT a direct report (e.g. "Jasmine should…", a recruiter two levels down), the direct
+ * report whose team they are in: the part goes there, for them (2026-11-07, test 5).
+ */
+export function namedOwners(run: BrainRun, reports: Agent[], text: string): { agent: Agent; via: string | null }[] {
+  const org = run.platform.org;
+  const ownDepartment = org.departmentName(run.agent.departmentId);
+  const candidates: Candidate[] = reports.map((agent) => ({ agent, departmentName: org.departmentName(agent.departmentId), catalogProfile: null }));
   const ids = namedCandidates(text, candidates, { ownDepartment });
-  return reports.filter((r) => ids.has(r.id));
+  const out = new Map<string, { agent: Agent; via: string | null }>();
+  for (const r of reports) if (ids.has(r.id)) out.set(r.id, { agent: r, via: null });
+  const reportIds = new Set(reports.map((r) => r.id));
+  for (const person of mentionedPeople(text, org.listActiveAgents())) {
+    if (person.id === run.agent.id || reportIds.has(person.id)) continue;
+    let up = person.managerId;
+    const seen = new Set<string>();
+    while (up && !reportIds.has(up) && !seen.has(up)) {
+      seen.add(up);
+      up = org.getAgent(up)?.managerId ?? null;
+    }
+    const report = up ? reports.find((r) => r.id === up) : undefined;
+    if (report && !out.has(report.id)) out.set(report.id, { agent: report, via: person.name });
+  }
+  return [...out.values()];
+}
+
+/** People named in the text: by full name, or by a first name written with a capital that only one person has. */
+export function mentionedPeople(text: string, agents: Agent[]): Agent[] {
+  const lower = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
+  const firsts = new Map<string, number>();
+  for (const a of agents) {
+    const f = a.name.split(/\s+/)[0] ?? "";
+    firsts.set(f, (firsts.get(f) ?? 0) + 1);
+  }
+  return agents.filter((a) => {
+    const full = a.name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (full.length >= 3 && lower.includes(` ${full} `)) return true;
+    const first = a.name.split(/\s+/)[0] ?? "";
+    return first.length >= 3 && firsts.get(first) === 1 && new RegExp(`\\b${first.replace(/[^A-Za-z]/g, "")}\\b`).test(text);
+  });
 }
 
 /** Block: Role Arrangement assigns each subprocess ("Assign Suitable Role to Workers"). */
@@ -272,6 +315,7 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
       if (candidates.length === 0) break;
       // The part's TITLE says whose it is ("Engineering scope…"); descriptions mention other departments in passing.
       const own = namedCandidates(s.title, candidates, { ownDepartment });
+      for (const o of namedOwners(run, candidates.map((x) => x.agent), s.title)) if (o.via) own.add(o.agent.id);
       const namedIds = own.size ? own : namedInRequest.size === 1 ? namedInRequest : undefined;
       const scores = scoreCandidates(`${s.title} ${s.description}`, candidates, { suggestedId: s.suggestedAssigneeId, usedCounts: used, fallbackDepartment: run.facts.department, ...(namedIds ? { namedIds } : {}) });
       const best = scores[0]!;
