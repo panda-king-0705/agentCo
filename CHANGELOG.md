@@ -6,6 +6,13 @@ versioning: [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **Removed agents are out of the conversation.** The conversation layer now refuses any message
+  sent as a removed agent, and won't open or write to an agent-to-agent thread with one. Messages
+  from the Board into a removed agent's thread are refused too: it would never be answered. A
+  run's final reply and failure notes skip a removed agent instead of erroring. In the console,
+  removed agents are marked "(removed)" in the chat list and on their messages, and their threads
+  show a "kept for the record" note instead of the message box. Agent-to-agent threads now say
+  they are read-only instead of failing on send.
 - **CI's e2e job has passed for the first time.** It had failed on every run since CI was added.
   `apps/web/dev/e2e.mjs` loaded Playwright from one developer machine's global path, launched
   `/usr/bin/google-chrome` and wrote screenshots to that machine's scratch folder. A shared

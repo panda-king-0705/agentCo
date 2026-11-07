@@ -52,9 +52,19 @@ export class ConversationService {
     return this.getOrCreate("dm", ["human", agent.id], `DM · ${agent.name}`);
   }
 
-  /** Get-or-create the agent ↔ agent DM (participants sorted). */
+  /** Get-or-create the agent ↔ agent DM (participants sorted). Never with a removed agent. */
   agentDirectMessage(a: Agent, b: Agent): Conversation {
+    for (const x of [a, b]) if (this.isRemoved(x.id)) throw conflict(`${x.name} was removed and can no longer send or receive messages`);
     return this.getOrCreate("agent_dm", [a.id, b.id].sort(), `${a.name} ↔ ${b.name}`);
+  }
+
+  /**
+   * A terminated agent is out of the company: nothing may post as them, and their DMs are kept for
+   * the record but closed (2026-11-07: after an agent was removed, the console still offered their
+   * thread as if they could answer, and no layer below the tools checked the sender).
+   */
+  private isRemoved(agentId: string): boolean {
+    return this.repos.agents.get(agentId)?.status === "terminated";
   }
 
   messages(conversationId: string, after?: string): Message[] {
@@ -73,6 +83,8 @@ export class ConversationService {
   postHuman(conversationId: string, content: string): Message {
     const conversation = this.require(conversationId);
     if (conversation.kind === "agent_dm") throw conflict("agent-to-agent conversations are read-only for the Board");
+    const removed = conversation.kind === "dm" ? conversation.participantIds.find((p) => p !== "human" && this.isRemoved(p)) : undefined;
+    if (removed) throw conflict(`${this.repos.agents.get(removed)?.name ?? removed} was removed; this conversation is kept for the record and cannot receive new messages`);
     return this.post(conversation, "human", content, {});
   }
 
@@ -91,6 +103,9 @@ export class ConversationService {
   }
 
   private post(conversation: Conversation, senderId: string, content: string, meta: MessageMeta): Message {
+    if (senderId !== "human" && senderId !== "system" && this.isRemoved(senderId)) {
+      throw conflict(`${this.repos.agents.get(senderId)?.name ?? senderId} was removed and can no longer send messages`);
+    }
     const text = typeof content === "string" ? content.trim() : "";
     if (!text) throw badRequest("content must be a non-empty string");
     if (text.length > MAX_MESSAGE_CHARS) throw badRequest(`content exceeds ${MAX_MESSAGE_CHARS} characters`);
