@@ -36,7 +36,7 @@ import {
   rollbackRecovery,
 } from "./metacognition/project-management.ts";
 import { selfAbility, type Competence } from "./metacognition/self-ability.ts";
-import { delegateParts, feedback, filesUnderTasks, integrateResults, reviewFiles, solving, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
+import { delegateParts, feedback, filesUnderTasks, integrateResults, openFirstTasks, reviewFiles, solving, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
 import { analysis, literatureReview, problemDefinition, requestText, type ProblemDefinition, type Understanding } from "./metacognition/target-understanding.ts";
 import { block, llmJson, mustPropagate, phase, toolContext, YieldSignal, type BrainRun } from "./runtime.ts";
 import { feedbackUpdate } from "./self-management/emotion.ts";
@@ -460,6 +460,14 @@ export class BrainEngine implements CognitiveEngine {
     state: { feedback: string[]; rejected: CandidateName[]; revision: number; boardApproved?: boolean; managerAnswered?: boolean },
   ): Promise<EngineResult> {
     const task = run.task!;
+    // A new hire's first task is still open (e.g. resumed after the Board approved the hire): wait for
+    // it — no planning, no new parts (2026-11-07: a resumed manager re-planned and gave the new hire a
+    // duplicate task).
+    const firstTasks = openFirstTasks(run);
+    if (firstTasks.length > 0) {
+      run.ctx.span.setAttributes({ "agentco.waiting_on_first_task": firstTasks.map((c) => `T-${c.number}`).join(",") });
+      return { outcome: "waiting", output: `Waiting for the new hire's first task: ${firstTasks.map((c) => `T-${c.number} "${truncate(c.title, 60)}"`).join(", ")}.`, taskState: { checkpoint: null } };
+    }
     const u = await this.understand(run);
 
     // Early Stop? (the Board's explicit go-ahead overrides a low-confidence stop once). Frustration

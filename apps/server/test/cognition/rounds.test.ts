@@ -487,10 +487,17 @@ test("Solving offers hire_agent on a hiring task only, and waits for a new hire'
   const waiting = p.addTask(makeTask({ id: "tsk_w2", number: 503, title: "Hire an SEO specialist", description: "Hire one.", assigneeId: cpo.id }));
   p.addTask(makeTask({ id: "tsk_first", number: 504, parentTaskId: waiting.id, rootTaskId: waiting.id, title: "SEO keyword brief", description: "Save launch-plan/seo-keywords.md.", assigneeId: "agt_jas", status: "todo", state: { firstTask: true } }));
   const before = toolSets.length;
+  const llmBefore = p.tracer.byKind("llm").length;
   const r = await new BrainEngine({ maxRevisions: 0 }).run(p.context(cpo, taskInput(waiting)));
   assert.equal(r.outcome, "waiting", r.error ?? r.output);
-  assert.match(r.output, /"SEO keyword brief"/);
+  assert.match(r.output, /^Waiting for the new hire's first task: T-504 "SEO keyword brief"\.$/);
   assert.equal(toolSets.length, before, "no Solving call while the first task is open");
+  assert.equal(p.tracer.byKind("llm").length, llmBefore, "no planning either: nothing new is handed out");
+
+  // Once the hire is made, the task never offers hire_agent again and says who joined.
+  const hired = p.addTask(makeTask({ id: "tsk_h2", number: 505, title: "Hire an SEO specialist into Marketing", description: "Hire one and review their brief.", assigneeId: cpo.id, state: { hires: [{ role: "marketing/marketing-seo-specialist", status: "hired", agentId: "agt_riley", name: "Riley Chen" }] } }));
+  await new BrainEngine({ maxRevisions: 0 }).run(p.context(cpo, taskInput(hired)));
+  assert.ok(!toolSets.at(-1)!.includes("hire_agent"), "already hired: no hire_agent");
 });
 
 test("the Board's decision on a hire reaches the hiring manager in plain words", () => {

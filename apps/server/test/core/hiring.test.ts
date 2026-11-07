@@ -122,3 +122,62 @@ test("recruiters can search the catalog (to recommend); only executives hire", a
     await t.close();
   }
 });
+
+// Live (2026-11-07, trc_5831…): resumed after the Board approved the SEO Specialist, the CMO hired a
+// second one for the same task; the Board approved that too.
+test("one hire per role per task: a second request is refused — pending, hired or declined", async () => {
+  const results: { ok: boolean; content: string; data?: unknown }[] = [];
+  let ids = { cmo: "" };
+  const t = await createTestApp({
+    brain: async (ctx) => {
+      if (ctx.input.trigger !== "task" || ctx.agent.id !== ids.cmo) return done();
+      results.push(await callTool(ctx, "hire_agent", HIRE));
+      results.push(await callTool(ctx, "hire_agent", HIRE));
+      results.push(await callTool(ctx, "hire_agent", { ...HIRE, catalogId: "marketing/marketing-content-creator" }));
+      return { outcome: "blocked", output: "Waiting for the Board.", approvalId: (results[0]!.data as { approvalId: string }).approvalId };
+    },
+  });
+  try {
+    const { platform } = t.app;
+    const cmo = t.agentByRole("cmo");
+    ids = { cmo: cmo.id };
+    const task = rootTask(t, cmo.id, "Hire an SEO specialist and a content creator");
+    await t.drain();
+    assert.match(results[0]!.content, /^Hiring request sent to the Board/);
+    assert.equal(results[1]!.ok, false);
+    assert.match(results[1]!.content, /^Already done for this task: a marketing\/marketing-seo-specialist hire is waiting for the Board's approval\. Do not hire again/);
+    assert.match(results[2]!.content, /^Hiring request sent to the Board/, "a different role is fine");
+    const pending = platform.approvals.list("pending").filter((a) => a.kind === "hire_agent");
+    assert.equal(pending.length, 2);
+    const seo = pending.find((a) => (a.payload.input as { catalogId: string }).catalogId === HIRE.catalogId)!;
+    const other = pending.find((a) => a !== seo)!;
+    platform.approvals.decide(seo.id, { decision: "approved" });
+    platform.approvals.decide(other.id, { decision: "rejected", note: "Not now." });
+    const hires = platform.tasks.get(task.id)!.state.hires as { role: string; status: string; name?: string; firstTaskId?: string }[];
+    const seoHire = hires.find((h) => h.role === HIRE.catalogId)!;
+    assert.equal(seoHire.status, "hired");
+    assert.ok(seoHire.name && seoHire.firstTaskId, "who joined and their first task are on the hiring task");
+    assert.equal(hires.find((h) => h.role === "marketing/marketing-content-creator")!.status, "declined");
+  } finally {
+    await t.close();
+  }
+});
+
+test("catalog_search says specialists have no price — the hirer sets the budget", async () => {
+  let out = "";
+  let ids = { cmo: "" };
+  const t = await createTestApp({
+    brain: async (ctx) => {
+      if (ctx.input.trigger === "task" && ctx.agent.id === ids.cmo) out = (await callTool(ctx, "catalog_search", { query: "SEO" })).content;
+      return done();
+    },
+  });
+  try {
+    ids = { cmo: t.agentByRole("cmo").id };
+    rootTask(t, ids.cmo, "Find an SEO specialist");
+    await t.drain();
+    assert.match(out, /No specialist has a price: the new hire's monthly model budget is set when hiring \(hire_agent monthlyBudgetUsd\)\./);
+  } finally {
+    await t.close();
+  }
+});

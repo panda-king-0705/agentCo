@@ -6,6 +6,25 @@ versioning: [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **CI's e2e job has passed for the first time.** It had failed on every run since CI was added.
+  `apps/web/dev/e2e.mjs` loaded Playwright from one developer machine's global path, launched
+  `/usr/bin/google-chrome` and wrote screenshots to that machine's scratch folder. A shared
+  `apps/web/dev/browser.mjs` now finds Playwright in the project, `PLAYWRIGHT_MODULE` or the global
+  npm root. It uses the bundled Chromium with `E2E_BROWSER=chromium` (as in CI), and writes
+  screenshots to the OS temp folder. `e2e-live.mjs` uses the same helper.
+- Hiring loop (2026-11-07, test 5 rerun). Resumed after the Board approved a hire, the CMO gave
+  the new hire a duplicate task and then hired the same specialist again; the Board approved
+  that too.
+  - **One hire per role per task.** Each hire is recorded on the hiring task (requested, hired or
+    declined). `hire_agent` refuses the same role twice.
+  - **The task says who already joined.** Solving and planning stop offering the hire and name
+    who has joined.
+  - **Waiting comes first.** A manager waits for an open first task before planning anything,
+    whether the work was handed out or done by the manager.
+  - **The hiring manager hands the work over.** They are told to give the work to the new hire
+    as their first task, not to do it first.
+  - **`catalog_search` says specialists have no price.** The hirer sets the budget; a recruiter
+    had searched 11 times for one.
 - Model outages (2026-11-07, test 5):
   - **Account errors skip the provider.** When a provider fails on the account (no credit, quota
     used up, key refused), the router skips it for 10 minutes and goes straight to the fallback,
