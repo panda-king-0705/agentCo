@@ -327,3 +327,33 @@ test("hire_agent: managerId \"me\" or a report's name works; a manager outside t
     await t.close();
   }
 });
+
+test("a hirer who holds the role does the work; a hire nobody asked for says so to the Board", async () => {
+  // 2026-11-08 (trc_6a25…): the General Counsel — herself the Legal Compliance Checker — hired a second
+  // one for a one-off review of a 200-word draft, and the work waited 11 minutes for the Board.
+  const seen: Record<string, { ok: boolean; content: string }> = {};
+  let cmoId = "";
+  const t = await createTestApp({
+    brain: async (ctx) => {
+      if (ctx.input.trigger !== "task" || ctx.agent.id !== cmoId) return done();
+      seen.self = await callTool(ctx, "hire_agent", { ...HIRE, catalogId: "marketing/marketing-content-creator", firstTask: undefined });
+      seen.other = await callTool(ctx, "hire_agent", { ...HIRE, firstTask: undefined });
+      return done("Drafted the launch post myself.");
+    },
+  });
+  try {
+    const { platform } = t.app;
+    const cmo = t.agentByRole("cmo");
+    cmoId = cmo.id;
+    platform.repos.agents.update(cmo.id, { catalogId: "marketing/marketing-content-creator" });
+    rootTask(t, cmo.id, "Draft the launch post");
+    await t.drain();
+    assert.equal(seen.self!.ok, false);
+    assert.match(seen.self!.content, /^You hold marketing\/marketing-content-creator yourself: do this work yourself, or give it to someone on your team\./);
+    const approval = platform.approvals.list("pending").find((a) => a.kind === "hire_agent")!;
+    assert.match(approval.summary, /wants to hire a .* \(not asked for: the request was "Draft the launch post"\): SEO for the meeting-notes launch/);
+    assert.match(platform.tools.specsFor(cmo).find((s) => s.name === "hire_agent")!.description, /Hire only when the request asks for a hire, or no one on your team — you included — can do the work/);
+  } finally {
+    await t.close();
+  }
+});

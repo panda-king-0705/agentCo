@@ -23,7 +23,7 @@ import { block, capabilities, llmJson, recordCall, toolContext, type BrainRun } 
 import type { Subprocess } from "./cognitive-control.ts";
 import { truthfulEfficientGood, type TegResult } from "./monitoring.ts";
 import { measure } from "../../../tools/builtins/files.ts";
-import { describeHire, objectiveHires } from "../../../tools/builtins/hiring.ts";
+import { describeHire, isHiringRequest, objectiveHires } from "../../../tools/builtins/hiring.ts";
 
 const TIERS: ModelTier[] = ["economy", "standard", "frontier"];
 
@@ -96,12 +96,7 @@ export async function delegateParts(run: BrainRun, span: SpanHandle, parts: Subp
   return { delegated, effects };
 }
 
-/** A request to hire someone (the tools and the plan then follow the hiring flow). */
-export function isHiringRequest(text: string): boolean {
-  // "Recruiter recommends…" is a recommendation step, not a hire (2026-11-07, trc_617b…: the CMO was
-  // offered hire_agent on it and hired before the recruiter had been asked).
-  return /\b(hire|hires|hiring|hired|recruit(?!ers?\b)\w*|headcount|new (agent|specialist|employee|team member))\b/i.test(text);
-}
+export { isHiringRequest };
 
 /** Open first tasks of agents this task hired (hire_agent firstTask). */
 export function openFirstTasks(run: BrainRun): Task[] {

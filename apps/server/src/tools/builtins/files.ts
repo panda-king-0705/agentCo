@@ -186,8 +186,8 @@ export function measure(text: string): { chars: number; words: number; lines: nu
 function footer(display: string, content: string, truncated: boolean): string {
   const m = measure(content);
   return truncated
-    ? `\n[cut at ${m.chars} chars: ${display} is longer than one read returns; counts below cover the part shown — ${m.words} words, ${m.lines} lines]`
-    : `\n[end of ${display} — complete: ${m.words} words, ${m.lines} lines, ${m.chars} chars]`;
+    ? `\n[read tool's note, not part of the file: cut at ${m.chars} chars — ${display} is longer than one read returns; counts below cover the part shown — ${m.words} words, ${m.lines} lines]`
+    : `\n[read tool's note, not part of the file: end of ${display} — complete: ${m.words} words, ${m.lines} lines, ${m.chars} chars]`;
 }
 
 function nameOf(ctx: ToolRunContext, agentId: string): string {
