@@ -15,7 +15,8 @@ import { EDIT_IN_PLACE_RULE, OUTSIDE_DOC_RULE } from "../../../org/rules.ts";
 import type { ModelTier, Task } from "../../../../../../packages/shared/src/index.ts";
 import type { SpanHandle, ToolEffect } from "../../../contracts.ts";
 import { oneOf, str, strArr, unit } from "../../coerce.ts";
-import { oneLine, truncate } from "../../text.ts";
+import { oneLine, overlapRatio, truncate } from "../../text.ts";
+import { contractList, validateContract, validationBrief, validationSection, type Assertion, type Validation } from "./validation.ts";
 import { ESCALATION_TOOLS, runToolLoop } from "../../tool-loop.ts";
 import { canEscalate } from "../escalation.ts";
 import { Q4_CONTROL, Q6_EXECUTION, q6SubprocessCount, type CandidateName } from "../interpretation.ts";
@@ -239,6 +240,8 @@ export interface FeedbackResult {
   acceptThreshold: number;
   /** Only when escalating: one question for the Board — what is done and where, then one decision with options. */
   boardQuestion: string;
+  /** The independent check against the objective's contract (root only; null when there is none). */
+  validation: Validation | null;
 }
 
 export function acceptThreshold(controlLevel: number, strictSelfEvaluation: boolean): number {
@@ -285,6 +288,8 @@ export async function feedback(
     files?: ReviewFile[];
     /** Steps this company cannot do (org/capabilities.ts): the Board's, never a shortfall. */
     boardSteps?: string[];
+    /** The objective's contract (validation.ts): checked independently first; only its unmet statements are sent back. */
+    contract?: Assertion[];
   },
 ): Promise<FeedbackResult> {
   return block(run, "metacognition.solving_evaluation.feedback", "Evaluating the result", async (span) => {
@@ -294,11 +299,17 @@ export async function feedback(
     // the CEO both reviewed a finished hire as "not evidenced" and the CEO re-did work to prove it).
     const hires = run.task ? objectiveHires(run.platform.tasks, run.platform.tasks.get(run.task.id) ?? run.task) : [];
     span.setAttributes({ "agentco.feedback.files": files.map((f) => f.display).join(", "), ...(hires.length ? { "agentco.feedback.hires": hires.length } : {}) });
+    // The independent check comes first: the contract and the saved work only (validation.ts).
+    const validation = o.contract?.length ? await validateContract(run, span, { contract: o.contract, files, solution: results.length ? null : o.solution, boardSteps: o.boardSteps ?? [] }) : null;
     const json = await llmJson(run, {
       stage: "metacognition.solving_evaluation.feedback",
       span,
       instructions:
         `Problem: ${truncate(o.problem, 400)}\nSuccess criteria: ${o.successCriteria.join("; ")}\n` +
+        (validation
+          ? `What "done" means was fixed before the work started (${contractList(o.contract!)}). An independent checker, who did not do the work, judged the saved work against it:\n${validationBrief(validation)}\n` +
+            "Send work back (revise) only for statements the checker found UNMET, and name the statement in each issue (\"A2: …\"). Nothing outside these statements is a reason to revise — at most a note. Statements that need the Board go in openPoints.\n"
+          : "") +
         // 2026-11-07 (test 6): "No email was sent" was the first shortfall a review reported — for a
         // company that cannot send email.
         (o.boardSteps?.length
@@ -352,12 +363,24 @@ export async function feedback(
     const issues = strArr(json.issues, 6, 240);
     if (degraded) issues.push("self-evaluation unavailable: the model's verdict could not be read");
     if (!teg.efficient) issues.push(`cost $${o.actualCostUsd.toFixed(4)} exceeded 1.5× the estimate $${o.estimateUsd.toFixed(4)}`);
-    const decision = decide({ modelDecision, score, teg, revisionsLeft: o.revisionsLeft, rollbackAvailable: o.rollbackAvailable, canEscalate: o.canEscalate });
+    let decision = decide({ modelDecision, score, teg, revisionsLeft: o.revisionsLeft, rollbackAvailable: o.rollbackAvailable, canEscalate: o.canEscalate });
+    let openPointsExtra: string[] = [];
+    if (validation) {
+      // The checker decides what is short, not the leader's second thoughts (2026-11-08: reviews kept
+      // finding new requirements — per-toggle captures, dated sign-offs — so every round found more).
+      const before = decision;
+      if (validation.unmet.length === 0 && (decision === "revise" || decision === "rollback")) decision = "accept";
+      else if (validation.unmet.length > 0 && decision === "accept" && o.revisionsLeft > 0) decision = "revise";
+      if (decision === "revise") issues.splice(0, issues.length, ...validation.unmet.map((c) => `${c.id} not met (${truncate(c.text, 120)}): ${c.gap || "not shown in the saved work"}`));
+      openPointsExtra = validation.board.map((c) => `${truncate(c.text, 140)} — ${c.gap || "needs the Board"}`);
+      if (before !== decision) span.setAttributes({ "agentco.validation.decision": `${before}→${decision}` });
+    }
     const summary = str(json.summary, results.length ? `${results.filter((r) => r.status === "done").length}/${results.length} parts delivered.` : truncate(o.solution ?? "", 300), 1200);
     span.setAttributes({ "agentco.score": score, "agentco.decision": decision, "agentco.decision.model": modelDecision, "agentco.accept_threshold": threshold, "agentco.feedback.degraded": degraded });
     const openPoints = strArr(json.openPoints, 8, 240);
+    for (const extra of openPointsExtra) if (!openPoints.some((p) => overlapRatio(p, extra) >= 0.5)) openPoints.push(extra);
     const boardQuestion = typeof json.boardQuestion === "string" ? json.boardQuestion.trim().slice(0, 1200) : "";
-    return { score, truthfulScore, issues, openPoints, modelDecision, decision, summary, teg, acceptThreshold: threshold, boardQuestion };
+    return { score, truthfulScore, issues, openPoints, modelDecision, decision, summary, teg, acceptThreshold: threshold, boardQuestion, validation };
   });
 }
 
@@ -372,7 +395,7 @@ export function integrateResults(
   summary: string,
   subtasks: Task[],
   agentName: string,
-  extras: { openPoints?: string[]; unfinished?: string[]; files?: ReviewFile[]; names?: (agentId: string | null) => string } = {},
+  extras: { openPoints?: string[]; unfinished?: string[]; files?: ReviewFile[]; names?: (agentId: string | null) => string; validation?: Validation | null } = {},
 ): string {
   const parts = subtasks
     .filter((s) => s.status === "done" && s.result && s.state.kind !== "escalation")
@@ -383,6 +406,7 @@ export function integrateResults(
   return [
     `# ${title}`,
     `${summary}`,
+    extras.validation ? validationSection(extras.validation) : "",
     points.length ? `## Open points for the Board\n${points.map((p) => `- ${p}`).join("\n")}` : "",
     extras.unfinished?.length ? unfinishedSection(extras.unfinished) : "",
     files.length ? `## Files\n${files.map((f) => `- ${f.display} (${f.by}, ${f.words} words)`).join("\n")}` : "",

@@ -84,7 +84,8 @@ export async function problemDefinition(run: BrainRun, gaps: string[] = []): Pro
       span,
       instructions:
         `${requestText(run)}\n\nDefine the problem.\n${limitsLine(caps.company, caps.mine, caps.services)}\n` +
-        "Success criteria are what this company can deliver. A step it cannot do goes in boardSteps (e.g. \"Send the update to the investors\"), and its criterion becomes that it is ready for the Board (e.g. \"The update is drafted, checked and ready for the Board to send\"). " +
+        "Success criteria are what this company can deliver, written as at most 5 checkable statements about the finished work — each one something a checker who sees only the saved work could confirm (e.g. \"Every figure in the update names the file it comes from\") — covering what the request asks for, never formatting or paperwork. " +
+        "A step it cannot do goes in boardSteps (e.g. \"Send the update to the investors\"), and its criterion becomes that it is ready for the Board (e.g. \"The update is drafted, checked and ready for the Board to send\"). " +
         "The title says what we will deliver (\"Draft the monthly investor update\", not \"Send…\")." +
         (gaps.length ? ` Your previous understanding was evaluated as insufficient; re-define the problem around these gaps: ${gaps.join("; ")}.` : "") +
         (isMessage

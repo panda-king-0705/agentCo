@@ -5,6 +5,18 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **What "done" means, fixed up front, and checked by someone who didn't do the work** (validation
+  contracts and an independent validator, after Factory's "Missions"). When an objective opens, its
+  success criteria become a numbered contract shown in the first reply ("Done means: 1. … 2. …").
+  It isn't changed later. Every part's brief carries the statements it must make true. When the
+  work is in, an independent check reads only the contract and the saved files: not the plan, the
+  workers' own accounts or the leader's charter. It marks each statement met, unmet or the Board's,
+  using another provider's model where one is configured (`VALIDATOR_MODEL`; by default the standard
+  tier's fallback, e.g. OpenAI when the leaders run on Claude). Work goes back only for unmet
+  statements, with exactly those as the fix list, so reviewers can no longer add requirements
+  mid-flight. The report to the Board shows each statement with ✓ / ✗ / Board.
+
 ### Changed
 - **Delegation tree without crossings.** A trace's delegation graph is now a tidy tree: each agent
   sits centred over the people it handed work to, every team in its own columns, with elbow
