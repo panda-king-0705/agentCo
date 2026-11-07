@@ -11,6 +11,7 @@
  * a subtask of the hiring task — at once, or when the Board approves the hire — so the hiring
  * manager waits for it and reviews it like any delegated part.
  */
+import { resolveAgent } from "../../org/directory.ts";
 import type { AgentTier, CreateAgentInput, Task } from "../../../../../packages/shared/src/index.ts";
 import { roleTemplate } from "../../org/templates.ts";
 import type { ToolEffect } from "../../contracts.ts";
@@ -40,6 +41,9 @@ export interface HireRecord {
   firstTaskId?: string;
   /** The task the hire was made on, when read across an objective (objectiveHires). */
   taskNumber?: number;
+  /** Recorded at hire time, so reviewers can see the terms (2026-11-07, trc_005b…: the hirer's own review said the budget "cannot be confirmed"). */
+  monthlyBudgetUsd?: number;
+  firstTaskTitle?: string;
 }
 
 export function hiresOf(task: { state: Record<string, unknown> } | null | undefined): HireRecord[] {
@@ -55,7 +59,8 @@ export function withHire(list: HireRecord[], rec: HireRecord): HireRecord[] {
 
 export function describeHire(h: HireRecord): string {
   const on = h.taskNumber !== undefined ? ` (on T-${h.taskNumber})` : "";
-  if (h.status === "hired") return `${h.name ?? h.agentId ?? "someone"} (${h.role}${h.agentId ? `, ${h.agentId}` : ""}) has joined${on}${h.firstTaskId ? "; their first task is assigned" : ""}`;
+  const terms = [h.monthlyBudgetUsd !== undefined ? `$${h.monthlyBudgetUsd}/month model budget` : "", h.firstTaskTitle ? `first task "${h.firstTaskTitle}"` : ""].filter(Boolean).join(", ");
+  if (h.status === "hired") return `${h.name ?? h.agentId ?? "someone"} (${h.role}${h.agentId ? `, ${h.agentId}` : ""}) has joined${on}${terms ? ` with a ${terms}` : ""}${h.firstTaskId ? "; their first task is assigned" : ""}`;
   if (h.status === "requested") return `a ${h.role} hire is waiting for the Board's approval${on}`;
   return `the Board declined the ${h.role} hire${on}`;
 }
@@ -106,8 +111,8 @@ export function readFirstTask(v: unknown): FirstTask | null {
 export const hireAgent: ToolDefinition = {
   name: "hire_agent",
   description:
-    "Hire a new agent under a manager in your subtree. For a specialist worker pass catalogId (find one with catalog_search); " +
-    "title, department and persona then come from the catalog and the manager defaults to the department's lead. " +
+    "Hire a new agent into your own team (or under one of your reports). For a specialist worker pass catalogId (find one with catalog_search); " +
+    "title, department and persona then come from the catalog, and the manager defaults to that department's lead (you, when you lead it). Pass managerId \"me\" (or your own id) to have them report to you, or a report's id or name. " +
     "Otherwise give title, departmentId, managerId and tier. monthlyBudgetUsd sets their monthly model budget; firstTask {title, description, acceptanceCriteria} " +
     "assigns their first piece of work (name the exact file path) — you are resumed with their result. Requires Board approval when hiring approval is on or headcount is at the cap; the first task is then assigned when the Board approves.",
   parameters: {
@@ -117,7 +122,7 @@ export const hireAgent: ToolDefinition = {
       roleId: { type: "string", description: "Optional role template id (see the org's roles)." },
       title: { type: "string", maxLength: 120 },
       departmentId: { type: "string" },
-      managerId: { type: "string" },
+      managerId: { type: "string", description: "Who they report to: \"me\" or your own id, or one of your reports (id or name) — never your own manager. Omitted: the department's lead." },
       tier: { type: "string", enum: ["executive", "manager", "worker"] },
       justification: {
         type: "string",
@@ -153,12 +158,12 @@ export const hireAgent: ToolDefinition = {
       if (departmentId && !explicitDepartment) return fail(`Unknown departmentId ${departmentId}.`);
       const placement = org.catalogPlacement(catalogId);
       const defaultLead = explicitDepartment ? org.departmentLead(explicitDepartment.slug)?.id : placement.managerId;
-      const managerId = str("managerId") ?? defaultLead ?? ctx.agent.id;
+      const managerId = str("managerId") ? resolveManager(ctx, str("managerId") as string) : (defaultLead ?? ctx.agent.id);
       if (managerId !== ctx.agent.id && !org.isInSubtree(ctx.agent.id, managerId)) {
         const lead = org.getAgent(managerId);
         return fail(
           `${spec.name} would report to ${lead ? `${lead.name} (${lead.title})` : managerId}, who is not in your subtree. ` +
-            "Pass managerId = yourself or one of your reports, or ask that department's executive to hire.",
+            `Pass managerId "me" (your id is ${ctx.agent.id}) or one of your reports, or ask that department's executive to hire.`,
         );
       }
       input = { catalogId: spec.id, managerId, ...(departmentId ? { departmentId } : {}), ...(str("title") ? { title: str("title") } : {}) };
@@ -167,8 +172,8 @@ export const hireAgent: ToolDefinition = {
     } else {
       const missing = ["title", "departmentId", "managerId", "tier"].filter((k) => !str(k));
       if (missing.length) return fail(`Missing ${missing.join(", ")} (or pass catalogId to hire a catalog specialist).`);
-      const managerId = str("managerId") as string;
-      if (managerId !== ctx.agent.id && !org.isInSubtree(ctx.agent.id, managerId)) return fail("The new hire's manager must be you or someone in your subtree.");
+      const managerId = resolveManager(ctx, str("managerId") as string);
+      if (managerId !== ctx.agent.id && !org.isInSubtree(ctx.agent.id, managerId)) return fail(`The new hire's manager must be you (your id is ${ctx.agent.id}) or someone in your subtree.`);
       if (!org.department(String(args.departmentId))) return fail(`Unknown departmentId ${String(args.departmentId)}.`);
       input = {
         ...(typeof args.roleId === "string" ? { roleId: args.roleId } : {}),
@@ -232,7 +237,11 @@ export const hireAgent: ToolDefinition = {
           ...(firstTask && ctx.taskId ? { firstTask, firstTaskParentId: ctx.taskId } : {}),
         },
       });
-      if (caller) ctx.services.tasks.patchState(caller.id, { hires: withHire(hiresOf(caller), { role, status: "requested", approvalId: approval.id }) });
+      if (caller) {
+        ctx.services.tasks.patchState(caller.id, {
+          hires: withHire(hiresOf(caller), { role, status: "requested", approvalId: approval.id, ...(input.monthlyBudgetUsd !== undefined ? { monthlyBudgetUsd: input.monthlyBudgetUsd } : {}), ...(firstTask ? { firstTaskTitle: firstTask.title } : {}) }),
+        });
+      }
       return ok(
         `Hiring request sent to the Board (approval ${approval.id}).${firstTask ? " Their first task is assigned when the Board approves." : ""} You will be resumed with the Board's decision.`,
         [{ kind: "approval_requested", approvalId: approval.id }],
@@ -245,7 +254,9 @@ export const hireAgent: ToolDefinition = {
     if (first) effects.push({ kind: "task_created", taskId: first.id, assigneeId: agent.id });
     if (caller) {
       const fresh = ctx.services.tasks.get(caller.id) ?? caller;
-      ctx.services.tasks.patchState(caller.id, { hires: withHire(hiresOf(fresh), { role, status: "hired", agentId: agent.id, name: agent.name, ...(first ? { firstTaskId: first.id } : {}) }) });
+      ctx.services.tasks.patchState(caller.id, {
+        hires: withHire(hiresOf(fresh), { role, status: "hired", agentId: agent.id, name: agent.name, monthlyBudgetUsd: agent.monthlyBudgetUsd, ...(first ? { firstTaskId: first.id, firstTaskTitle: firstTask!.title } : {}) }),
+      });
     }
     return ok(
       `Hired ${agent.name} as ${agent.title} (${agent.id})${input.monthlyBudgetUsd !== undefined ? ` with a $${input.monthlyBudgetUsd}/month budget` : ""}.` +
@@ -255,6 +266,14 @@ export const hireAgent: ToolDefinition = {
     );
   },
 };
+
+/** "me", "self", the hirer's own name, an id, or a report's name or title → an agent id (unresolved refs pass through). */
+function resolveManager(ctx: ToolRunContext, ref: string): string {
+  const r = ref.trim();
+  if (/^(me|myself|self|i|you|yourself)$/i.test(r)) return ctx.agent.id;
+  if (ctx.services.org.getAgent(r)) return r;
+  return resolveAgent(ctx.services.org, r, ctx.agent)?.id ?? r;
+}
 
 /** The new hire's first task: a subtask of the hiring task, so the hiring manager waits for it. */
 function assignFirstTask(ctx: ToolRunContext, agentId: string, t: FirstTask): { id: string; number: number } | null {

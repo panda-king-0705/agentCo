@@ -229,7 +229,10 @@ export class ApprovalService {
         const recordHire = (firstTaskId?: string) => {
           const asker = approval.taskId ? this.deps.tasks.get(approval.taskId) : null;
           if (!asker) return;
-          this.deps.tasks.patchState(asker.id, { hires: withHire(hiresOf(asker), { role: hireRole(p), status: "hired", approvalId: approval.id, agentId: agent.id, name: agent.name, ...(firstTaskId ? { firstTaskId } : {}) }) });
+          const firstTaskTitle = readFirstTask(p.firstTask)?.title;
+          this.deps.tasks.patchState(asker.id, {
+            hires: withHire(hiresOf(asker), { role: hireRole(p), status: "hired", approvalId: approval.id, agentId: agent.id, name: agent.name, monthlyBudgetUsd: agent.monthlyBudgetUsd, ...(firstTaskId ? { firstTaskId, ...(firstTaskTitle ? { firstTaskTitle } : {}) } : {}) }),
+          });
         };
         // The hiring manager's first task for them (hire_agent firstTask): assigned now, under the
         // hiring task, so the manager resumes when it is done.
