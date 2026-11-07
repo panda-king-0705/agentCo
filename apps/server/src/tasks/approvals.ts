@@ -15,7 +15,13 @@ import { redactDeep } from "../middleware/redact-deep.ts";
 import type { CompanyService } from "../org/company.ts";
 import type { OrgService } from "../org/service.ts";
 import type { TaskService } from "./service.ts";
-import { readFirstTask } from "../tools/builtins/hiring.ts";
+import { hiresOf, readFirstTask, withHire } from "../tools/builtins/hiring.ts";
+
+/** The role a hire_agent approval is for (catalogId, else the title). */
+function hireRole(p: Record<string, unknown>): string {
+  const input = (p.input ?? {}) as { catalogId?: unknown; title?: unknown };
+  return typeof input.catalogId === "string" ? input.catalogId : typeof input.title === "string" ? input.title : "agent";
+}
 
 export interface CreateApprovalInput {
   kind: ApprovalKind;
@@ -180,6 +186,11 @@ export class ApprovalService {
     if (approval.status !== "pending") throw conflict(`approval ${id} was already ${approval.status}`);
     let payload = approval.payload;
     if (input.decision === "approved") payload = { ...payload, ...this.applyEffect(approval) };
+    else if (approval.kind === "hire_agent" && approval.taskId) {
+      // A declined hire is recorded on the asking task, so it is not requested again.
+      const asker = this.deps.tasks.get(approval.taskId);
+      if (asker) this.deps.tasks.patchState(asker.id, { hires: withHire(hiresOf(asker), { role: hireRole(approval.payload), status: "declined", approvalId: approval.id }) });
+    }
     this.deps.repos.approvals.update(id, { status: input.decision, decidedBy: "human", note: input.note?.trim() ? this.clean(input.note.trim()) : null, decidedAt: this.deps.now().toISOString(), payload });
     const decided = this.require(id);
     this.deps.bus.emit("approval.decided", { agentId: decided.requestedBy, taskId: decided.taskId, traceId: decided.traceId, summary: summaries.approvalDecided(decided), data: decided });
@@ -192,6 +203,11 @@ export class ApprovalService {
     switch (approval.kind) {
       case "hire_agent": {
         const agent = this.deps.org.createAgent(p.input as CreateAgentInput, approval.requestedBy, { ignoreHeadcount: true });
+        const recordHire = (firstTaskId?: string) => {
+          const asker = approval.taskId ? this.deps.tasks.get(approval.taskId) : null;
+          if (!asker) return;
+          this.deps.tasks.patchState(asker.id, { hires: withHire(hiresOf(asker), { role: hireRole(p), status: "hired", approvalId: approval.id, agentId: agent.id, name: agent.name, ...(firstTaskId ? { firstTaskId } : {}) }) });
+        };
         // The hiring manager's first task for them (hire_agent firstTask): assigned now, under the
         // hiring task, so the manager resumes when it is done.
         const first = readFirstTask(p.firstTask);
@@ -207,8 +223,10 @@ export class ApprovalService {
             ...(first.acceptanceCriteria ? { acceptanceCriteria: first.acceptanceCriteria } : {}),
             state: { firstTask: true },
           });
+          recordHire(sub.id);
           return { hiredAgentId: agent.id, firstTaskId: sub.id };
         }
+        recordHire();
         return { hiredAgentId: agent.id };
       }
       case "terminate_agent": {

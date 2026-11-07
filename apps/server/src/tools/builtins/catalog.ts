@@ -39,6 +39,11 @@ export const catalogSearch: ToolDefinition = {
       const staffed = hired.get(a.id) ? ` [${hired.get(a.id)} on staff]` : "";
       return `- ${a.id} — ${a.emoji ? `${a.emoji} ` : ""}${a.name} → ${dept}${staffed}: ${desc}`;
     });
-    return ok(`${hits.length} specialist(s):\n${lines.join("\n")}\nHire one with hire_agent {catalogId, justification}.`, [], { ids: hits.map((a) => a.id) });
+    // Specialists have no price (2026-11-07: a recruiter searched 11 times for one): the hirer sets the budget.
+    return ok(
+      `${hits.length} specialist(s):\n${lines.join("\n")}\nNo specialist has a price: the new hire's monthly model budget is set when hiring (hire_agent monthlyBudgetUsd). The head of the receiving team hires with hire_agent {catalogId, justification, monthlyBudgetUsd, firstTask}.`,
+      [],
+      { ids: hits.map((a) => a.id) },
+    );
   },
 };

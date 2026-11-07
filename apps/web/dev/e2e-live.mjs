@@ -1,14 +1,11 @@
 // Smoke run against the REAL server (E2E_BASE_URL required): every route, a Boardroom message, then
 // screenshots of Overview, the new trace and the CEO's Brain tab while it works. Fails on console errors.
-import { createRequire } from "node:module";
-import { mkdir } from "node:fs/promises";
-const require = createRequire(import.meta.url);
-const { chromium } = require("/home/claude/.npm-global/lib/node_modules/playwright");
+import { launchOptions, loadPlaywright, shotsDir } from "./browser.mjs";
+const { chromium } = loadPlaywright();
 const base = process.env.E2E_BASE_URL;
 if (!base) throw new Error("set E2E_BASE_URL");
-const SHOTS = process.env.E2E_SHOTS ?? "/tmp/claude-0/-home-claude/06e36f00-0262-5301-81ed-9eb96c3615c1/scratchpad/web-shots";
-await mkdir(SHOTS, { recursive: true });
-const browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome", args: ["--no-sandbox"] });
+const SHOTS = await shotsDir();
+const browser = await chromium.launch(launchOptions());
 const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "light" })).newPage();
 page.setDefaultTimeout(15000);
 const errors = [];

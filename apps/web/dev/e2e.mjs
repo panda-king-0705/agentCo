@@ -3,15 +3,12 @@
 // Boots the fixture server on an ephemeral port, or targets E2E_BASE_URL (e.g. the real server).
 // Exercises every route plus: create agent -> DM -> pause -> destroy, answer an approval, open a trace and a
 // span, open an executive's Brain tab. Fails on any console error. Screenshots go to E2E_SHOTS (default below).
-import { createRequire } from "node:module";
-import { mkdir } from "node:fs/promises";
+// Browser, Playwright and screenshot folder: ./browser.mjs (portable; E2E_BROWSER=chromium in CI).
 import assert from "node:assert/strict";
+import { launchOptions, loadPlaywright, shotsDir } from "./browser.mjs";
 
-const require = createRequire(import.meta.url);
-const { chromium } = require("/home/claude/.npm-global/lib/node_modules/playwright");
-
-const SHOTS = process.env.E2E_SHOTS ?? "/tmp/claude-0/-home-claude/06e36f00-0262-5301-81ed-9eb96c3615c1/scratchpad/web-shots";
-await mkdir(SHOTS, { recursive: true });
+const { chromium } = loadPlaywright();
+const SHOTS = await shotsDir();
 
 let server = null;
 let base = process.env.E2E_BASE_URL;
@@ -22,7 +19,7 @@ if (!base) {
 }
 console.log(`[e2e] target ${base}`);
 
-const browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome", args: ["--no-sandbox"] });
+const browser = await chromium.launch(launchOptions());
 const errors = [];
 let phase = "";
 let finished = false;

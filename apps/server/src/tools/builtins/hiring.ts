@@ -25,6 +25,38 @@ export interface FirstTask {
   acceptanceCriteria: string | null;
 }
 
+/**
+ * Hires a task has made, on the task's state (`hires`): one per role. Test 5 (2026-11-07): resumed
+ * after the Board approved a hire, the hiring manager hired the same SEO Specialist again — nothing
+ * said the hire had happened — and the Board approved a duplicate.
+ */
+export interface HireRecord {
+  /** catalogId, or the title for a non-catalog hire. */
+  role: string;
+  status: "requested" | "hired" | "declined";
+  approvalId?: string;
+  agentId?: string;
+  name?: string;
+  firstTaskId?: string;
+}
+
+export function hiresOf(task: { state: Record<string, unknown> } | null | undefined): HireRecord[] {
+  const v = task?.state.hires;
+  return Array.isArray(v) ? (v.filter((h) => h && typeof h === "object" && typeof (h as HireRecord).role === "string") as HireRecord[]) : [];
+}
+
+/** Adds or updates the record for `role` (approvalId or role match). */
+export function withHire(list: HireRecord[], rec: HireRecord): HireRecord[] {
+  const i = list.findIndex((h) => (rec.approvalId && h.approvalId === rec.approvalId) || h.role === rec.role);
+  return i >= 0 ? list.map((h, j) => (j === i ? { ...h, ...rec } : h)) : [...list, rec];
+}
+
+export function describeHire(h: HireRecord): string {
+  if (h.status === "hired") return `${h.name ?? h.agentId ?? "someone"} (${h.role}${h.agentId ? `, ${h.agentId}` : ""}) has joined${h.firstTaskId ? "; their first task is assigned" : ""}`;
+  if (h.status === "requested") return `a ${h.role} hire is waiting for the Board's approval`;
+  return `the Board declined the ${h.role} hire`;
+}
+
 export function readFirstTask(v: unknown): FirstTask | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
@@ -111,6 +143,12 @@ export const hireAgent: ToolDefinition = {
     if (args.firstTask !== undefined && !firstTask) return fail("firstTask needs a title and a description.");
     if (firstTask && !ctx.taskId) return fail("firstTask can only be assigned from a task (it becomes a subtask of it).");
 
+    // One hire per role per task: never hire (or ask the Board for) the same role twice.
+    const caller = ctx.taskId ? ctx.services.tasks.get(ctx.taskId) : null;
+    const role = input.catalogId ?? input.title ?? "agent";
+    const already = hiresOf(caller).find((h) => h.role === role && h.status !== "declined");
+    if (already) return fail(`Already done for this task: ${describeHire(already)}. Do not hire again — work with them (they report to their manager). If you truly need a second ${role}, explain why to your manager.`);
+
     const settings = company.settings();
     const atCap = org.listActiveAgents().length >= settings.maxHeadcount;
     if (settings.hiringRequiresApproval || atCap) {
@@ -127,6 +165,7 @@ export const hireAgent: ToolDefinition = {
           ...(firstTask && ctx.taskId ? { firstTask, firstTaskParentId: ctx.taskId } : {}),
         },
       });
+      if (caller) ctx.services.tasks.patchState(caller.id, { hires: withHire(hiresOf(caller), { role, status: "requested", approvalId: approval.id }) });
       return ok(
         `Hiring request sent to the Board (approval ${approval.id}).${firstTask ? " Their first task is assigned when the Board approves." : ""} You will be resumed with the Board's decision.`,
         [{ kind: "approval_requested", approvalId: approval.id }],
@@ -137,6 +176,10 @@ export const hireAgent: ToolDefinition = {
     const effects: ToolEffect[] = [{ kind: "agent_hired", agentId: agent.id }];
     const first = firstTask ? assignFirstTask(ctx, agent.id, firstTask) : null;
     if (first) effects.push({ kind: "task_created", taskId: first.id, assigneeId: agent.id });
+    if (caller) {
+      const fresh = ctx.services.tasks.get(caller.id) ?? caller;
+      ctx.services.tasks.patchState(caller.id, { hires: withHire(hiresOf(fresh), { role, status: "hired", agentId: agent.id, name: agent.name, ...(first ? { firstTaskId: first.id } : {}) }) });
+    }
     return ok(
       `Hired ${agent.name} as ${agent.title} (${agent.id})${input.monthlyBudgetUsd !== undefined ? ` with a $${input.monthlyBudgetUsd}/month budget` : ""}.` +
         (first ? ` First task assigned as T-${first.number}; you will be resumed with their result.` : ""),
