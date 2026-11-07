@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { isAccountError } from "../../src/models/router.ts";
 import assert from "node:assert/strict";
 import { loadModelConfig, modelsInfo } from "../../src/models/config.ts";
 import { costUsd, lookupPrice, normalizeModelKey } from "../../src/models/pricing.ts";
@@ -248,4 +249,45 @@ test("mock provider: usage = ceil(chars/4), deterministic stage JSON", async () 
   assert.equal(r1.usage.inputTokens, Math.ceil(chars / 4));
   assert.ok(r1.costUsd > 0, "mock calls are priced");
   assert.equal(r1.profile.provider, "mock");
+});
+
+// Live (2026-11-07, test 5): the Anthropic account ran out of credit. Every call failed on Anthropic
+// first and then went to the fallback — a wasted round trip each time.
+test("router: an account error (no credit) skips that provider for a while and goes straight to the fallback", async () => {
+  const provider = scripted([
+    new Error('openai gpt-6.1-sol: HTTP 400 Bad Request — {"error":{"message":"Your credit balance is too low to access the API."}}'),
+    { content: "fallback 1" },
+    { content: "fallback 2" },
+  ]);
+  const platform = new FakePlatform({ env: liveEnv, providers: { "openai-compatible": provider } });
+  const warn = console.warn;
+  const warned: string[] = [];
+  console.warn = (m: string) => warned.push(m);
+  try {
+    assert.equal((await platform.models.chat(req(), ctx(platform))).content, "fallback 1");
+    assert.equal((await platform.models.chat(req(), ctx(platform))).content, "fallback 2");
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(provider.calls, 3, "the second call never tried the provider without credit");
+  const llm = platform.tracer.byKind("llm");
+  assert.equal(llm.length, 3);
+  assert.equal(llm[2]!.attributes["agentco.primary_skipped"], "credit balance too low (top up the provider account)");
+  assert.equal(llm[2]!.attributes["agentco.fallback_from"], "openai:gpt-6.1-sol");
+  assert.equal(warned.length, 1, "one warning per outage");
+  assert.match(warned[0]!, /openai: credit balance too low .* using fallback models for 10 minutes/);
+});
+
+test("router: an ordinary provider error does not take the provider out of rotation", async () => {
+  const provider = scripted([new Error("HTTP 503 upstream"), { content: "fallback" }, { content: "primary again" }]);
+  const platform = new FakePlatform({ env: liveEnv, providers: { "openai-compatible": provider } });
+  await platform.models.chat(req(), ctx(platform));
+  const second = await platform.models.chat(req(), ctx(platform));
+  assert.equal(second.profile.id, "openai:gpt-6.1-sol");
+  assert.equal(provider.calls, 3);
+});
+
+test("isAccountError: credit, quota and rejected keys — not rate limits or outages", () => {
+  for (const m of ["Your credit balance is too low", "insufficient_quota", "HTTP 401 Unauthorized", "invalid x-api-key"]) assert.ok(isAccountError(new Error(m)), m);
+  for (const m of ["HTTP 429 Too Many Requests", "HTTP 503 upstream", "HTTP 400 Bad Request — temperature"]) assert.ok(!isAccountError(new Error(m)), m);
 });
