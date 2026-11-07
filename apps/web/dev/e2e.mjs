@@ -95,7 +95,8 @@ async function run(scheme, interactive) {
       // The modal opens on "From catalog"; the role-template form is the second tab.
       await dlg.getByRole("tab", { name: "Role template / custom" }).click();
       await dlg.locator("select").first().waitFor();
-      await page.waitForFunction(() => document.querySelectorAll('[role="dialog"] select option').length > 5);
+      // The role list loads on its own request: wait for ITS options, not just any select's (flaked in CI).
+      await page.waitForFunction(() => [...(document.querySelector('[role="dialog"] select')?.options ?? [])].some((o) => o.value));
       const value = await dlg.locator("select").first().evaluate((sel) => {
         const opts = [...sel.options].filter((o) => o.value);
         return (opts.find((o) => /worker|engineer|writer/i.test(o.textContent)) ?? opts[0]).value;
