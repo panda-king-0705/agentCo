@@ -25,7 +25,7 @@ import { canEscalate, escalationSettled, hasEscalationTools, readEscalation } fr
 import { writeReport } from "./global-memory.ts";
 import { CANDIDATE_NAMES, Q2_OOD, Q3_FALLBACK, Q4_CONTROL, Q8_HUMAN_NATURE, type CandidateName } from "./interpretation.ts";
 import { assessConfidence, fallbackTarget, proceedOnAssumptions, shouldEarlyStop, type ConfidenceAssessment, type FallbackTarget } from "./metacognition/confidence.ts";
-import { cognitiveControl, type ControlOutput, type Subprocess } from "./metacognition/cognitive-control.ts";
+import { cognitiveControl, insideFix, type ControlOutput, type Subprocess } from "./metacognition/cognitive-control.ts";
 import { oodMonitoring, reverseThinking, updateCalibration, type OodReport } from "./metacognition/monitoring.ts";
 import {
   dataDrivenAnalysis,
@@ -77,6 +77,18 @@ export interface PersistedPlan {
 /** After one round of fixes, what is still open goes to the Board with the work instead of another round (2026-11-07, test 6). */
 const REWORK_ROUNDS = 1;
 
+/**
+ * Fix rounds left to this task. A fix handed down is itself the round: whoever gets "Fix: …" (and
+ * anyone under them) reports what is still short instead of starting a fix round of their own
+ * (2026-11-08, trc_6ee6…: the CEO's fix went to the GC, whose edit → re-review → REJECT → redo
+ * cycle added $0.47 and four minutes).
+ */
+function reworkRounds(run: BrainRun): number {
+  const task = run.task;
+  if (!task) return REWORK_ROUNDS;
+  return insideFix(task, (id) => run.platform.tasks.get(id)) ? 0 : REWORK_ROUNDS;
+}
+
 function readPlan(task: Task): PersistedPlan | null {
   const p = obj(task.state.plan);
   if (!p.problem) return null;
@@ -107,15 +119,53 @@ function readPlan(task: Task): PersistedPlan | null {
 }
 
 /** The reply that opens an objective; a step the company cannot do is said up front. */
-function openedReply(task: Task, boardSteps: string[]): string {
-  const base = `Opened T-${task.number}: ${task.title}. I'll work it through and report back here when it's done.`;
-  if (!boardSteps.length) return base;
-  const one = boardSteps.length === 1;
-  return `${base} One thing up front: this company can't do ${one ? "this step" : "these steps"}, so ${one ? "it is" : "they are"} left to you: ${boardSteps.join("; ")}. I'll prepare everything up to ${one ? "it" : "them"}.`;
+export function openedReply(task: Pick<Task, "number" | "title">, boardSteps: string[]): string {
+  const base = `Opened T-${task.number}: ${task.title.replace(/[.\s]+$/, "")}. I'll work it through and report back here when it's done.`;
+  const steps = uniqueSteps(boardSteps).map((s) => s.replace(/[.;\s]+$/, ""));
+  if (!steps.length) return base;
+  const one = steps.length === 1;
+  return `${base} One thing up front: this company can't do ${one ? "this step" : "these steps"}, so ${one ? "it is" : "they are"} left to you: ${steps.join("; ")}. I'll prepare everything up to ${one ? "it" : "them"}.`;
+}
+
+const STEP_STOPWORDS = new Set(["the", "a", "an", "to", "of", "and", "or", "for", "from", "with", "in", "on", "our", "this", "that", "it", "is", "be", "by", "board", "you", "your"]);
+const stepWords = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 1 && !STEP_STOPWORDS.has(w)).map((w) => w.replace(/(?:es|s)$/, "")));
+
+/** Two lines say the same step (most of the shorter one's words are in the other). */
+export function sameStep(a: string, b: string): boolean {
+  const x = stepWords(a);
+  const y = stepWords(b);
+  const small = Math.min(x.size, y.size);
+  if (small === 0) return false;
+  let shared = 0;
+  for (const w of x) if (y.has(w)) shared++;
+  return shared / small >= 0.6;
+}
+
+/**
+ * Board steps once each (2026-11-08, trc_6ee6…: the report listed "Send the update to the investors."
+ * and "Send the monthly investor update to the investors from the email account." — and again as an
+ * open point). Of two that say the same, the fuller one stays, where the first was.
+ */
+export function uniqueSteps(steps: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const raw of steps) {
+    const s = raw.trim();
+    if (!s) continue;
+    const i = out.findIndex((o) => sameStep(o, s));
+    if (i < 0) out.push(s);
+    else if (s.length > out[i]!.length) out[i] = s;
+  }
+  return out;
+}
+
+/** Open points that are not just a Board step again (that one is listed under "Left for you"). */
+function pointsBesides(points: readonly string[], steps: readonly string[]): string[] {
+  return points.filter((p) => !steps.some((s) => sameStep(s, p)));
 }
 
 /** A finished result lists what is left for the Board (steps the company cannot do). */
-function withBoardSteps(output: string, steps: string[], forBoard: boolean): string {
+export function withBoardSteps(output: string, boardSteps: string[], forBoard: boolean): string {
+  const steps = uniqueSteps(boardSteps);
   if (!steps.length) return output;
   return `${output}\n\n## ${forBoard ? "Left for you" : "Left for the Board"}\nThis company can't do ${steps.length === 1 ? "this" : "these"}, so ${steps.length === 1 ? "it is" : "they are"} ${forBoard ? "yours" : "the Board's"} to do:\n${steps.map((s) => `- ${s}`).join("\n")}`;
 }
@@ -629,10 +679,10 @@ export class BrainEngine implements CognitiveEngine {
         }),
       );
       // One round of fixes already made: what is still open goes up with the work, not into another round.
-      const reworkCapped = fb.decision === "revise" && revision >= REWORK_ROUNDS && solution.kind === "solution" && !!solution.text.trim();
+      const reworkCapped = fb.decision === "revise" && revision >= reworkRounds(run) && solution.kind === "solution" && !!solution.text.trim();
       if (reworkCapped) run.ctx.span.setAttributes({ "agentco.rework_cap": revision });
       if (fb.decision === "accept" || reworkCapped) {
-        const points = reworkCapped ? [...fb.openPoints, ...fb.issues] : fb.openPoints;
+        const points = pointsBesides(reworkCapped ? [...fb.openPoints, ...fb.issues] : fb.openPoints, persisted.boardSteps);
         const body = points.length ? `${solution.text}\n\n## Open points for the Board\n${points.map((p) => `- ${p}`).join("\n")}` : solution.text;
         const output = withBoardSteps(body, persisted.boardSteps, !task.parentTaskId);
         return this.report(run, { outcome: "completed", output, score: fb.score, summary: fb.summary, predicted: u.confidence.calibrated, events: [], estimateUsd: persisted.estimateUsd, plan: { ...persisted, feedback: [] } });
@@ -777,7 +827,7 @@ export class BrainEngine implements CognitiveEngine {
       rejected,
       feedback: feedbackIssues,
       costSoFarUsd: prior?.costSoFarUsd ?? 0,
-      boardSteps: [...(u.problem.boardSteps ?? []), ...(prior?.boardSteps ?? []), ...strArr(run.task!.state.boardSteps, 4, 200)].filter((s, i, all) => all.indexOf(s) === i).slice(0, 4),
+      boardSteps: uniqueSteps([...(u.problem.boardSteps ?? []), ...(prior?.boardSteps ?? []), ...strArr(run.task!.state.boardSteps, 4, 200)]).slice(0, 4),
     };
   }
 
@@ -810,12 +860,12 @@ export class BrainEngine implements CognitiveEngine {
     );
     // One round of fixes already made: the same work is not re-reviewed again — what is still open goes
     // to the Board with it (2026-11-07, test 6: four rounds of legal review, $2.06 of $3.41).
-    const reworkCapped = fb.decision === "revise" && plan.revision >= REWORK_ROUNDS && children.some((c) => c.status === "done");
+    const reworkCapped = fb.decision === "revise" && plan.revision >= reworkRounds(run) && children.some((c) => c.status === "done");
     if (reworkCapped) run.ctx.span.setAttributes({ "agentco.rework_cap": plan.revision });
     if (fb.decision === "accept" || reworkCapped) {
       await this.recognizeWorkers(run, children);
       const output = integrateResults(task.title, fb.summary, children, run.agent.name, {
-        openPoints: reworkCapped ? [...fb.openPoints, ...fb.issues] : fb.openPoints,
+        openPoints: pointsBesides(reworkCapped ? [...fb.openPoints, ...fb.issues] : fb.openPoints, plan.boardSteps),
         files: saved,
         names: (id) => run.platform.org.getAgent(id ?? "")?.name ?? "someone",
       });

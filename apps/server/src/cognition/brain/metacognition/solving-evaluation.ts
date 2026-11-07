@@ -59,7 +59,7 @@ export function guidanceLines(run: BrainRun): string[] {
   return lines;
 }
 
-function normTitle(t: string): string {
+export function normTitle(t: string): string {
   return t.trim().toLowerCase();
 }
 
@@ -178,7 +178,7 @@ export async function solving(
         hiring
           ? "You are making a hire: call hire_agent with the recommended catalogId, monthlyBudgetUsd and firstTask (their first piece of work, with the exact file path). Give that work to the new hire as their first task — do not do it yourself first."
           : "",
-        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file. Credit work to whoever actually did it: never write a colleague's name on work they did not do (\"recommended by\", \"written by\", in files, messages or requests to the Board) — if a step meant for someone else ended up with you, say you did it. " + limitsLine(capabilities(run).company, capabilities(run).mine),
+        "Use your tools if useful, then call complete_task with the full result. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes); if a file you need is missing, workspace_read_file and workspace_list show what has been saved on this objective. The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Whoever reviews your work sees the files you saved exactly as they are on disk: in your result, say what you saved and where — no need to read a file back or paste it. Save exactly at the path your brief names, even if a file is already there (it is replaced and the previous version kept). Never start a second copy of the same document under another name: to change a colleague's file, update that file. Credit work to whoever actually did it: never write a colleague's name on work they did not do (\"recommended by\", \"written by\", in files, messages or requests to the Board) — if a step meant for someone else ended up with you, say you did it. " + limitsLine(capabilities(run).company, capabilities(run).mine, capabilities(run).services),
         `[[context:${JSON.stringify({
           mode: "task",
           agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },

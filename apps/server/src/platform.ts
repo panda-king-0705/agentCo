@@ -9,7 +9,7 @@ import { createPlaybookRead, listPlaybooks } from "./tools/builtins/playbooks.ts
 import { loadMcpConfig, mcpConfigPath, type McpConfigResult } from "./mcp/config.ts";
 import type { McpClientOptions } from "./mcp/client.ts";
 import { McpTools } from "./mcp/tools.ts";
-import type { Capability } from "./org/capabilities.ts";
+import type { Capability, ConnectedService } from "./org/capabilities.ts";
 import { OutageGate, watchOutages } from "./models/outage.ts";
 import { ChatCleanup } from "./runs/chat-cleanup.ts";
 import type { Agent, CognitionKind, CompanySnapshot, ModelsInfo } from "../../../packages/shared/src/index.ts";
@@ -141,6 +141,14 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
       for (const a of org.listActiveAgents()) for (const c of tools.capabilitiesOf(a)) all.add(c);
       return all;
     },
+    // The connected outside services by name, with who can use them (org/capabilities.ts, servicesLine).
+    services: (): ConnectedService[] => {
+      const agents = org.listActiveAgents();
+      return mcp
+        .status()
+        .filter((s) => s.connected && s.tools.length > 0)
+        .map((s) => ({ name: s.name, grants: s.grants, holders: agents.filter((a) => s.tools.some((t) => tools.canUse(t, a))).map((a) => a.name) }));
+    },
   };
   const handbookSource: HandbookSource = {
     capabilities,
@@ -158,7 +166,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
         .recent({ agentId: null, scopes: ["global"], kinds: ["semantic", "procedural"] }, limit * 4)
         .sort((a, b) => b.importance - a.importance || b.accessCount - a.accessCount)
         .slice(0, limit),
-    blackboardKeys: () => repos.blackboard.list().map((b) => b.key),
+    blackboardKeys: () => memory.blackboardCurrent().map((b) => b.key),
     agentMonthlyLeftUsd: (agentId) => org.agentMonthlyLeftUsd(agentId),
     now,
   };

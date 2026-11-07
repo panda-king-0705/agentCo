@@ -274,6 +274,9 @@ async function run(scheme, interactive) {
     await page.locator(".wf-row", { hasText: "llm" }).first().click();
     await page.waitForSelector(".span-panel");
     assert.ok(await page.locator(".span-panel").getByText("Attributes").count(), "attributes shown");
+    // Delegation tree (2026-11-08): connectors are elbows under each delegator, one node per agent.
+    await page.waitForSelector("svg.deleg path[marker-end]");
+    assert.ok((await page.locator("svg.deleg a circle").count()) >= 2, "delegation tree has agents");
     await S("trace-detail", { full: true });
   });
 

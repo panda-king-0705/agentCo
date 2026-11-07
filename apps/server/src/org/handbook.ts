@@ -1,7 +1,7 @@
 // The company handbook: how AgentCo works, generated from live data (no model call, never stale).
 // New hires get it as a welcome message from their manager on day one; every agent can re-read it
 // with the company_handbook tool; the Board sees the same text in the console (GET /api/handbook).
-import { limitsLine, type Capability } from "./capabilities.ts";
+import { limitsLine, type Capability, type ConnectedService } from "./capabilities.ts";
 import type { Agent, CompanySettings, MemoryItem, Task } from "../../../../packages/shared/src/index.ts";
 import type { OrgView } from "../contracts.ts";
 import { todayLine } from "../cognition/prompt.ts";
@@ -19,7 +19,7 @@ export interface HandbookSource {
   /** The company's playbooks (playbook_read). */
   playbooks?(): { name: string; description: string }[];
   /** What the company and an agent can do outside it, from the enabled tools. */
-  capabilities?: { company(): ReadonlySet<Capability>; of(agent: Agent): ReadonlySet<Capability> };
+  capabilities?: { company(): ReadonlySet<Capability>; of(agent: Agent): ReadonlySet<Capability>; services?(): ConnectedService[] };
   now(): Date;
 }
 
@@ -77,9 +77,10 @@ export function buildHandbook(src: HandbookSource, agent: Agent | null): string 
     "- Act on reasonable assumptions and state them. Do the work with your tools rather than asking for permission you already have.",
     "- Facts go in the knowledge base (memory_write: global for company facts, agent for your own notes); shared working notes on the blackboard. Files you save go on the company drive, where colleagues can read them — use the exact path your brief names, even if a file is already there (it is replaced; the previous version is kept). Never start a second copy of a document under another name. private/… is for scratch notes only.",
     "- Reviews: whoever assigned your task sees the files you saved as they are on disk, plus your result. Say what you saved and where; there is no need to read files back or paste them. Reviews judge substance (correct, complete, consistent, honest), not formatting or paperwork (signatures, dated confirmations, who saved a file, small differences in counts), and decisions only the Board can make are listed as open points, not held against your work. After one round of fixes, what is still open goes to the Board with the work.",
-    `- ${limitsLine(src.capabilities?.company(), agent ? src.capabilities?.of(agent) : undefined)}`,
+    `- ${limitsLine(src.capabilities?.company(), agent ? src.capabilities?.of(agent) : undefined, src.capabilities?.services?.())}`,
     ...((src.playbooks?.() ?? []).length ? [`- Playbooks (read one with playbook_read before doing that kind of work): ${src.playbooks!().slice(0, 15).map((p) => `${p.name}${p.description ? ` — ${p.description.slice(0, 100)}` : ""}`).join("; ")}.`] : []),
     "- Hiring: the head of the team a new hire joins makes the hire (hire_agent, with a monthly budget and their first task); recruiters in People search the specialist catalogue and recommend the candidate first. Use the budget and first task the request gives, exactly. Before hiring, check the directory: if someone on your team already holds the role, give them the work.",
+    "- Figures: every number in a report, a plan or anything for outsiders (investors, customers) comes from a file on the drive, a tool result or the Board, and says which. If there is none, write that the figure is not available yet — never estimate one, and never carry over a number from a brief or an earlier draft that names no source. Your OKR gauge is not a company figure.",
     "- Credit: say who did what, as it happened. Never put a colleague's name on work they did not do (\"recommended by\", \"written by\" — in files, messages or requests to the Board); if a step meant for someone else ended up with you, say you did it.",
     "- Work that combines other people's parts (assembling, reconciling, reviewing) starts after those parts are done. If you are waiting on a colleague's part that is still in progress, escalating puts you on hold until it is finished — you are resumed with their result.",
     `- Money: the company spends at most $${s.dailyBudgetUsd}/day and $${s.monthlyBudgetUsd}/month on models. Prefer the cheapest approach that meets the success criteria.`,

@@ -98,6 +98,12 @@ export class ToolExecutorImpl implements ToolExecutor {
     return out;
   }
 
+  /** Can this agent use this tool (registered, enabled and permitted)? */
+  canUse(name: string, agent: Agent): boolean {
+    const tool = this.tools.get(name);
+    return !!tool && this.permitted(tool, agent);
+  }
+
   specsFor(agent: Agent): ToolSpec[] {
     const specs: ToolSpec[] = [];
     for (const tool of this.tools.values()) {

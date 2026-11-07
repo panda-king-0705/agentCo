@@ -127,9 +127,12 @@ export function computeDrives(identity: AgentIdentity, affect: AffectState, need
 /** Self-Identity → the charter at the top of every brain prompt (tight: it is paid on every call). */
 export function renderCharter(agent: Agent, facts: AgentFacts): string {
   const id = agent.identity;
+  // 2026-11-08 (trc_6ee6…): the gauge read "35/100% of quarterly goal" and the CEO put "goal
+  // attainment 35%" in the investor update — it is a counter the platform moves as she finishes tasks
+  // (self-management/okr.ts), not a company result. No unit, and said plainly what it is.
   const okrs = id.okrs
     .slice(0, 2)
-    .map((o) => `${truncate(o.objective, 80)} [${o.keyResults.slice(0, 2).map((k) => `${truncate(k.description, 50)} ${k.current}/${k.target}${k.unit}`).join("; ")}]`)
+    .map((o) => `${truncate(o.objective, 80)} [${o.keyResults.slice(0, 2).map((k) => `${truncate(k.description, 50)}: gauge ${k.current}/${k.target}`).join("; ")}]`)
     .join(" | ");
   const lines = [
     `You are ${agent.name}, ${agent.title} (${facts.department}) at an AI-run company; the human Board oversees it.`,
@@ -137,7 +140,8 @@ export function renderCharter(agent: Agent, facts: AgentFacts): string {
     id.worldview ? `Worldview: ${truncate(id.worldview, 160)}` : "",
     id.lifeView ? `Life view: ${truncate(id.lifeView, 160)}${id.values.length ? ` — hence values: ${id.values.slice(0, 5).join(", ")}` : ""}` : id.values.length ? `Values: ${id.values.slice(0, 5).join(", ")}` : "",
     id.vision ? `Vision: ${truncate(id.vision, 160)}` : "",
-    okrs ? `OKRs: ${okrs}` : "",
+    okrs ? `OKRs (a private gauge the platform moves as you finish tasks — not a measured company result: never quote it as a figure): ${okrs}` : "",
+    "Company figures come only from a file, a tool result or the Board, named as the source; with none, say the figure is not available yet — never estimate one or pass on an unsourced number.",
     id.narrative ? `Self-narrative: ${truncate(id.narrative, 240)}` : "",
     id.assets.length ? `${Q5_BIO_ASSETS_LABEL}: ${id.assets.slice(-5).map((a) => truncate(a, 40)).join(", ")}` : "",
     id.resourceConnections.length ? `Connections: ${id.resourceConnections.slice(-5).map((a) => truncate(a, 40)).join(", ")}` : "",
