@@ -94,6 +94,11 @@ test("a missed read finds the file a teammate saved on the same objective — ev
     assert.match(seen.miss!.content, /No file "launch-plan\/mvp\.md" yet\. .*Saved on this objective so far: shared\/launch-plan\/exec\/one-page\.md \(.+\); launch-plan\/sections\/gtm\.md \(.+'s private notes\)/);
     assert.match(seen.list!.content, /^launch-plan\/\n\nSaved on this objective so far: /);
     assert.match(seen.otherObjective!.content, /^No file .*Nothing has been saved on this objective yet\./, "another objective's private files stay private");
+    // What reviewers get: every save with the task it was made under, and the file as it is on disk.
+    const writes = platform.services.drive!.written(root.traceId);
+    assert.ok(writes.length === 2 && writes.every((w) => w.taskId), "each save knows its task");
+    assert.equal(platform.services.drive!.read(ids.cmo, "shared/launch-plan/exec/one-page.md")?.content, "# Draft page");
+    assert.equal(platform.services.drive!.read(ids.cos, "private/launch-plan/sections/gtm.md"), null, "private is per author");
   } finally {
     await t.close();
   }

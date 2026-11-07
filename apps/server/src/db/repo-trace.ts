@@ -7,6 +7,8 @@ import { all, insertRow, one, updateRow } from "./sql.ts";
 
 export interface FileWrite {
   agentId: string;
+  /** The task the file was saved under (null for chat runs). */
+  taskId: string | null;
   area: "shared" | "private";
   /** Path inside the area. */
   rel: string;
@@ -45,7 +47,7 @@ export class SpanRepo {
   filesWritten(traceId: string): FileWrite[] {
     const rows = all(
       this.db,
-      "SELECT agent_id, output, attributes, started_at FROM spans WHERE trace_id = ? AND kind = 'tool' AND name = 'tool.workspace_write_file' AND status = 'ok' ORDER BY started_at, rowid",
+      "SELECT agent_id, task_id, output, attributes, started_at FROM spans WHERE trace_id = ? AND kind = 'tool' AND name = 'tool.workspace_write_file' AND status = 'ok' ORDER BY started_at, rowid",
       traceId,
     );
     const out: FileWrite[] = [];
@@ -60,7 +62,7 @@ export class SpanRepo {
       if (!path || !r.agent_id) continue;
       const area = path.startsWith("shared/") ? "shared" : "private";
       const rel = path.replace(/^(shared|private)\//, "");
-      out.push({ agentId: String(r.agent_id), area, rel, display: `${area}/${rel}`, at: String(r.started_at) });
+      out.push({ agentId: String(r.agent_id), taskId: r.task_id ? String(r.task_id) : null, area, rel, display: `${area}/${rel}`, at: String(r.started_at) });
     }
     return out;
   }

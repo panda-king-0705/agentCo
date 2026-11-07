@@ -364,7 +364,19 @@ export interface PlatformServices {
   catalog?: CatalogView;
   /** The company handbook (org/handbook.ts), personalised for an agent; optional for test fakes. */
   handbook?: (agent: Agent | null) => string;
+  /**
+   * Files saved on the drive, as reviewers see them: Feedback judges the file itself instead of
+   * asking for a read-back (2026-11-07). Optional for test fakes.
+   */
+  drive?: SavedFiles;
   now(): Date;
+}
+
+export interface SavedFiles {
+  /** workspace_write_file calls on a trace, oldest first (display: "shared/…" or "private/…"). */
+  written(traceId: string): { agentId: string; taskId: string | null; display: string; at: string }[];
+  /** The file's current content, or null when it is gone. `agentId` owns `private/…` paths. */
+  read(agentId: string, display: string): { content: string; truncated: boolean } | null;
 }
 
 /** Conversation history after context governance (compaction) has been applied. */

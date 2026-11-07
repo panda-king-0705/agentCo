@@ -36,7 +36,7 @@ import {
   rollbackRecovery,
 } from "./metacognition/project-management.ts";
 import { selfAbility, type Competence } from "./metacognition/self-ability.ts";
-import { delegateParts, feedback, integrateResults, solving, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
+import { delegateParts, feedback, filesUnderTasks, integrateResults, reviewFiles, solving, type FeedbackResult, type Solution } from "./metacognition/solving-evaluation.ts";
 import { analysis, literatureReview, problemDefinition, requestText, type ProblemDefinition, type Understanding } from "./metacognition/target-understanding.ts";
 import { block, llmJson, mustPropagate, phase, toolContext, YieldSignal, type BrainRun } from "./runtime.ts";
 import { feedbackUpdate } from "./self-management/emotion.ts";
@@ -548,8 +548,11 @@ export class BrainEngine implements CognitiveEngine {
         }
       }
 
+      // The reviewer sees what was saved, as it is on disk (no read-back loops).
+      const saved = reviewFiles(run, solution.effects.filter((e): e is Extract<ToolEffect, { kind: "file_written" }> => e.kind === "file_written").map((e) => ({ agentId: run.agent.id, display: e.path })));
       const fb = await phase(run, "evaluation", () =>
         feedback(run, {
+          files: saved,
           problem: u.problem.problem,
           successCriteria: u.problem.successCriteria,
           solution: solution.kind === "solution" ? solution.text : null,
@@ -563,7 +566,8 @@ export class BrainEngine implements CognitiveEngine {
         }),
       );
       if (fb.decision === "accept") {
-        return this.report(run, { outcome: "completed", output: solution.text, score: fb.score, summary: fb.summary, predicted: u.confidence.calibrated, events: [], estimateUsd: persisted.estimateUsd, plan: { ...persisted, feedback: [] } });
+        const output = fb.openPoints.length ? `${solution.text}\n\n## Open points for the Board\n${fb.openPoints.map((p) => `- ${p}`).join("\n")}` : solution.text;
+        return this.report(run, { outcome: "completed", output, score: fb.score, summary: fb.summary, predicted: u.confidence.calibrated, events: [], estimateUsd: persisted.estimateUsd, plan: { ...persisted, feedback: [] } });
       }
       if (fb.decision === "escalate") return this.escalateOutcome(run, `Result for T-${task.number} not acceptable: ${fb.issues.join("; ") || fb.summary}`, u.confidence.calibrated);
       if (fb.decision === "fail") {
@@ -717,8 +721,11 @@ export class BrainEngine implements CognitiveEngine {
     const finished = children.filter((c) => ["done", "failed", "cancelled", "blocked"].includes(c.status));
     const events: ProcessEvent[] = eventsFromSubtasks(finished);
     const maxRevisions = run.drives.conservation ? 0 : run.maxRevisions;
+    // The reviewer sees the files the parts saved (reports' own reports included), as on disk.
+    const saved = filesUnderTasks(run, children.filter((c) => c.state.kind !== "escalation"));
     const fb: FeedbackResult = await phase(run, "evaluation", () =>
       feedback(run, {
+        files: saved,
         problem: plan.problem,
         successCriteria: plan.successCriteria,
         solution: null,
@@ -733,7 +740,11 @@ export class BrainEngine implements CognitiveEngine {
     );
     if (fb.decision === "accept") {
       await this.recognizeWorkers(run, children);
-      const output = integrateResults(task.title, fb.summary, children, run.agent.name);
+      const output = integrateResults(task.title, fb.summary, children, run.agent.name, {
+        openPoints: fb.openPoints,
+        files: saved,
+        names: (id) => run.platform.org.getAgent(id ?? "")?.name ?? "someone",
+      });
       return this.report(run, { outcome: "completed", output, score: fb.score, summary: fb.summary, predicted: plan.confidence, events, estimateUsd: plan.estimateUsd, plan: { ...plan, feedback: [] } });
     }
     if (fb.decision === "escalate") return this.escalateOutcome(run, `Subtasks of T-${task.number} fell short: ${fb.issues.join("; ") || fb.summary}`, plan.confidence, events);

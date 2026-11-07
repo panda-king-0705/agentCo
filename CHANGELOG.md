@@ -50,6 +50,21 @@ versioning: [SemVer](https://semver.org/).
   - **More room to answer.** Reviews, problem definitions, analyses and plans were often cut off
     and had to be asked again; their output limits are higher. Tool-loop steps get 4,000 tokens,
     so a whole document fits in one save.
+- Test 4, third run ($1.03, 5 min 19 s, accepted on the first review). Remaining waste:
+  - **Reviewers see the saved files.** Feedback now gets the files the work saved, as they are on
+    disk. That includes files from a report's own reports, so a manager reviewing a worker's
+    output sees it too. The reviewer no longer asks for read-backs. It judges substance, not
+    formatting: the Finance section went round three times over "three headings, criteria say
+    exactly two", which was $0.48 of the run. Leaders write content criteria, and agents and
+    workers are told their reviewer sees the files. The handbook says so, so new hires learn it
+    from day one.
+  - **Replies are told their size.** Sixteen JSON replies filled whatever room they had, were cut
+    off and were asked again, costing 22% of the run. Each stage now states its word budget up front.
+  - **Short report to the Board.** The summary, "Open points for the Board" (a new Feedback field),
+    the files saved, and one line per contribution. Before, every contribution was pasted in full,
+    with nested reports.
+  - **Old drafts archived.** `scripts/maintenance/archive-trace-files.mjs` moves the drive files of
+    abandoned objectives to `/data/archive/`. It is reversible.
 - The out-of-steps wrap-up call (which has no tools) told the model to "finish with
   complete_task", and a worker answered that complete_task was not among its tools. It now says
   the plain-text reply is the result.

@@ -71,6 +71,7 @@ export function buildHandbook(src: HandbookSource, agent: Agent | null): string 
     "- Blocked? Escalate to your manager with ONE specific question. Only the CEO asks the Board, and only for decisions that are irreversible, spend real money, touch outside accounts or are outside the mandate.",
     "- Act on reasonable assumptions and state them. Do the work with your tools rather than asking for permission you already have.",
     "- Facts go in the knowledge base (memory_write: global for company facts, agent for your own notes); shared working notes on the blackboard. Files you save go on the company drive, where colleagues can read them — use the exact path your brief names; private/… is for scratch notes only.",
+    "- Reviews: whoever assigned your task sees the files you saved as they are on disk, plus your result. Say what you saved and where; there is no need to read files back or paste them. Reviews judge substance (correct, complete, consistent, honest), not formatting, and decisions only the Board can make are listed as open points, not held against your work.",
     "- Work that combines other people's parts (assembling, reconciling, reviewing) starts after those parts are done. If you are waiting on a colleague's part that is still in progress, escalating puts you on hold until it is finished — you are resumed with their result.",
     `- Money: the company spends at most $${s.dailyBudgetUsd}/day and $${s.monthlyBudgetUsd}/month on models. Prefer the cheapest approach that meets the success criteria.`,
   );

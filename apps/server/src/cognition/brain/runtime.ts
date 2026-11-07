@@ -192,7 +192,7 @@ export async function llmJson(run: BrainRun, o: LlmOptions): Promise<Json> {
   const tier = o.tier ?? tierFor(run, o.stage);
   const maxOutputTokens = o.maxOutputTokens ?? 700;
   const messages: ChatMessage[] = [
-    { role: "system", content: systemPrompt(o.stage, [run.charter, o.instructions, jsonContract(o.shape)], o.context) },
+    { role: "system", content: systemPrompt(o.stage, [run.charter, o.instructions, jsonContract(o.shape), sizeBudget(maxOutputTokens)], o.context) },
     { role: "user", content: o.user ?? "Go." },
   ];
   let started = Date.now();
@@ -225,6 +225,16 @@ export async function llmJson(run: BrainRun, o: LlmOptions): Promise<Json> {
   }
   if (!response.json) o.span.setAttributes({ "agentco.degraded": true });
   return obj(response.json);
+}
+
+/**
+ * Say the reply's size up front. Raising the output limits did not help (2026-11-07, test 4: 16
+ * replies still filled whatever room they had, were cut off and asked again — 22% of the run's
+ * cost): the models write to the room they are given unless told the budget.
+ */
+export function sizeBudget(maxOutputTokens: number): string {
+  const words = Math.max(60, Math.round((maxOutputTokens * 0.45) / 10) * 10);
+  return `Keep the whole reply under about ${words} words: one or two short sentences per string, and no more list items than asked for.`;
 }
 
 export async function llmText(run: BrainRun, o: Omit<LlmOptions, "shape">): Promise<string> {

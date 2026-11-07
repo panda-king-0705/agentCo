@@ -12,7 +12,8 @@ import { namedCandidates, type Candidate } from "../../src/cognition/brain/self-
 import { ReflexEngine } from "../../src/cognition/reflex.ts";
 import { MockProvider } from "../../src/models/providers/mock.ts";
 import { readContext, readStage } from "../../src/models/protocol.ts";
-import type { EngineResult, ModelProvider } from "../../src/contracts.ts";
+import type { EngineResult, ModelProvider, SavedFiles } from "../../src/contracts.ts";
+import { gist } from "../../src/cognition/brain/metacognition/solving-evaluation.ts";
 import type { Agent, Task } from "../../../../packages/shared/src/index.ts";
 import { FakePlatform, makeAgent, makeTask, taskInput } from "./fakes.ts";
 
@@ -236,7 +237,8 @@ test("a revision after delivered parts fixes what the feedback names — the pla
   }
   await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: parts })));
   const feedbackPrompt = prompts.find((x) => x.includes("Evaluate: score 0-1"))!;
-  assert.match(feedbackPrompt, /Decisions that belong to the Board .* are NOT defects: name them in the summary as open points for the Board/);
+  assert.match(feedbackPrompt, /Decisions that belong to the Board .* are NOT defects: list them in openPoints \(and mention them in the summary\)/);
+  assert.match(feedbackPrompt, /Judge substance — is it correct, complete, consistent and honest\? — not formatting/);
   assert.match(feedbackPrompt, /A word, line or character count reported by a file tool, and a save the file tool confirmed, count as verified\./);
   const replan = prompts.filter((x) => x.includes("Decompose into at most")).at(-1)!;
   assert.match(replan, /Already delivered — keep these, do NOT redo them:\n- T-\d+ "CMO: GTM section" by Olivia Bennett: CMO: GTM section: saved/);
@@ -292,4 +294,51 @@ test("a tool result as long as one whole file read reaches the model uncut", asy
 test("measure: words are tokens with a letter or digit (markdown bullets and table bars don't count)", () => {
   assert.deepEqual(measure("# Plan\n\n- Launch 2027-01-12 | owner: Olivia\n- |---|\n"), { chars: 52, words: 5, lines: 4 });
   assert.deepEqual(measure(""), { chars: 0, words: 0, lines: 0 });
+});
+
+// ── Third test-4 run (2026-11-07, trc_333e…): $1.03, 5 min — but the Finance section went round three
+// times because its reviewer could not see the saved file (and judged heading counts), 16 JSON
+// replies filled their room and were asked again, and the Board's report pasted every contribution.
+
+test("the reviewer sees the saved files (a report's report's included), lists open points for the Board, and the report stays short", async () => {
+  const prompts: string[] = [];
+  const verdict = { score: 0.9, truthful: 0.95, good: true, issues: [], openPoints: ["Raise Pro to $20 or cap it at 600 minutes a month"], decision: "accept", summary: "All three sections delivered and consistent." };
+  const p = new FakePlatform({ providers: { mock: provider({ "metacognition.solving_evaluation.feedback": (_c, _n, prompt) => (prompts.push(prompt), verdict) }) } });
+  const { ceo, cmo, cfo } = company(p);
+  const task = p.addTask(makeTask({ id: "tsk_300", number: 300, title: "One-page launch plan", description: "Sections by Marketing and Finance.", assigneeId: ceo.id, traceId: "trc_300", value: 800, estCostUsd: 0.5 }));
+  task.state.plan = { problem: "One-page plan", successCriteria: ["sections saved"], chosen: "low_cost", mode: "delegate", subprocesses: [], confidence: 0.7, feedback: [], rejected: [], revision: 0, costSoFarUsd: 0, estimateUsd: 0.5 };
+  const mkt = p.addTask(makeTask({ id: "tsk_301", number: 301, parentTaskId: task.id, rootTaskId: task.id, traceId: "trc_300", title: "Marketing section", description: "GTM", assigneeId: cmo.id, status: "done", result: "# Marketing section\nGTM saved at launch-plan/marketing.md (167 words).\n\n## Contributions\n### Lily's draft\nA very long nested report that should not reach the Board." }));
+  const fin = p.addTask(makeTask({ id: "tsk_302", number: 302, parentTaskId: task.id, rootTaskId: task.id, traceId: "trc_300", title: "Finance section", description: "Pricing", assigneeId: cfo.id, status: "done", result: "Finance saved at launch-plan/finance.md: Pro loses 50% at full cap." }));
+  const draft = p.addTask(makeTask({ id: "tsk_303", number: 303, parentTaskId: mkt.id, rootTaskId: task.id, traceId: "trc_300", title: "Draft marketing", description: "d", assigneeId: cmo.id, status: "done", result: "drafted" }));
+  const disk: Record<string, string> = {
+    "shared/launch-plan/marketing.md": "## Target segment\nRemote teams of 5–50.\n## Channels\nFounder LinkedIn, SEO.",
+    "shared/launch-plan/finance.md": "## Pricing tiers\nPro $12 [modeled]\n## Unit economics\nPro margin -50% [unverified]\n## Open items\n- Reset caps: Elena, 2026-11-23",
+    "shared/notes/other-objective.md": "not part of this work",
+  };
+  (p as unknown as { drive: SavedFiles }).drive = {
+    written: () => [
+      { agentId: cmo.id, taskId: draft.id, display: "shared/launch-plan/marketing.md", at: "1" },
+      { agentId: cfo.id, taskId: fin.id, display: "shared/launch-plan/finance.md", at: "2" },
+      { agentId: ceo.id, taskId: "tsk_elsewhere", display: "shared/notes/other-objective.md", at: "3" },
+    ],
+    read: (_agentId, display) => (disk[display] ? { content: disk[display]!, truncated: false } : null),
+  };
+  const r = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, taskInput(task, "subtasks_completed", { subtasks: [mkt, fin] })));
+  assert.equal(r.outcome, "completed", r.error ?? r.output);
+  const review = prompts[0]!;
+  assert.match(review, /Files as saved on disk — this IS the read-back: judge these files themselves, and never ask the author to read a file back/);
+  assert.match(review, /=== shared\/launch-plan\/finance\.md — saved by Elena Petrova \(\d+ words, 6 lines\) ===\n## Pricing tiers/);
+  assert.match(review, /=== shared\/launch-plan\/marketing\.md — saved by Olivia Bennett/, "a report's own report's file is reviewed too");
+  assert.doesNotMatch(review, /other-objective/, "only files saved under this work");
+  assert.match(review, /Keep the whole reply under about 450 words/, "the reply's size budget is stated up front");
+  assert.match(r.output, /## Open points for the Board\n- Raise Pro to \$20 or cap it at 600 minutes a month/);
+  assert.match(r.output, /## Files\n- shared\/launch-plan\/finance\.md \(Elena Petrova, \d+ words\)\n- shared\/launch-plan\/marketing\.md \(Olivia Bennett, \d+ words\)/);
+  assert.match(r.output, /- \*\*Marketing section\*\* \(Olivia Bennett\): GTM saved at launch-plan\/marketing\.md \(167 words\)\./);
+  assert.doesNotMatch(r.output, /Lily's draft|very long nested report/, "nested reports stay out of the Board's reply");
+});
+
+test("gist: a contribution's first point, without its heading or nested contributions", () => {
+  assert.equal(gist("# Title\nThe point.\n\n## Contributions\n### Inner\nNoise"), "The point.");
+  assert.equal(gist("Plain result."), "Plain result.");
+  assert.ok(gist("x ".repeat(400)).length <= 320);
 });

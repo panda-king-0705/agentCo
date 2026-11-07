@@ -276,6 +276,18 @@ Archived memories and blackboard entries go to the `memories_archive` / `blackbo
 the same database; files go to `/data/archive/<stamp>/` with a `manifest.json`. All of it stays in the
 `agentco-data` volume and its backups.
 
+Drafts left on the company drive by an abandoned objective get cited by later work as if they were
+sources. `scripts/maintenance/archive-trace-files.mjs` moves the drive files that given traces wrote
+to `/data/archive/<stamp>-drive/` (with a manifest). It skips private notes and any file another
+objective also wrote:
+
+```powershell
+docker cp scripts/maintenance/archive-trace-files.mjs agentco-agentco-1:/tmp/archive-files.mjs
+docker exec agentco-agentco-1 node /tmp/archive-files.mjs <traceId> <traceId>            # dry run
+docker exec agentco-agentco-1 node /tmp/archive-files.mjs --apply <traceId> <traceId>    # move; prints the stamp
+docker exec agentco-agentco-1 node /tmp/archive-files.mjs --restore <stamp>-drive        # undo
+```
+
 ## Weekly audit
 
 `scripts/audit/company-audit.mjs` prints a read-only JSON audit of the running company: work and stuck
