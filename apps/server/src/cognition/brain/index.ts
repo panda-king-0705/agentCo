@@ -259,7 +259,9 @@ export class BrainEngine implements CognitiveEngine {
         run.ctx.span.setAttributes({ "agentco.resumed_at": cp.block });
       }
       if (a) {
-        run.wm.boardAnswer = { approvalId: a.id, kind: a.kind, status: a.status, note: a.note };
+        const hiredId = a.kind === "hire_agent" && typeof a.payload?.hiredAgentId === "string" ? a.payload.hiredAgentId : null;
+        const hired = hiredId ? run.platform.org.getAgent(hiredId) : null;
+        run.wm.boardAnswer = { approvalId: a.id, kind: a.kind, status: a.status, note: a.note, ...(hired ? { hired: `${hired.name}, ${hired.title} (${hired.id})` } : {}) };
         // The Board answered this task's question: no asking again (escalation.ts).
         if (a.kind === "question" && run.escalation) run.escalation.answered = true;
         boardGuidance = `Answer from the Board (${a.status}): ${truncate(a.note ?? "(no note)", 400)}`;

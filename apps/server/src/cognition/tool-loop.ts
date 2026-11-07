@@ -259,6 +259,17 @@ export async function runToolLoop(o: ToolLoopOptions): Promise<ToolLoopResult> {
         name: call.name,
         content: truncate(`${result.ok ? "" : "Error: "}${result.content}`, TOOL_RESULT_CHARS),
       });
+      if (result.ok && call.name === "hire_agent") {
+        // A hire that needs the Board's approval: wait for the decision (resumed with it), like ask_human.
+        const approval = result.effects.find((e): e is Extract<ToolEffect, { kind: "approval_requested" }> => e.kind === "approval_requested");
+        if (approval) {
+          const why = typeof call.arguments.justification === "string" ? call.arguments.justification.trim() : "";
+          out.status = "blocked";
+          out.reason = truncate(`Waiting for the Board to approve the hire${why ? `: ${why}` : ""}`, 600);
+          out.approvalId = approval.approvalId;
+          return out;
+        }
+      }
       if (result.ok && ESCALATION_TOOLS.has(call.name)) {
         const reason = describeEscalation(call);
         const subtask = result.effects.find((e): e is Extract<ToolEffect, { kind: "task_created" }> => e.kind === "task_created");

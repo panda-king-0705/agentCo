@@ -1,16 +1,17 @@
 /**
- * catalog_search — executives browse the agency-agents specialist catalog (docs/CATALOG.md) before
- * hiring with hire_agent {catalogId}. Read-only; the reply is compact (one line per specialist)
- * because it lands in a frontier-tier prompt.
+ * catalog_search — browse the agency-agents specialist catalog (docs/CATALOG.md): executives before
+ * hiring with hire_agent {catalogId}, and recruiters (People) who find and recommend candidates for
+ * the hiring manager (founder, 2026-11-07: "managers hire, recruiter sources"). Read-only; the reply
+ * is compact (one line per specialist). Any tier may hold it; only agents given the tool have it.
  */
-import { EXECUTIVES, fail, ok, type ToolDefinition } from "../types.ts";
+import { ALL_TIERS, fail, ok, type ToolDefinition } from "../types.ts";
 
 const DESCRIPTION_CHARS = 140;
 
 export const catalogSearch: ToolDefinition = {
   name: "catalog_search",
   description:
-    "Search the specialist catalog (~280 agency-agents specialists) for someone to hire. Returns id, name, department and a one-line description; hire with hire_agent {catalogId}.",
+    "Search the specialist catalog (~280 agency-agents specialists) for someone to hire. Returns id, name, department and a one-line description. The head of the team the specialist joins hires them with hire_agent {catalogId}; a recruiter recommends the id and why.",
   parameters: {
     type: "object",
     properties: {
@@ -19,7 +20,7 @@ export const catalogSearch: ToolDefinition = {
     },
     required: ["query"],
   },
-  tiers: EXECUTIVES,
+  tiers: ALL_TIERS,
   run(args, ctx) {
     const catalog = ctx.services.catalog;
     if (!catalog || catalog.size === 0) return fail("No specialist catalog is loaded.");

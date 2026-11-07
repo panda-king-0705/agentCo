@@ -55,6 +55,8 @@ export const TOOLSETS: Record<AgentTier, readonly string[]> = {
   manager: LEAD_TOOLS,
   worker: BASE_TOOLS,
 };
+/** Roles that search the specialist catalog to recommend candidates (managers hire; recruiters source). */
+export const SOURCING_ROLES: ReadonlySet<string> = new Set(["recruiter-agent"]);
 /** Roles that may use web_fetch (only effective when WEB_FETCH_ENABLED=true). */
 const WEB_ROLES = new Set(["cso", "market-researcher", "cmo", "growth-analyst", "sdr-prospector", "security-analyst", "data-analyst"]);
 
@@ -202,7 +204,7 @@ export const ROLE_TEMPLATES: readonly RoleTemplate[] = ROWS.map(([id, title, dep
   modelTier: MODEL_TIER[tier],
   mandate,
   kpis: kpis.split("; "),
-  tools: [...TOOLSETS[tier], ...(WEB_ROLES.has(id) ? ["web_fetch"] : [])],
+  tools: [...TOOLSETS[tier], ...(WEB_ROLES.has(id) ? ["web_fetch"] : []), ...(SOURCING_ROLES.has(id) && !TOOLSETS[tier].includes("catalog_search") ? ["catalog_search"] : [])],
   defaultNames: names.split("|"),
   inStarterOrg,
   catalogId: ROLE_CATALOG[id] ?? null,

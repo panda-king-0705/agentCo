@@ -15,6 +15,7 @@ import { redactDeep } from "../middleware/redact-deep.ts";
 import type { CompanyService } from "../org/company.ts";
 import type { OrgService } from "../org/service.ts";
 import type { TaskService } from "./service.ts";
+import { readFirstTask } from "../tools/builtins/hiring.ts";
 
 export interface CreateApprovalInput {
   kind: ApprovalKind;
@@ -191,6 +192,23 @@ export class ApprovalService {
     switch (approval.kind) {
       case "hire_agent": {
         const agent = this.deps.org.createAgent(p.input as CreateAgentInput, approval.requestedBy, { ignoreHeadcount: true });
+        // The hiring manager's first task for them (hire_agent firstTask): assigned now, under the
+        // hiring task, so the manager resumes when it is done.
+        const first = readFirstTask(p.firstTask);
+        const parent = first && typeof p.firstTaskParentId === "string" ? this.deps.tasks.get(p.firstTaskParentId) : null;
+        if (first && parent && !["done", "failed", "cancelled"].includes(parent.status)) {
+          const sub = this.deps.tasks.createSubtask({
+            parent,
+            traceId: parent.traceId,
+            assigneeId: agent.id,
+            createdBy: approval.requestedBy,
+            title: first.title,
+            description: first.description,
+            ...(first.acceptanceCriteria ? { acceptanceCriteria: first.acceptanceCriteria } : {}),
+            state: { firstTask: true },
+          });
+          return { hiredAgentId: agent.id, firstTaskId: sub.id };
+        }
         return { hiredAgentId: agent.id };
       }
       case "terminate_agent": {

@@ -29,7 +29,7 @@ import type { CompanyService } from "./company.ts";
 import { computeNeeds } from "./needs.ts";
 import type { Catalog, CatalogSeed } from "../catalog/service.ts";
 import { newId } from "../db/ids.ts";
-import { DEPARTMENT_TEMPLATES, roleTemplate } from "./templates.ts";
+import { DEPARTMENT_TEMPLATES, roleTemplate, SOURCING_ROLES } from "./templates.ts";
 
 export interface OrgDeps {
   repos: Repositories;
@@ -463,6 +463,8 @@ export class OrgService implements OrgView, AgentStateWriter {
     for (const agent of this.deps.repos.agents.list({ includeTerminated: false })) {
       const patch: Partial<Agent> = {};
       if (agent.tier === "executive" && agent.tools.includes("hire_agent") && !agent.tools.includes("catalog_search")) patch.tools = [...agent.tools, "catalog_search"];
+      // Recruiters source candidates from the catalog for the hiring manager (2026-11-07).
+      if (SOURCING_ROLES.has(agent.roleId) && !agent.tools.includes("catalog_search")) patch.tools = [...agent.tools, "catalog_search"];
       const catalogId = agent.catalogId ? null : roleTemplate(agent.roleId)?.catalogId;
       const seed = catalogId ? catalog.seed(catalogId) : null;
       if (catalogId && seed) {
