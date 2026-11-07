@@ -34,11 +34,35 @@ export const CANNOT_DO = OUTSIDE_STEPS.map((s) => s.cannot);
 
 const NONE: ReadonlySet<Capability> = new Set();
 
+/** An outside service the company is connected to (an MCP server), and who can use it. */
+export interface ConnectedService {
+  name: string;
+  grants: readonly Capability[];
+  /** Names of the active agents whose tools include it. */
+  holders: readonly string[];
+}
+
+const label = (c: Capability) => OUTSIDE_STEPS.find((s) => s.capability === c)?.can ?? EXTRA_CAN[c] ?? c;
+
+/**
+ * The connected services by name, with who holds them (2026-11-08, trc_ba61…: the founder asked for
+ * the comparison "using Firecrawl"; agents were told only that colleagues can "search and read the
+ * web", so the CEO's first reply made a Firecrawl account a possible Board step — while Morgan had
+ * Firecrawl and used it 18 times).
+ */
+export function servicesLine(services: readonly ConnectedService[]): string {
+  const live = services.filter((s) => s.holders.length > 0);
+  if (!live.length) return "";
+  const list = live.map((s) => `${s.name}${s.grants.length ? ` (${s.grants.map(label).join("; ")})` : ""} — ${s.holders.slice(0, 6).join(", ")}${s.holders.length > 6 ? ` and ${s.holders.length - 6} more` : ""}`);
+  return `Connected services the company already has: ${list.join("; ")}. A request that names one is work the company can do — give that part to someone who has it (or their manager); it is never a Board step.`;
+}
+
 /**
  * What agents are told. `company`: what some colleague can do (an enabled tool grants it); `mine`:
- * what this agent's own tools can do. Without arguments: the company can do none of the outside steps.
+ * what this agent's own tools can do; `services`: the connected services and who holds them.
+ * Without arguments: the company can do none of the outside steps.
  */
-export function limitsLine(company: ReadonlySet<Capability> = NONE, mine: ReadonlySet<Capability> = NONE): string {
+export function limitsLine(company: ReadonlySet<Capability> = NONE, mine: ReadonlySet<Capability> = NONE, services: readonly ConnectedService[] = []): string {
   const cannot = OUTSIDE_STEPS.filter((s) => !company.has(s.capability)).map((s) => s.cannot);
   const can = [...company].map((c) => ({ c, text: OUTSIDE_STEPS.find((s) => s.capability === c)?.can ?? EXTRA_CAN[c] })).filter((x): x is { c: Capability; text: string } => !!x.text);
   const yours = can.filter((x) => mine.has(x.c)).map((x) => x.text);
@@ -46,6 +70,8 @@ export function limitsLine(company: ReadonlySet<Capability> = NONE, mine: Readon
   const parts: string[] = [];
   if (yours.length) parts.push(`With your own tools you can: ${yours.join("; ")} (use them only for this work; anything that sends, publishes, spends or changes something outside waits for the Board's approval).`);
   if (colleagues.length) parts.push(`Colleagues with the right tools can: ${colleagues.join("; ")} — delegate or ask them.`);
+  const named = servicesLine(services);
+  if (named) parts.push(named);
   if (cannot.length) {
     parts.push(
       `What this company cannot do: ${cannot.join("; ")}. ` +
@@ -81,4 +107,17 @@ const OUTSIDE: readonly { capability: Capability; re: RegExp }[] = [
 export function needsBoardStep(criterion: string, company: ReadonlySet<Capability> = NONE): boolean {
   if (PREPARED.test(criterion)) return false;
   return OUTSIDE.some((o) => !company.has(o.capability) && o.re.test(criterion));
+}
+
+/**
+ * Board steps that are not steps: a hypothetical ("If Firecrawl needs a new account, the Board must set
+ * it up") or one about a service the company is already connected to (trc_ba61…).
+ */
+export function realBoardSteps(steps: readonly string[], services: readonly ConnectedService[] = []): string[] {
+  const names = services.filter((s) => s.holders.length > 0).map((s) => s.name.toLowerCase());
+  return steps.filter((step) => {
+    if (/^\s*(?:if|in case|should)\b/i.test(step)) return false;
+    const lower = step.toLowerCase();
+    return !names.some((n) => new RegExp(`\\b${n.replace(/[^a-z0-9]/g, "[^a-z0-9]?")}\\b`).test(lower));
+  });
 }

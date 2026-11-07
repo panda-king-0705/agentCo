@@ -13,7 +13,7 @@ import { block, llmJson, type BrainRun } from "../runtime.ts";
 import { candidatePool, namedCandidates, scoreCandidates, type Candidate } from "../self-management/role-arrangement.ts";
 import type { Competence } from "./self-ability.ts";
 import type { ProblemDefinition, Understanding } from "./target-understanding.ts";
-import { isHiringRequest } from "./solving-evaluation.ts";
+import { isHiringRequest, normTitle } from "./solving-evaluation.ts";
 import { describeHire, objectiveHires } from "../../../tools/builtins/hiring.ts";
 
 export interface Subprocess {
@@ -183,6 +183,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
               `Decompose into at most ${max} subprocesses, each for ONE report (assigneeId), with value 0-1000, estCostUsd and acceptanceCriteria; mode "delegate". ` +
               "Write acceptance criteria about content — what must be covered, correct and consistent — not formatting (exact heading counts, tag placement, layout). Keep them checkable with the assignee's tools: the file tools confirm every save and report word, line and character counts, and the reviewer sees the saved files themselves, so never ask for a read-back, a pasted copy or a separate word count. " +
               "If the request names a department or person (\"have Finance…\", \"ask the CTO…\"), assign that part to them. " +
+              "Give each part to the report whose field it is — figures, budgets and spend to Finance; wording and legal risk to Legal — and do not bundle different fields into one part. A review or check never goes to the person whose work it checks: give it to someone else, or leave it out and review it yourself when you are resumed. " +
               (owners.length
                 ? `The request names these owners — give each of them their own part (at least one part each): ${owners.map((o) => `${o.agent.id} (${o.agent.title}${o.via ? ` — ${o.via} is in their team; the part is for them` : ""})`).join(", ")}. `
                 : "") +
@@ -217,6 +218,13 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
         maxOutputTokens: 1200 + 350 * max,
       });
       const subprocesses = coerceSubprocesses(json, max, Math.max(50, Math.round(task.value / Math.max(1, max))));
+      // A part handed out in a fix round is a fix: its owner reports what is still short instead of
+      // starting a fix round of their own (brain/index.ts, reworkRounds). A part titled exactly like
+      // one already delivered stays as it is: that is a redo, which delegation refuses.
+      if (delivered.length) {
+        const existing = new Set(run.platform.tasks.children(task.id).map((c) => normTitle(c.title)));
+        for (const s of subprocesses) if (!FIX_TITLE.test(s.title) && !existing.has(normTitle(s.title))) s.title = truncate(`Fix: ${s.title}`, 140);
+      }
       let mode = oneOf(json.mode, ["delegate", "direct"] as const, subprocesses.length > 0 && canDelegate ? "delegate" : "direct");
       if (!canDelegate || subprocesses.length === 0) mode = "direct";
       if (mode === "delegate") await arrangeRoles(run, subprocesses, reports);
@@ -331,6 +339,10 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
         const viaPerson = namedOwners(run, people, `${s.title} ${s.description}`).filter((o) => o.via).map((o) => o.agent.id);
         if (viaPerson.includes(s.suggestedAssigneeId)) own.add(s.suggestedAssigneeId);
       }
+      // A part about the company's numbers is Finance's when its title names no one (2026-11-08,
+      // trc_6ee6…: "Confirm figures, finalize draft…" went to the General Counsel, and her contracts
+      // analyst searched the drive for numbers only Finance keeps).
+      if (own.size === 0) for (const id of fieldOwners(s.title, candidates, ownDepartment)) own.add(id);
       const namedIds = own.size ? own : namedInRequest.size === 1 ? namedInRequest : undefined;
       const scores = scoreCandidates(`${s.title} ${s.description}`, candidates, { suggestedId: s.suggestedAssigneeId, usedCounts: used, fallbackDepartment: run.facts.department, ...(namedIds ? { namedIds } : {}) });
       const best = scores[0]!;
@@ -339,10 +351,90 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
       s.named = namedInRequest.has(best.agentId);
       used.set(best.agentId, (used.get(best.agentId) ?? 0) + 1);
     }
+    const independent = keepReviewsIndependent(run, subprocesses, candidates, (s, pool) =>
+      scoreCandidates(`${s.title} ${s.description}`, pool, { suggestedId: s.suggestedAssigneeId, usedCounts: used, fallbackDepartment: run.facts.department }),
+    );
     span.setAttributes({
       "agentco.role_arrangement": subprocesses.map((s) => `${truncate(s.title, 30)}→${s.assigneeId}(${s.fit})`).join("; "),
       "agentco.role_arrangement.overrode_llm": subprocesses.filter((s) => s.suggestedAssigneeId && s.suggestedAssigneeId !== s.assigneeId).length,
       "agentco.role_arrangement.named": [...namedInRequest].join(","),
+      ...(independent.length ? { "agentco.role_arrangement.independent_review": independent.join("; ") } : {}),
     });
   });
+}
+
+/** "Fix: …" — a part handed out in a fix round. */
+export const FIX_TITLE = /^\s*fix\b/i;
+
+/** Is this task a fix, or part of one (anything under a "Fix: …" task)? */
+export function insideFix(task: { title: string; parentTaskId: string | null }, get: (id: string) => { title: string; parentTaskId: string | null } | null): boolean {
+  let cur: { title: string; parentTaskId: string | null } | null = task;
+  for (let i = 0; cur && i < 16; i++) {
+    if (FIX_TITLE.test(cur.title)) return true;
+    cur = cur.parentTaskId ? get(cur.parentTaskId) : null;
+  }
+  return false;
+}
+
+// Fields whose work belongs to one department, matched on a part's title when it names no one.
+const FIELDS: readonly { title: RegExp; department: RegExp }[] = [
+  { title: /\b(figures?|numbers|metrics?|kpis?|budgets?|spend(?:ing)?|financials?|revenue|forecasts?|unit economics)\b/i, department: /\bfinance\b/i },
+];
+
+/** Candidates in the department whose field the part's title is (none when it is the leader's own department). */
+export function fieldOwners(title: string, candidates: readonly Candidate[], ownDepartment: string | null): string[] {
+  for (const f of FIELDS) {
+    if (!f.title.test(title)) continue;
+    if (ownDepartment && f.department.test(ownDepartment)) return [];
+    return candidates.filter((c) => f.department.test(c.departmentName)).map((c) => c.agent.id);
+  }
+  return [];
+}
+
+const REVIEW_PART = /\b(re-?review|review|verif(?:y|ies|ication)|proof-?read|audit|qa|sign[- ]?off|verdict|double[- ]check)\b/i;
+const PATH = /[\w.-]+(?:\/[\w.-]+)*\.(?:md|txt|csv|json|html|ya?ml)\b/gi;
+
+/**
+ * A review never goes to the person whose work it reviews (2026-11-08, trc_6ee6…: Eva applied Legal's
+ * edits, then "re-reviewed" them herself — REJECT — and drafted the legal review of a draft she had
+ * written). The author of a part is whoever does an earlier part of this plan, or saved a file the
+ * review names on this objective. The review goes to the best-fit colleague in the same field who did
+ * not write it. With none, a leader of that field reviews it on resume (it is left out of the plan; all
+ * parts left out: the leader does the work directly); a leader from another field keeps the expert.
+ * Returns what changed, for the span.
+ */
+export function keepReviewsIndependent(
+  run: BrainRun,
+  subprocesses: Subprocess[],
+  candidates: readonly Candidate[],
+  rescore: (s: Subprocess, pool: Candidate[]) => { agentId: string; fit: number }[],
+): string[] {
+  const changes: string[] = [];
+  const traceId = run.task?.traceId;
+  const written = traceId ? (run.platform.drive?.written(traceId) ?? []) : [];
+  for (const s of subprocesses) {
+    if (!s.assigneeId || !REVIEW_PART.test(s.title)) continue;
+    const authors = new Set<string>();
+    for (const o of subprocesses) if (o !== s && o.assigneeId && !REVIEW_PART.test(o.title) && (o.round ?? 1) < (s.round ?? 1)) authors.add(o.assigneeId);
+    const named = new Set([...`${s.title} ${s.description}`.matchAll(PATH)].map((m) => m[0].toLowerCase().replace(/^shared\//, "")));
+    for (const w of written) if (named.has(w.display.toLowerCase().replace(/^shared\//, ""))) authors.add(w.agentId);
+    if (!authors.has(s.assigneeId)) continue;
+    const author = run.platform.org.getAgent(s.assigneeId);
+    const field = author?.departmentId ?? null;
+    const pool = candidates.filter((c) => !authors.has(c.agent.id) && c.agent.departmentId === field);
+    const best = pool.length ? rescore(s, pool)[0] : undefined;
+    const was = author?.name ?? s.assigneeId;
+    if (best) {
+      s.assigneeId = best.agentId;
+      s.fit = best.fit;
+      changes.push(`"${truncate(s.title, 40)}": ${was} wrote it → ${run.platform.org.getAgent(best.agentId)?.name ?? best.agentId}`);
+    } else if (run.agent.departmentId === field) {
+      s.assigneeId = null;
+      s.fit = null;
+      changes.push(`"${truncate(s.title, 40)}": ${was} wrote it → left for the leader`);
+    } else {
+      changes.push(`"${truncate(s.title, 40)}": ${was} wrote it, kept (no one else in that field)`);
+    }
+  }
+  return changes;
 }

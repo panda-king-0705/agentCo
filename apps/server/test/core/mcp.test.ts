@@ -127,6 +127,9 @@ test("an MCP server's tools reach only the agents it names; reads run, writes wa
     assert.match(cfoBook, /What this company cannot do: send email, or any message outside the company; run code;/);
     assert.doesNotMatch(cfoBook, /cannot do:[^.]*browse or fetch the web/);
     assert.match(platform.services.handbook!(cmo), /With your own tools you can: search and read the web; read and change a code repository/);
+    // The service by name, with who holds it (2026-11-08, trc_ba61…: "use Firecrawl" became a possible Board step).
+    assert.deepEqual(caps.services!().map((x) => [x.name, x.holders]), [["fake", [cmo.name]]]);
+    assert.match(cfoBook, new RegExp(`Connected services the company already has: fake \\(search and read the web; read and change a code repository through pull requests\\) — ${cmo.name}\\. A request that names one is work the company can do`));
     assert.equal(needsBoardStep("The research is posted on the blog.", new Set(["accounts"])), false);
 
     rootTask(t, cmo.id, "Research competitors");

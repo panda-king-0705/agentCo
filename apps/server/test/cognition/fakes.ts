@@ -501,6 +501,8 @@ export class FakePlatform implements PlatformServices {
       return item;
     },
     blackboardList: () => [...this.board.values()],
+    blackboardCurrent: () => [...this.board.values()],
+    blackboardStale: () => false,
     blackboardGet: (key) => this.board.get(key) ?? null,
     blackboardSet: (key, value, updatedBy) => {
       const e = { key, value, updatedBy, updatedAt: this.now().toISOString() };

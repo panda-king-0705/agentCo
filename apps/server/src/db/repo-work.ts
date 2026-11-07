@@ -83,6 +83,13 @@ export class TaskRepo {
     this.db.prepare("UPDATE tasks SET archived_at = NULL WHERE root_task_id = ? AND archived_at IS NOT NULL").run(rootTaskId);
   }
 
+  /** Which of these task numbers are cancelled. */
+  cancelledNumbers(numbers: readonly number[]): Set<number> {
+    if (!numbers.length) return new Set();
+    const marks = numbers.map(() => "?").join(", ");
+    return new Set(all(this.db, `SELECT number FROM tasks WHERE status = 'cancelled' AND number IN (${marks})`, ...numbers).map((r) => Number(r.number)));
+  }
+
   children(parentId: string): Task[] {
     return all(this.db, "SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY number", parentId).map(toTask);
   }

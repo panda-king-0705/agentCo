@@ -19,6 +19,7 @@ import type { ToolExecutorImpl } from "../tools/registry.ts";
 import { ALL_TIERS, fail, ok, type ToolDefinition } from "../tools/types.ts";
 import { McpClient, type McpClientOptions, type McpTool } from "./client.ts";
 import type { McpConfigResult, McpServerConfig } from "./config.ts";
+import type { Capability } from "../org/capabilities.ts";
 
 export const MCP_RESULT_CHARS = 20_000;
 
@@ -27,7 +28,7 @@ export interface McpServerStatus {
   connected: boolean;
   tools: string[];
   error: string | null;
-  grants: string[];
+  grants: Capability[];
 }
 
 export interface McpToolsDeps {

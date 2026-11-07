@@ -231,7 +231,8 @@ a.kpi:hover { border-color: var(--accent-line); text-decoration: none; }
 .attr-table td:first-child { color: var(--muted); width: 46%; }
 .attr-table tr.hl td { background: var(--accent-soft); color: var(--ink); }
 .io { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-ctl); padding: 8px 10px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 11.5px; max-height: 220px; overflow: auto; }
-.deleg { display: block; max-height: 320px; }
+.deleg-wrap { overflow-x: auto; }
+.deleg { display: block; margin: 0 auto; max-width: none; }
 
 /* ───────────── tasks ───────────── */
 .kanban { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }

@@ -98,6 +98,26 @@ export class MemoryServiceImpl implements MemoryService {
     return this.repos.blackboard.list();
   }
 
+  blackboardCurrent(): BlackboardEntry[] {
+    const entries = this.repos.blackboard.list();
+    const stale = this.staleKeys(entries.map((e) => e.key));
+    return stale.size ? entries.filter((e) => !stale.has(e.key)) : entries;
+  }
+
+  blackboardStale(key: string): boolean {
+    return this.staleKeys([key]).size > 0;
+  }
+
+  private staleKeys(keys: readonly string[]): Set<string> {
+    const byNumber = new Map<number, string>();
+    for (const k of keys) {
+      const m = /^objective:T-(\d+)$/.exec(k);
+      if (m) byNumber.set(Number(m[1]), k);
+    }
+    const cancelled = this.repos.tasks.cancelledNumbers([...byNumber.keys()]);
+    return new Set([...cancelled].map((n) => byNumber.get(n)!));
+  }
+
   blackboardGet(key: string): BlackboardEntry | null {
     return this.repos.blackboard.get(key);
   }

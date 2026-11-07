@@ -5,6 +5,36 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Delegation tree without crossings.** A trace's delegation graph is now a tidy tree: each agent
+  sits centred over the people it handed work to, every team in its own columns, with elbow
+  connectors that start below the names. When a second manager also uses someone, they appear again
+  as a dashed leaf under that manager instead of a line across the tree; repeat hand-offs show "×n";
+  a wide team scrolls sideways instead of shrinking.
+
+### Fixed (trc_6ee6…, the investor update again, and trc_ba61…, the Firecrawl comparison)
+- **No made-up figures.** The CEO quoted "goal attainment 26%", then "35%", to investors. That was
+  her own OKR gauge, which the platform moves as she finishes tasks. The gauge is now shown as a
+  gauge ("gauge 35/100"), not "% of quarterly goal", and labelled as never a company figure. Every
+  agent is told that figures come only from a file, a tool result or the Board, named as the source,
+  and that otherwise the answer is "not available yet".
+- **Numbers go to Finance.** A part about figures, budgets, spend or metrics whose title names no one
+  goes to Finance, not to whoever the plan suggested (the General Counsel got "Confirm figures…").
+- **No one reviews their own work.** A review goes to a colleague in the same field who didn't write
+  it. If there is none, the field's head reviews it herself. Eva no longer re-reviews edits she just
+  made.
+- **One round of fixes per objective, not per level.** A "Fix: …" task, and anything under it,
+  reports what is still short instead of starting its own fix round. Parts handed out in a fix round
+  are always titled "Fix: …".
+- **Cancelled objectives leave the blackboard.** A cancelled objective's note ("blocked: No email was
+  sent…") is hidden from agents. Reading it by key says it is out of date. The console still shows it.
+- **Connected services by name.** Agents are told which services the company is connected to and
+  who holds them ("firecrawl (search and read the web) — Olivia Bennett, Morgan Patel…"). A request
+  that names one is work, not a Board step. Hypothetical Board steps ("If Firecrawl needs an
+  account…") are dropped.
+- **Board steps once.** The opening note no longer ends in "..". The same step worded two ways is
+  listed once under "Left for you", and isn't repeated as an open point.
+
 ### Added
 - **Main stays yours.** On a connection that grants git access, any change aimed straight at `main` or
   `master` goes to Approvals first, even for tools allowed to run without approval

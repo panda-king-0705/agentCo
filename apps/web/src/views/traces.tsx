@@ -9,6 +9,7 @@ import { AgentLink, Avatar, Badge, Button, Empty, ErrorNote, Icon, KV, KindSwatc
 import type { Agent, Span, SpanKind, TraceDetail, TraceSummary } from "../types";
 import { PageHead, TaskLinkById, blockLabel } from "./common";
 import { spanBlock } from "./brain";
+import { elbowPath, layoutDelegation } from "./delegation-layout";
 
 function traceDuration(t: TraceSummary, now: number): number {
   const end = t.endedAt ? Date.parse(t.endedAt) : now;
@@ -280,60 +281,37 @@ function SpanPanel({ span, detail, onClose }: { span: Span; detail: TraceDetail;
 function DelegationGraph({ detail }: { detail: TraceDetail }) {
   const agents = useLive((s) => s.agents);
   const departments = useLive((s) => s.departments);
-  const { nodes, edges, w, h } = useMemo(() => {
-    const byId = new Map(detail.spans.map((s) => [s.id, s]));
-    const edgeMap = new Map<string, number>();
-    const depth = new Map<string, number>();
-    const order: string[] = [];
-    const add = (id: string) => { if (!depth.has(id)) { depth.set(id, 0); order.push(id); } };
-    for (const s of [...detail.spans].sort((a, b) => a.startedAt.localeCompare(b.startedAt))) {
-      if (!s.agentId) continue;
-      add(s.agentId);
-      if (s.kind !== "run") continue;
-      let p = s.parentSpanId ? byId.get(s.parentSpanId) : undefined;
-      while (p && (!p.agentId || p.agentId === s.agentId)) p = p.parentSpanId ? byId.get(p.parentSpanId) : undefined;
-      if (p?.agentId) {
-        const key = `${p.agentId}>${s.agentId}`;
-        if (!edgeMap.has(key)) {
-          edgeMap.set(key, 0);
-          depth.set(s.agentId, Math.max(depth.get(s.agentId) ?? 0, (depth.get(p.agentId) ?? 0) + 1));
-        }
-        edgeMap.set(key, (edgeMap.get(key) ?? 0) + 1);
-      }
-    }
-    const layers = new Map<number, string[]>();
-    for (const id of order) { const d = depth.get(id) ?? 0; layers.set(d, [...(layers.get(d) ?? []), id]); }
-    const maxLayer = Math.max(...layers.keys(), 0);
-    const maxPer = Math.max(...[...layers.values()].map((l) => l.length), 1);
-    const W = 300;
-    const H = Math.max(80, (maxLayer + 1) * 64);
-    const pos = new Map<string, { x: number; y: number }>();
-    for (const [d, ids] of layers) ids.forEach((id, i) => pos.set(id, { x: ((i + 1) / (ids.length + 1)) * W, y: 28 + d * 64 }));
-    return {
-      nodes: order.map((id) => ({ id, ...pos.get(id)! })),
-      edges: [...edgeMap.entries()].map(([k, n]) => { const [a, b] = k.split(">") as [string, string]; return { a: pos.get(a)!, b: pos.get(b)!, n, key: k }; }),
-      w: W,
-      h: H + (maxPer > 4 ? 0 : 0),
-    };
-  }, [detail.spans]);
-  if (nodes.length < 2) return <p className="muted small">Single agent: no delegation in this trace.</p>;
+  // A tidy tree (delegation-layout.ts): children centred under the agent who handed them work, every
+  // subtree in its own columns, so connectors never cross.
+  const layout = useMemo(() => layoutDelegation(detail.spans), [detail.spans]);
+  if (layout.agents < 2 || layout.edges.length === 0) return <p className="muted small">Single agent: no delegation in this trace.</p>;
+  const first = (id: string) => agents[id]?.name.split(" ")[0] ?? id;
   return (
-    <svg className="deleg" viewBox={`0 0 ${w} ${h}`} width="100%" role="img" aria-label={`Delegation graph: ${nodes.length} agents, ${edges.length} hand-offs`}>
-      <defs><marker id="dg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,1 L9,5 L0,9z" fill="var(--brain-arrow)" /></marker></defs>
-      {edges.map((e) => <line key={e.key} x1={e.a.x} y1={e.a.y + 14} x2={e.b.x} y2={e.b.y - 15} stroke="var(--brain-arrow)" strokeWidth={1.4} markerEnd="url(#dg)" />)}
-      {nodes.map((n) => {
-        const a: Agent | undefined = agents[n.id];
-        const c = a ? departments[a.departmentId]?.color ?? "var(--muted)" : "var(--muted)";
-        return (
-          <a key={n.id} href={href(`/agents/${n.id}`)}>
-            <circle cx={n.x} cy={n.y} r={14} fill="var(--surface)" stroke={c} strokeWidth={2.5} />
-            <text x={n.x} y={n.y + 3.5} textAnchor="middle" fontSize="9.5" fontWeight="650" fill="var(--ink)">{a ? a.name.split(" ").map((p) => p[0]).join("") : "?"}</text>
-            <text x={n.x} y={n.y + 27} textAnchor="middle" fontSize="9" fill="var(--muted)">{a ? a.name.split(" ")[0] : n.id}</text>
-            <title>{a ? `${a.name}, ${a.title}` : n.id}</title>
-          </a>
-        );
-      })}
-    </svg>
+    <div className="deleg-wrap">
+      <svg className="deleg" viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} role="img" aria-label={`Delegation tree: ${layout.agents} agents, ${layout.edges.length} hand-offs`}>
+        <defs><marker id="dg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,1 L9,5 L0,9z" fill="var(--brain-arrow)" /></marker></defs>
+        {layout.edges.map((e) => (
+          <g key={e.key}>
+            <path d={elbowPath(e.from, e.to)} fill="none" stroke="var(--brain-arrow)" strokeWidth={1.4} strokeDasharray={e.to.ghost ? "3 3" : undefined} markerEnd="url(#dg)">
+              <title>{`${first(e.from.agentId)} → ${first(e.to.agentId)}: ${e.handoffs} hand-off${e.handoffs === 1 ? "" : "s"}`}</title>
+            </path>
+            {e.handoffs > 1 && <text x={e.to.x + 5} y={e.to.y - 21} fontSize="8.5" fill="var(--muted)">×{e.handoffs}</text>}
+          </g>
+        ))}
+        {layout.nodes.map((n) => {
+          const a: Agent | undefined = agents[n.agentId];
+          const c = a ? departments[a.departmentId]?.color ?? "var(--muted)" : "var(--muted)";
+          return (
+            <a key={n.key} href={href(`/agents/${n.agentId}`)} style={n.ghost ? { opacity: 0.75 } : undefined}>
+              <circle cx={n.x} cy={n.y} r={14} fill="var(--surface)" stroke={c} strokeWidth={2.5} strokeDasharray={n.ghost ? "3 2" : undefined} />
+              <text x={n.x} y={n.y + 3.5} textAnchor="middle" fontSize="9.5" fontWeight="650" fill="var(--ink)">{a ? a.name.split(" ").map((p) => p[0]).join("") : "?"}</text>
+              <text x={n.x} y={n.y + 27} textAnchor="middle" fontSize="9" fill="var(--muted)">{first(n.agentId)}</text>
+              <title>{a ? `${a.name}, ${a.title}${n.ghost ? " (also shown under their first delegator)" : ""}` : n.agentId}</title>
+            </a>
+          );
+        })}
+      </svg>
+    </div>
   );
 }
 

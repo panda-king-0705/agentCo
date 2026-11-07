@@ -13,7 +13,7 @@ import { block, type BrainRun } from "./runtime.ts";
 export async function readGlobalWorking(run: BrainRun, limit = 5): Promise<BlackboardEntry[]> {
   return block(run, "global_memory.working", "Reading the shared blackboard", (span) => {
     const entries = run.platform.memory
-      .blackboardList()
+      .blackboardCurrent()
       .slice()
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
       .slice(0, limit);

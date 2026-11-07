@@ -84,12 +84,12 @@ export const blackboardRead: ToolDefinition = {
     const memory = ctx.services.memory;
     if (typeof args.key === "string" && args.key) {
       const entry = memory.blackboardGet(args.key);
-      if (entry) return ok(`${entry.key} = ${entry.value}`, [], entry);
+      if (entry) return ok(`${entry.key} = ${memory.blackboardStale(entry.key) ? "[out of date: that objective was cancelled — do not rely on this note] " : ""}${entry.value}`, [], entry);
       // A miss is an answer, not a failure (it showed as a red error in every trace).
-      const keys = memory.blackboardList().map((e) => e.key);
+      const keys = memory.blackboardCurrent().map((e) => e.key);
       return ok(`No blackboard entry "${args.key}" (nobody has written it yet). ${keys.length ? `Existing keys: ${keys.slice(0, 30).join(", ")}.` : "The blackboard is empty."}`, [], { entry: null, keys });
     }
-    const entries = memory.blackboardList();
+    const entries = memory.blackboardCurrent();
     return ok(entries.length ? entries.map((e) => `- ${e.key}: ${oneLine(e.value, 300)}`).join("\n") : "The blackboard is empty.", [], { entries });
   },
 };

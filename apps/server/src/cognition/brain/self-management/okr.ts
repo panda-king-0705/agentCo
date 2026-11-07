@@ -75,14 +75,14 @@ export async function proposeFromOkrs(run: BrainRun): Promise<{ title: string; d
     const json = await llmJson(run, {
       stage: "self_management.identity.okr",
       span,
-      instructions: `Key result with the largest gap: "${gap.kr.description}" (${gap.kr.current}/${gap.kr.target}${gap.kr.unit}) under objective "${gap.objective.objective}". Propose ONE concrete objective that moves it.`,
+      instructions: `Key result with the largest gap: "${gap.kr.description}" (gauge ${gap.kr.current}/${gap.kr.target} — your own progress counter, not a company figure) under objective "${gap.objective.objective}". Propose ONE concrete objective that moves it.`,
       shape: '{"title": string, "description": string, "value": number 0-1000}',
       context: { okr: { objective: gap.objective.objective, keyResult: gap.kr.description } },
       maxOutputTokens: 500,
     });
     return {
       title: truncate(str(json.title, `Advance: ${gap.kr.description}`, 140), 140),
-      description: str(json.description, `Move "${gap.kr.description}" from ${gap.kr.current} toward ${gap.kr.target}${gap.kr.unit}.`, 1500),
+      description: str(json.description, `Make progress on "${gap.kr.description}".`, 1500),
       value: num(json.value, 300, 0, 1000),
     };
   });

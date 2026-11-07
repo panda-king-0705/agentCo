@@ -10,7 +10,7 @@
  * database directly; everything goes through PlatformServices so every side
  * effect is traced, budgeted and redacted in one place.
  */
-import type { Capability } from "./org/capabilities.ts";
+import type { Capability, ConnectedService } from "./org/capabilities.ts";
 import type {
   Agent,
   Approval,
@@ -230,6 +230,14 @@ export interface MemoryService {
   /** write(), saying whether an earlier memory of the same task was replaced (upsertWithinTask). */
   upsert(input: MemoryWriteInput): { item: MemoryItem; updated: boolean };
   blackboardList(): BlackboardEntry[];
+  /**
+   * The blackboard as agents read it: the note of an objective that was cancelled is out of date and
+   * left out (2026-11-08, trc_6ee6…: a cancelled attempt's "blocked: No email was sent…" was re-read
+   * eight times by the next attempt). The Board's console still lists everything.
+   */
+  blackboardCurrent(): BlackboardEntry[];
+  /** True for the note of a cancelled objective ("objective:T-247"). */
+  blackboardStale(key: string): boolean;
   blackboardGet(key: string): BlackboardEntry | null;
   blackboardSet(key: string, value: string, updatedBy: string): BlackboardEntry;
   /** Unread agent-to-agent messages addressed to this agent. */
@@ -357,7 +365,7 @@ export interface PlatformServices {
   metrics: MetricsView;
   tools: ToolExecutor;
   /** What the company and an agent can do outside it, from the enabled tools (org/capabilities.ts); optional for test wiring. */
-  capabilities?: { company(): ReadonlySet<Capability>; of(agent: Agent): ReadonlySet<Capability> };
+  capabilities?: { company(): ReadonlySet<Capability>; of(agent: Agent): ReadonlySet<Capability>; services?(): ConnectedService[] };
   memory: MemoryService;
   tracer: Tracer;
   org: OrgView;
