@@ -28,6 +28,28 @@ versioning: [SemVer](https://semver.org/).
     T-176 (Kenji Tanaka)"). They resume with that colleague's result when it is finished: no
     manager run and no escalation budget used. A brain blocked twice in one run escalates instead of
     re-planning the same blocker again.
+- Test 4, second run ($3.88, 25 min). The new structure held, but checking work kept looping:
+  - **Word counts now come from the tools.** Leaders asked for "a word count from a tool" and no
+    tool gave one, so every section failed that check. `workspace_write_file` and
+    `workspace_read_file` now report words, lines and characters (bullets and table bars don't
+    count as words). A save is read back on disk before the tool says "Saved and verified".
+    Leaders are told to set only checks these tools can do.
+  - **Read-backs come back whole.** The model saw at most 3,000 characters of any tool result, so
+    re-reading a 3.5k page always came back cut off and the reviewer rejected it as "truncated".
+    The limit is now one whole file read (21,000), and a read ends with "[end of … — complete]".
+  - **A revision fixes, it doesn't redo.** Sending delivered parts back re-planned the whole
+    objective, so all four parts were done twice (about $1.90). The re-plan is now told which parts
+    are delivered and where, and to send a fix only to the owner it concerns, doing small fixes
+    itself. Named owners get no extra slots in a fix round.
+  - **Open points for the Board are not defects.** The reviewer no longer sends work back over
+    decisions only the Board can make (prices, trade-offs), data nobody has, or clearly labelled
+    estimates. It lists them as open points.
+  - **No redo without time to finish it.** With less than 40% of the run's time limit left, an
+    agent hands in its best result with the open issues listed. Before, the assembler hit the
+    5-minute limit twice and lost the work each time.
+  - **More room to answer.** Reviews, problem definitions, analyses and plans were often cut off
+    and had to be asked again; their output limits are higher. Tool-loop steps get 4,000 tokens,
+    so a whole document fits in one save.
 - The out-of-steps wrap-up call (which has no tools) told the model to "finish with
   complete_task", and a worker answered that complete_task was not among its tools. It now says
   the plain-text reply is the result.

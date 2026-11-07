@@ -42,7 +42,7 @@ export async function generateNarrative(run: BrainRun, summary: string, outcome:
         reports: collaborators.map((c) => ({ id: c, title: c })),
         outcome,
       },
-      maxOutputTokens: 300,
+      maxOutputTokens: 500,
     });
     const narrative = str(json.narrative, id.narrative, 600);
     if (!narrative) return null;

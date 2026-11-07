@@ -73,7 +73,7 @@ export class ReflexEngine implements CognitiveEngine {
           (task.acceptanceCriteria ? `\nAcceptance criteria: ${truncate(task.acceptanceCriteria, 500)}` : ""),
       );
       parts.push(
-        "Do the work with your tools, then call complete_task with the concrete deliverable. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes). Call report_blocker only if the task truly cannot be done.",
+        "Do the work with your tools, then call complete_task with the concrete deliverable. Files you save go on the company drive where colleagues can read them — use the exact paths your brief names (private/… only for scratch notes). The file tools confirm each save and report word, line and character counts: quote those counts, they are tool-verified. Call report_blocker only if the task truly cannot be done.",
       );
     } else if (input.trigger === "message") {
       const recent = input.history.messages.slice(-6).map((m) => `${m.senderId === agent.id ? "you" : m.senderId}: ${oneLine(m.content, 300)}`);

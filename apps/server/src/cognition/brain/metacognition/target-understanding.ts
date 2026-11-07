@@ -84,7 +84,7 @@ export async function problemDefinition(run: BrainRun, gaps: string[] = []): Pro
         agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department, departmentSlug: run.facts.departmentSlug },
         gaps,
       },
-      maxOutputTokens: 450,
+      maxOutputTokens: 800,
     });
     const p = coerceProblem(json, fallbackTitle, isMessage ? "chat" : "work");
     if (!isMessage) p.intent = "work";
@@ -155,7 +155,7 @@ export async function analysis(run: BrainRun, problem: ProblemDefinition, litera
         task: run.task ? { number: run.task.number, title: run.task.title, description: run.task.description } : { title: problem.title, description: problem.problem },
         perspectives: n,
       },
-      maxOutputTokens: 200 + 120 * n,
+      maxOutputTokens: 400 + 160 * n,
     });
     const u = coerceUnderstanding(json, n, problem.problem);
     span.setAttributes({ "agentco.understanding": u.score, "agentco.perspectives": u.perspectives.length });

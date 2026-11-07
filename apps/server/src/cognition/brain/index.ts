@@ -152,6 +152,7 @@ export class BrainEngine implements CognitiveEngine {
       calls: [],
       insights: [],
       runTimeoutMs: this.runTimeoutMs,
+      startedMs: Date.now(),
       parent: null,
       currentBlock: null,
       ...(input.trigger === "message" ? {} : { escalation: readEscalation(input.task, input.subtasks, ctx.agent.id) }),
@@ -222,7 +223,7 @@ export class BrainEngine implements CognitiveEngine {
           "needsTask = true if the message asks for anything to be done or changed (even a small action such as recording or saving something); the task is then opened for you.",
         shape: '{"reply":string,"needsTask":boolean}',
         context: { mode: "message", message: input.message.content, agent: { name: run.agent.name, title: run.agent.title, department: run.facts.department } },
-        maxOutputTokens: 500,
+        maxOutputTokens: 700,
       }),
     );
     if (out.needsTask === true) {
@@ -569,6 +570,27 @@ export class BrainEngine implements CognitiveEngine {
         feedbackIssues = fb.issues.length ? fb.issues : [fb.summary];
         break;
       }
+      // Not enough run time left for another full pass: hand in the best result with its open
+      // issues instead of being killed mid-pass and losing the work (2026-11-07: Noah's assembly
+      // runs hit the 5-minute limit twice, each time starting over).
+      if (runTimeLow(run)) {
+        run.ctx.span.setAttributes({ "agentco.time_guard": fb.decision });
+        if (solution.kind === "solution" && solution.text.trim()) {
+          return this.report(run, {
+            outcome: "completed",
+            output: `${solution.text}\n\nOpen issues (not fixed: run time nearly used up):\n${(fb.issues.length ? fb.issues : [fb.summary]).map((i) => `- ${i}`).join("\n")}`,
+            score: fb.score,
+            summary: fb.summary,
+            predicted: u.confidence.calibrated,
+            events: [],
+            estimateUsd: persisted.estimateUsd,
+            plan: { ...persisted, feedback: [] },
+          });
+        }
+        if (canEscalate(run)) return this.escalateOutcome(run, `Out of run time on T-${task.number} without a result: ${truncate(fb.issues.join("; ") || fb.summary, 500)}`, u.confidence.calibrated);
+        feedbackIssues = fb.issues.length ? fb.issues : [fb.summary];
+        break;
+      }
       if (fb.decision === "rollback") {
         await rollbackRecovery(run, `rollback of candidate ${planned.chosen}`);
         rejected = [...rejected, planned.chosen];
@@ -756,10 +778,17 @@ export class BrainEngine implements CognitiveEngine {
     const pending = plan.subprocesses.filter((s) => s.round === 2 && !s.taskId && s.assigneeId);
     if (pending.length === 0) return null;
     const parts = children.filter((c) => c.state.kind !== "escalation");
-    if (parts.length === 0 || !parts.every((c) => c.status === "done")) return null;
+    // This plan's round 1 gates round 2 (after a revision, earlier parts are inputs, not gates).
+    const planned = new Set(plan.subprocesses.filter((s) => s.round !== 2 && s.taskId).map((s) => s.taskId));
+    const current = parts.filter((c) => planned.has(c.id));
+    const gate = current.length > 0 ? current : parts;
+    if (gate.length === 0 || !gate.every((c) => c.status === "done")) return null;
     const task = run.task!;
     const who = (id: string | null) => run.platform.org.getAgent(id ?? "")?.name ?? "someone";
-    const inputs = parts.map((c) => `- T-${c.number} "${truncate(c.title, 80)}" by ${who(c.assigneeId)}: ${truncate(oneLine(c.result ?? ""), 700)}`).join("\n");
+    const inputs = parts
+      .filter((c) => c.status === "done")
+      .map((c) => `- T-${c.number} "${truncate(c.title, 80)}" by ${who(c.assigneeId)}: ${truncate(oneLine(c.result ?? ""), 700)}`)
+      .join("\n");
     const briefed = pending.map((s) => ({ ...s, description: `${s.description}\n\nRound-1 results to work from (their files are on the company drive):\n${inputs}` }));
     const out = await block(run, "metacognition.solving_evaluation.solving", `Delegating round 2 of T-${task.number}`, async (span) => {
       const r = await delegateParts(run, span, briefed, children.map((c) => c.title));
@@ -771,7 +800,7 @@ export class BrainEngine implements CognitiveEngine {
     const subprocesses = plan.subprocesses.map((s) => (s.round === 2 && !s.taskId && started.has(s.title) ? { ...s, taskId: started.get(s.title) ?? null } : s));
     return {
       outcome: "waiting",
-      output: `Round 1 of T-${task.number} is done (${parts.length} part(s)); delegated round 2: ${out.delegated.map((s) => `"${truncate(s.title, 60)}" → ${who(s.assigneeId)}`).join("; ")}.`,
+      output: `Round 1 of T-${task.number} is done (${gate.length} part(s)); delegated round 2: ${out.delegated.map((s) => `"${truncate(s.title, 60)}" → ${who(s.assigneeId)}`).join("; ")}.`,
       taskState: { plan: { ...plan, subprocesses, costSoFarUsd: plan.costSoFarUsd + run.costUsd }, checkpoint: null },
     };
   }
@@ -962,6 +991,13 @@ export class BrainEngine implements CognitiveEngine {
     if (r.outcome === "blocked") return { outcome: "blocked", output: r.output, taskState };
     return { outcome: "failed", output: r.output, error: r.error ?? r.summary, taskState };
   }
+}
+
+/** Less than Q2_OOD.anotherPassMinTimeShare of the run's time limit left (wall clock since the engine started). */
+export function runTimeLow(run: BrainRun): boolean {
+  if (!(run.runTimeoutMs > 0)) return false;
+  const left = (run.runTimeoutMs - (Date.now() - run.startedMs)) / run.runTimeoutMs;
+  return left < Q2_OOD.anotherPassMinTimeShare;
 }
 
 /** Has THIS task had setbacks (a failed attempt, an escalation, a rejected or failed plan, a failed/blocked subtask)? */

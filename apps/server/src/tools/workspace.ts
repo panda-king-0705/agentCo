@@ -96,6 +96,8 @@ export class Workspaces {
       replaced = true;
     }
     writeFileSync(target.absolute, content, "utf8");
+    // The tool tells the agent the save is verified: make that true.
+    if (readFileSync(target.absolute, "utf8") !== content) throw new WorkspaceError(`saved ${target.display} does not read back as written`);
     return { display: target.display, area: target.area, replaced };
   }
 

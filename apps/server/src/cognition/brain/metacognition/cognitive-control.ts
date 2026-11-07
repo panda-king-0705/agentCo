@@ -148,7 +148,11 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
   const canDelegate = reports.length > 0 && run.platform.tools.specsFor(run.agent).some((t) => t.name === "delegate_task");
   const task = run.task!;
   // Owners the request names (the Board's split) each get a part: the cap never merges them away.
-  const named = canDelegate && task.state.kind !== "escalation" ? namedReports(run, reports, `${task.title} ${task.description}`) : [];
+  // A revision after parts were delivered fixes what the feedback names — it does not redo them
+  // (2026-11-07, test 4: a "read it back and count the words" verdict re-delegated all four parts, $1.90).
+  const delivered = a.feedback.length > 0 ? deliveredParts(run, task.id) : [];
+  // Owners the request names each get a part on the first plan; a fix round only goes to whoever a fix concerns.
+  const named = canDelegate && task.state.kind !== "escalation" && delivered.length === 0 ? namedReports(run, reports, `${task.title} ${task.description}`) : [];
   const max = maxSubprocessesFor(c, run.drives.essentialOnly, named.length);
 
   const decomposition = await block(
@@ -164,6 +168,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
           (canDelegate
             ? `Your direct reports:\n${reports.map((r) => `- ${r.id}: ${r.title} — ${oneLine(r.identity.mission, 120)}`).join("\n")}\n` +
               `Decompose into at most ${max} subprocesses, each for ONE report (assigneeId), with value 0-1000, estCostUsd and acceptanceCriteria; mode "delegate". ` +
+              "Write acceptance criteria the assignee's tools can check: the file tools confirm every save and report word, line and character counts — there is no other measuring tool — so do not ask for a separate read-back or a word count \"from a tool\" beyond that. " +
               "If the request names a department or person (\"have Finance…\", \"ask the CTO…\"), assign that part to them. " +
               (named.length
                 ? `The request names these owners — give each of them their own part (at least one part each): ${named.map((r) => `${r.id} (${r.title})`).join(", ")}. `
@@ -175,6 +180,10 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
               (task.state.kind === "escalation" ? 'This is a report\'s escalation: answer it yourself (mode "direct") with a decision or guidance unless the fix needs another report\'s work.\n' : "")
             : `You have no one to delegate to: mode "direct", subprocesses are your own steps (at most ${max}).\n`) +
           (a.feedback.length ? `Address this feedback: ${a.feedback.join("; ")}\n` : "") +
+          (delivered.length
+            ? `Already delivered — keep these, do NOT redo them:\n${delivered.join("\n")}\n` +
+              'Fix only what the feedback names, with as few parts as possible: send a fix only to the owner whose part it concerns (title it "Fix: …" and say exactly what to change), and do small fixes yourself (mode "direct"): an edit to the assembled page, a count, a note of open points. Points that only the Board can decide are not fixes — list them in your result.\n'
+            : "") +
           (a.lessons.length ? `From past runs:\n${a.lessons.slice(0, 5).map((l) => `- ${l}`).join("\n")}\n` : "") +
           "Also give exactly three candidate solutions: high_cost (thorough: higher tier, more steps, extra verification), low_cost (same scope, cheaper tiers, fewer steps), low_effort (smallest change that meets the criteria: reuse memory, existing files and subtask results); each {approach, estCostUsd, expectedValue 0-1000, meetsCriteria}.",
         shape:
@@ -188,7 +197,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
           feedback: a.feedback,
         },
         // Room for the whole plan: a cut-off reply lost every subprocess (json.ts now returns null for it).
-        maxOutputTokens: 900 + 300 * max,
+        maxOutputTokens: 1200 + 350 * max,
       });
       const subprocesses = coerceSubprocesses(json, max, Math.max(50, Math.round(task.value / Math.max(1, max))));
       let mode = oneOf(json.mode, ["delegate", "direct"] as const, subprocesses.length > 0 && canDelegate ? "delegate" : "direct");
@@ -215,6 +224,15 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
   });
 
   return { controlLevel: c, maxSubprocesses: max, mode: decomposition.mode, subprocesses: decomposition.subprocesses, candidates, rationale: decomposition.rationale };
+}
+
+/** Parts of this task already done by someone (escalations excluded), one line each for the re-plan. */
+export function deliveredParts(run: BrainRun, taskId: string): string[] {
+  return run.platform.tasks
+    .children(taskId)
+    .filter((c) => c.status === "done" && c.state.kind !== "escalation")
+    .slice(-8)
+    .map((c) => `- T-${c.number} "${truncate(c.title, 80)}" by ${run.platform.org.getAgent(c.assigneeId ?? "")?.name ?? "?"}: ${truncate(oneLine(c.result ?? "", 300), 300)}`);
 }
 
 /** The leader's direct reports whose department, role or name the request names. */
