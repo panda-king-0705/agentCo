@@ -34,6 +34,11 @@ export interface ModelConfig {
   profiles: ModelProfile[];
   providers: Record<string, ProviderConfig>;
   stageRouting: Record<string, StageTier>;
+  /**
+   * The independent validator's model (VALIDATOR_MODEL=provider:model): "same" = the stage's own tier;
+   * unset = the standard tier's fallback when it is on another provider (validation.ts).
+   */
+  validator: ModelProfile | "same" | null;
   /** MODEL_PRICES_JSON, keyed by profile id, model name or normalised model key. */
   priceOverrides: Record<string, PriceOverride>;
   mockLatencyMs: number;
@@ -73,6 +78,7 @@ export const DEFAULT_STAGE_ROUTING: Record<string, StageTier> = {
   "metacognition.monitoring.reverse_thinking": "economy",
   "metacognition.solving_evaluation.solving": "agent",
   "metacognition.solving_evaluation.feedback": "standard",
+  "metacognition.solving_evaluation.validation": "standard",
   "metacognition.project_management.reflection_replanning": "economy",
   "metacognition.project_management.online_learning": "economy",
   "self_management.identity.self_narrative": "economy",
@@ -229,6 +235,9 @@ export function loadModelConfig(env: NodeJS.ProcessEnv, options: LoadModelConfig
       if (p && p.provider !== "mock") wanted.add(p.provider);
     }
   }
+  const validatorSpec = (env.VALIDATOR_MODEL ?? "").trim();
+  const validatorParsed = validatorSpec && validatorSpec !== "same" ? parseModelSpec(validatorSpec) : null;
+  if (validatorParsed && validatorParsed.provider !== "mock") wanted.add(validatorParsed.provider);
   for (const name of wanted) {
     const pc = providerConfig(name, env);
     if (pc) providers[name] = pc;
@@ -268,6 +277,15 @@ export function loadModelConfig(env: NodeJS.ProcessEnv, options: LoadModelConfig
       if (p && !profiles.some((x) => x.id === p.id)) profiles.push(p);
     }
   }
+  let validator: ModelConfig["validator"] = validatorSpec === "same" ? "same" : null;
+  if (validatorSpec && validatorSpec !== "same") {
+    const built = buildProfile(partial, validatorSpec, "standard", options.now);
+    if (!built) warnings.push(`VALIDATOR_MODEL=${validatorSpec} unavailable; the validator uses its default`);
+    else {
+      validator = built;
+      if (!profiles.some((x) => x.id === built.id)) profiles.push(built);
+    }
+  }
 
   const intEnv = (name: string, def: number): number => {
     const raw = env[name];
@@ -284,6 +302,7 @@ export function loadModelConfig(env: NodeJS.ProcessEnv, options: LoadModelConfig
     profiles,
     providers,
     stageRouting,
+    validator,
     priceOverrides,
     mockLatencyMs: intEnv("MOCK_LATENCY_MS", 400),
     requestTimeoutMs: intEnv("MODEL_TIMEOUT_MS", 120_000),

@@ -179,6 +179,10 @@ export interface LlmOptions {
   maxOutputTokens?: number;
   /** Override the routed tier (rare). */
   tier?: ModelTier;
+  /** Replaces the agent's charter at the top of the prompt (the independent validator has none of the leader's). */
+  charter?: string;
+  /** A model profile id for this call instead of the agent's own (the validator's other provider). */
+  modelOverride?: string | null;
 }
 
 function tierFor(run: BrainRun, stage: string): ModelTier {
@@ -194,12 +198,13 @@ export async function llmJson(run: BrainRun, o: LlmOptions): Promise<Json> {
   const tier = o.tier ?? tierFor(run, o.stage);
   const maxOutputTokens = o.maxOutputTokens ?? 700;
   const messages: ChatMessage[] = [
-    { role: "system", content: systemPrompt(o.stage, [run.charter, o.instructions, jsonContract(o.shape), sizeBudget(maxOutputTokens)], o.context) },
+    { role: "system", content: systemPrompt(o.stage, [o.charter ?? run.charter, o.instructions, jsonContract(o.shape), sizeBudget(maxOutputTokens)], o.context) },
     { role: "user", content: o.user ?? "Go." },
   ];
+  const modelOverride = o.modelOverride !== undefined && o.modelOverride !== null ? o.modelOverride : run.routingAgent.modelOverride;
   let started = Date.now();
   let response = await run.platform.models.chat(
-    { tier, modelOverride: run.routingAgent.modelOverride, messages, responseFormat: "json", maxOutputTokens, temperature: 0.2 },
+    { tier, modelOverride, messages, responseFormat: "json", maxOutputTokens, temperature: 0.2 },
     callContext(run, o.span, o.stage),
   );
   recordCall(run, o.stage, response, Date.now() - started, response.json !== null);
@@ -211,7 +216,7 @@ export async function llmJson(run: BrainRun, o: LlmOptions): Promise<Json> {
     response = await run.platform.models.chat(
       {
         tier,
-        modelOverride: run.routingAgent.modelOverride,
+        modelOverride,
         messages: [
           ...messages,
           { role: "assistant", content: truncate(response.content || "(empty)", 2000) },

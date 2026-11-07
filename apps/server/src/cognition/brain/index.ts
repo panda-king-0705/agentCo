@@ -26,6 +26,7 @@ import { writeReport } from "./global-memory.ts";
 import { CANDIDATE_NAMES, Q2_OOD, Q3_FALLBACK, Q4_CONTROL, Q8_HUMAN_NATURE, type CandidateName } from "./interpretation.ts";
 import { assessConfidence, fallbackTarget, proceedOnAssumptions, shouldEarlyStop, type ConfidenceAssessment, type FallbackTarget } from "./metacognition/confidence.ts";
 import { cognitiveControl, insideFix, type ControlOutput, type Subprocess } from "./metacognition/cognitive-control.ts";
+import { contractFrom, contractLines, readContract, validationSection, type Assertion } from "./metacognition/validation.ts";
 import { oodMonitoring, reverseThinking, updateCalibration, type OodReport } from "./metacognition/monitoring.ts";
 import {
   dataDrivenAnalysis,
@@ -72,10 +73,26 @@ export interface PersistedPlan {
   costSoFarUsd: number;
   /** Steps the request needs that this company cannot do: the Board's, never a shortfall (org/capabilities.ts). */
   boardSteps: string[];
+  /** The objective's contract (validation.ts): fixed when the objective opens, root tasks only. */
+  contract: Assertion[];
 }
 
 /** After one round of fixes, what is still open goes to the Board with the work instead of another round (2026-11-07, test 6). */
 const REWORK_ROUNDS = 1;
+
+/**
+ * The objective's contract: the one fixed when it opened (task state), else — for an objective the
+ * Board created directly — its first plan's success criteria. Root objectives only; heartbeats and
+ * other system objectives have none.
+ */
+function contractFor(run: BrainRun, prior: PersistedPlan | null, criteria: readonly string[]): Assertion[] {
+  const task = run.task;
+  if (!task || task.parentTaskId) return [];
+  if (prior?.contract.length) return prior.contract;
+  const opened = readContract(task.state.contract);
+  if (opened.length) return opened;
+  return task.createdBy === "human" ? contractFrom(criteria) : [];
+}
 
 /**
  * Fix rounds left to this task. A fix handed down is itself the round: whoever gets "Fix: …" (and
@@ -115,16 +132,19 @@ function readPlan(task: Task): PersistedPlan | null {
     feedback: strArr(p.feedback, 8, 240),
     costSoFarUsd: num(p.costSoFarUsd, 0, 0),
     boardSteps: strArr(p.boardSteps, 4, 200),
+    contract: readContract(p.contract),
   };
 }
 
 /** The reply that opens an objective; a step the company cannot do is said up front. */
-export function openedReply(task: Pick<Task, "number" | "title">, boardSteps: string[]): string {
-  const base = `Opened T-${task.number}: ${task.title.replace(/[.\s]+$/, "")}. I'll work it through and report back here when it's done.`;
+export function openedReply(task: Pick<Task, "number" | "title">, boardSteps: string[], contract: readonly Assertion[] = []): string {
+  const opened = `Opened T-${task.number}: ${task.title.replace(/[.\s]+$/, "")}. I'll work it through and report back here when it's done.`;
+  // What "done" means, fixed now and checked independently at the end (validation.ts).
+  const base = contract.length ? `${opened}\n\nDone means:\n${contractLines(contract)}\n\nThe finished work is checked against exactly these by a model that did not do it.` : opened;
   const steps = uniqueSteps(boardSteps).map((s) => s.replace(/[.;\s]+$/, ""));
   if (!steps.length) return base;
   const one = steps.length === 1;
-  return `${base} One thing up front: this company can't do ${one ? "this step" : "these steps"}, so ${one ? "it is" : "they are"} left to you: ${steps.join("; ")}. I'll prepare everything up to ${one ? "it" : "them"}.`;
+  return `${base}${contract.length ? "\n\n" : " "}One thing up front: this company can't do ${one ? "this step" : "these steps"}, so ${one ? "it is" : "they are"} left to you: ${steps.join("; ")}. I'll prepare everything up to ${one ? "it" : "them"}.`;
 }
 
 const STEP_STOPWORDS = new Set(["the", "a", "an", "to", "of", "and", "or", "for", "from", "with", "in", "on", "our", "this", "that", "it", "is", "be", "by", "board", "you", "your"]);
@@ -293,14 +313,16 @@ export class BrainEngine implements CognitiveEngine {
           originConversationId: input.history.conversation.id,
           acceptanceCriteria: problem.successCriteria.join("; ") || null,
         });
-        span.setAttributes({ "agentco.task.id": t.id, "agentco.task.number": t.number });
-        // Steps the company cannot do travel with the objective: its review never counts them short.
-        return problem.boardSteps.length ? run.platform.tasks.patchState(t.id, { boardSteps: problem.boardSteps }) : t;
+        span.setAttributes({ "agentco.task.id": t.id, "agentco.task.number": t.number, "agentco.contract": contract.map((a) => a.id).join(",") });
+        // Steps the company cannot do travel with the objective (its review never counts them short),
+        // and so does the contract: what "done" means, fixed now (validation.ts).
+        return run.platform.tasks.patchState(t.id, { ...(problem.boardSteps.length ? { boardSteps: problem.boardSteps } : {}), ...(contract.length ? { contract } : {}) });
       });
+    const contract = contractFrom(problem.successCriteria);
 
     if (problem.intent === "work") {
       const task = await openObjective(problem.title);
-      return { outcome: "completed", output: openedReply(task, problem.boardSteps) };
+      return { outcome: "completed", output: openedReply(task, problem.boardSteps, contract) };
     }
 
     // A chat reply has no tools: it cannot act. The reply model also says whether the message asks
@@ -323,7 +345,7 @@ export class BrainEngine implements CognitiveEngine {
     if (out.needsTask === true) {
       run.ctx.span.setAttributes({ "agentco.chat.needs_task": true });
       const task = await openObjective(problem.title);
-      return { outcome: "completed", output: openedReply(task, problem.boardSteps) };
+      return { outcome: "completed", output: openedReply(task, problem.boardSteps, contract) };
     }
     const reply = typeof out.reply === "string" ? out.reply.trim() : "";
     return { outcome: "completed", output: reply || "Noted — I'll follow up." };
@@ -474,6 +496,7 @@ export class BrainEngine implements CognitiveEngine {
       feedback: [],
       costSoFarUsd: 0,
       boardSteps: strArr(task.state.boardSteps, 4, 200),
+      contract: readContract(task.state.contract),
     };
   }
 
@@ -571,6 +594,9 @@ export class BrainEngine implements CognitiveEngine {
       return { outcome: "waiting", output: `Waiting for the new hire's first task: ${firstTasks.map((c) => `T-${c.number} "${truncate(c.title, 60)}"`).join(", ")}.`, taskState: { checkpoint: null } };
     }
     const u = await this.understand(run);
+    // The objective's contract (root only): fixed when it opened; planning and every review use it.
+    const contract = contractFor(run, prior, u.problem.successCriteria);
+    if (contract.length) u.problem.successCriteria = contract.map((a) => a.text);
 
     // Early Stop? (the Board's explicit go-ahead overrides a low-confidence stop once). Frustration
     // is about setbacks on THIS task: a fresh task is not stopped by frustration from other work
@@ -609,10 +635,10 @@ export class BrainEngine implements CognitiveEngine {
       // Resumed at Solving: the chosen plan is in working memory — no re-planning.
       const restored = attempt === 0 ? (run.wm.planned as { control: ControlOutput; chosen: CandidateName } | undefined) : undefined;
       if (!restored) interruptCheck(run, "metacognition.cognitive_control.decomposition");
-      const planned = restored ?? (await this.planPhase(run, u, feedbackIssues, rejected));
+      const planned = restored ?? (await this.planPhase(run, u, feedbackIssues, rejected, contract));
       run.wm.planned = { control: planned.control, chosen: planned.chosen };
       if (restored) run.ctx.span.setAttributes({ "agentco.resumed.plan": planned.chosen });
-      const persisted = this.persist(run, u, planned.control, planned.chosen, revision, rejected, feedbackIssues, prior);
+      const persisted = this.persist(run, u, planned.control, planned.chosen, revision, rejected, feedbackIssues, prior, contract);
       this.patch(run, { plan: persisted, checkpoint: null });
 
       interruptCheck(run, "metacognition.solving_evaluation.solving");
@@ -676,6 +702,7 @@ export class BrainEngine implements CognitiveEngine {
           rollbackAvailable: rejected.length < CANDIDATE_NAMES.length - 1,
           canEscalate: canEscalate(run),
           boardSteps: persisted.boardSteps,
+          contract: persisted.contract,
         }),
       );
       // One round of fixes already made: what is still open goes up with the work, not into another round.
@@ -685,7 +712,7 @@ export class BrainEngine implements CognitiveEngine {
         // Board decisions under "Open points"; what the work still lacks after the fix round under "Not finished".
         const points = pointsBesides(fb.openPoints, persisted.boardSteps);
         const unfinished = reworkCapped ? unfinishedPoints(pointsBesides(fb.issues, persisted.boardSteps)) : [];
-        const body = [solution.text, points.length ? `## Open points for the Board\n${points.map((p) => `- ${p}`).join("\n")}` : "", unfinished.length ? unfinishedSection(unfinished) : ""].filter(Boolean).join("\n\n");
+        const body = [solution.text, fb.validation ? validationSection(fb.validation) : "", points.length ? `## Open points for the Board\n${points.map((p) => `- ${p}`).join("\n")}` : "", unfinished.length ? unfinishedSection(unfinished) : ""].filter(Boolean).join("\n\n");
         const output = withBoardSteps(body, persisted.boardSteps, !task.parentTaskId);
         return this.report(run, { outcome: "completed", output, score: fb.score, summary: fb.summary, predicted: u.confidence.calibrated, events: [], estimateUsd: persisted.estimateUsd, plan: { ...persisted, feedback: [] } });
       }
@@ -748,7 +775,7 @@ export class BrainEngine implements CognitiveEngine {
     });
   }
 
-  private async planPhase(run: BrainRun, u: Understood, feedbackIssues: string[], rejected: CandidateName[]) {
+  private async planPhase(run: BrainRun, u: Understood, feedbackIssues: string[], rejected: CandidateName[], contract: Assertion[] = []) {
     const task = run.task!;
     return phase(run, "planning", async () => {
       const data = await dataDrivenAnalysis(run, `${u.problem.problem} ${task.title}`);
@@ -762,6 +789,7 @@ export class BrainEngine implements CognitiveEngine {
         preferDelegation: u.competence.preferDelegation,
         pressureSignals: u.ood.pressure.length,
         lessons: data.lessons,
+        contract,
       });
       const pressure = u.ood.pressure.length > 0 || data.favourCheap;
       const choose = () =>
@@ -810,6 +838,7 @@ export class BrainEngine implements CognitiveEngine {
     rejected: CandidateName[],
     feedbackIssues: string[],
     prior: PersistedPlan | null,
+    contract: Assertion[] = [],
   ): PersistedPlan {
     const cand = control.candidates.find((c) => c.name === chosen);
     return {
@@ -830,6 +859,7 @@ export class BrainEngine implements CognitiveEngine {
       feedback: feedbackIssues,
       costSoFarUsd: prior?.costSoFarUsd ?? 0,
       boardSteps: uniqueSteps([...(u.problem.boardSteps ?? []), ...(prior?.boardSteps ?? []), ...strArr(run.task!.state.boardSteps, 4, 200)]).slice(0, 4),
+      contract,
     };
   }
 
@@ -858,6 +888,7 @@ export class BrainEngine implements CognitiveEngine {
         rollbackAvailable: plan.rejected.length < CANDIDATE_NAMES.length - 1,
         canEscalate: canEscalate(run),
         boardSteps: plan.boardSteps,
+        contract: plan.contract,
       }),
     );
     // One round of fixes already made: the same work is not re-reviewed again — what is still open goes
@@ -871,6 +902,7 @@ export class BrainEngine implements CognitiveEngine {
         unfinished: reworkCapped ? unfinishedPoints(pointsBesides(fb.issues, plan.boardSteps)) : [],
         files: saved,
         names: (id) => run.platform.org.getAgent(id ?? "")?.name ?? "someone",
+        validation: fb.validation,
       });
       return this.report(run, { outcome: "completed", output: withBoardSteps(output, plan.boardSteps, !task.parentTaskId), score: fb.score, summary: fb.summary, predicted: plan.confidence, events, estimateUsd: plan.estimateUsd, plan: { ...plan, feedback: [] } });
     }

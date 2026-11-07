@@ -15,6 +15,8 @@ import type { Competence } from "./self-ability.ts";
 import type { ProblemDefinition, Understanding } from "./target-understanding.ts";
 import { isHiringRequest, normTitle } from "./solving-evaluation.ts";
 import { describeHire, objectiveHires } from "../../../tools/builtins/hiring.ts";
+import { contractList, type Assertion } from "./validation.ts";
+import { overlap } from "../../text.ts";
 
 export interface Subprocess {
   /**
@@ -29,6 +31,8 @@ export interface Subprocess {
   value: number;
   estCostUsd: number;
   acceptanceCriteria: string;
+  /** The contract statements (A1…) this part makes true (validation.ts). */
+  covers?: string[];
   suggestedAssigneeId: string | null;
   assigneeId: string | null;
   fit: number | null;
@@ -94,6 +98,9 @@ export function coerceSubprocesses(json: Record<string, unknown>, max: number, f
       value: num(s.value, fallbackValue, 0, 1000),
       estCostUsd: num(s.estCostUsd ?? s.cost, 0.05, 0.001, 50),
       acceptanceCriteria: str(s.acceptanceCriteria, `A concrete written deliverable for "${truncate(title, 80)}"`, 600),
+      covers: arr(s.covers)
+        .map((c) => String(c).trim().toUpperCase())
+        .filter((c) => /^A\d+$/.test(c)),
       suggestedAssigneeId: typeof s.assigneeId === "string" && s.assigneeId ? s.assigneeId : null,
       assigneeId: null,
       fit: null,
@@ -141,6 +148,8 @@ export interface DecomposeArgs {
   pressureSignals: number;
   /** Data-driven Analysis: optimization insights + past-cost notes for the prompt. */
   lessons: string[];
+  /** The objective's contract (root only): what "done" means, fixed before the work starts. */
+  contract?: Assertion[];
 }
 
 /** Blocks: decomposition (+ role arrangement) and candidate solutions, from one agent-tier call. */
@@ -192,6 +201,9 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
                 ? "Hiring: the head of the team the new hire joins makes the hire — hire_agent places people only in the hirer's own team and takes monthlyBudgetUsd and firstTask (their first assignment, with the exact file path). The budget is the new hire's monthly model budget, set by the hirer: the catalog has no prices. A recruiter in People finds and recommends the candidate first (catalog id and why). Plan the recommendation as round 1 (to the head of People, for their recruiter) and the hire — with budget and first task — as round 2 (to the receiving department's head). The recommendation step only recommends; the hire step uses the request's own budget and first task word for word (a \"$10 monthly budget\" is $10, not \"up to $10\"). "
                 : "") +
               (hires.length ? `Already done on this objective: ${hires.map(describeHire).join("; ")}. Do not plan another hire. ` : "") +
+              (a.contract?.length
+                ? `What "done" means for this objective — fixed before the work starts; an independent checker judges the finished work against exactly these: ${contractList(a.contract)}. Give every part "covers": the ids of the statements it makes true; together the parts cover all of them, and each part's acceptance criteria come from its statements. `
+                : "") +
               "Carry the request's own figures into the parts word for word — budgets, word counts, dates, file paths. " +
               "A document for outsiders (investors, customers) holds only what they should read: never brief anyone to add review notes, condition lists or change logs to it — those go in the review file. A part that changes an existing document names the section(s) to change; its owner edits them in place. " +
               "Name the exact file path each part saves to in its description (e.g. launch-plan/finance.md), and the path of the combined document in the round-2 step. If the same document already exists on the drive (listed below), reuse its path: saving replaces it and keeps the previous version. Never ask for a second copy of a document under another name. " +
@@ -205,7 +217,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
           (a.lessons.length ? `From past runs:\n${a.lessons.slice(0, 5).map((l) => `- ${l}`).join("\n")}\n` : "") +
           "Also give exactly three candidate solutions: high_cost (thorough: higher tier, more steps, extra verification), low_cost (same scope, cheaper tiers, fewer steps), low_effort (smallest change that meets the criteria: reuse memory, existing files and subtask results); each {approach, estCostUsd, expectedValue 0-1000, meetsCriteria}.",
         shape:
-          '{"mode":"delegate"|"direct","subprocesses":[{"title":string,"description":string,"assigneeId":string,"round":1|2,"value":number,"estCostUsd":number,"acceptanceCriteria":string}],"candidates":[{"name":"high_cost"|"low_cost"|"low_effort","approach":string,"estCostUsd":number,"expectedValue":number,"meetsCriteria":boolean}],"rationale":string}',
+          '{"mode":"delegate"|"direct","subprocesses":[{"title":string,"description":string,"assigneeId":string,"round":1|2,"value":number,"estCostUsd":number,"acceptanceCriteria":string,"covers":["A1"]}],"candidates":[{"name":"high_cost"|"low_cost"|"low_effort","approach":string,"estCostUsd":number,"expectedValue":number,"meetsCriteria":boolean}],"rationale":string}',
         context: {
           mode: "task",
           task: { number: task.number, title: task.title, description: task.description, acceptanceCriteria: task.acceptanceCriteria },
@@ -231,6 +243,11 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
       if (mode === "delegate") await arrangeRoles(run, subprocesses, reports);
       const assigned = subprocesses.filter((s) => s.assigneeId);
       if (mode === "delegate" && assigned.length === 0) mode = "direct";
+      // Each brief carries the contract statements its part must make true; none is left uncovered.
+      // In a fix round, only the statements the feedback names are in play (never the whole contract again).
+      const fixing = delivered.length > 0 ? [...new Set(a.feedback.flatMap((f) => f.match(/\bA\d+\b/g) ?? []))] : null;
+      const uncovered = mode === "delegate" && a.contract?.length ? attachContract(assigned, a.contract, fixing) : [];
+      if (uncovered.length) span.setAttributes({ "agentco.contract.uncovered_assigned": uncovered.join(",") });
       span.setAttributes({
         "agentco.control_level": c,
         "agentco.decomposition.mode": mode,
@@ -438,4 +455,35 @@ export function keepReviewsIndependent(
     }
   }
   return changes;
+}
+
+/**
+ * Puts each part's contract statements in its acceptance criteria (the worker sees the bar up front).
+ * A statement no part claims goes to the round-2 part (assembly or review), else to the part whose
+ * text is closest to it. Returns the ids that were assigned that way.
+ */
+export function attachContract(parts: Subprocess[], contract: readonly Assertion[], fixing: readonly string[] | null = null): string[] {
+  if (parts.length === 0) return [];
+  const known = new Set(contract.map((c) => c.id));
+  const namedNone = new Set(parts.filter((p) => !(p.covers ?? []).some((id) => known.has(id))));
+  for (const p of parts) p.covers = (p.covers ?? []).filter((id) => known.has(id) && (!fixing || fixing.includes(id)));
+  // A fix round: parts that name no statement get the ones the feedback names; nothing else is added.
+  if (fixing) {
+    for (const p of parts) if (namedNone.has(p)) p.covers = fixing.filter((id) => known.has(id));
+  }
+  const claimed = new Set(parts.flatMap((p) => p.covers ?? []));
+  const added: string[] = [];
+  for (const c of contract) {
+    if (fixing) break;
+    if (claimed.has(c.id)) continue;
+    const last = parts.filter((p) => p.round === 2).at(-1);
+    const best = last ?? [...parts].sort((x, y) => overlap(`${y.title} ${y.description}`, c.text) - overlap(`${x.title} ${x.description}`, c.text))[0]!;
+    best.covers = [...(best.covers ?? []), c.id];
+    added.push(c.id);
+  }
+  for (const p of parts) {
+    if (!p.covers?.length) continue;
+    p.acceptanceCriteria = `${p.acceptanceCriteria} This part must make true (the objective's contract, checked independently at the end): ${contractList(contract, p.covers)}.`.slice(0, 3500);
+  }
+  return added;
 }

@@ -137,6 +137,15 @@ class ModelRouterImpl implements ModelRouter {
     return this.config.tiers[tier].primary;
   }
 
+  /** The validator's model profile id (contracts.ts › ModelRouter.validatorProfile). */
+  validatorProfile(): string | null {
+    const v = this.config.validator;
+    if (v === "same") return null;
+    if (v) return v.id;
+    const t = this.config.tiers.standard;
+    return t.fallback && t.fallback.provider !== "mock" && t.fallback.provider !== t.primary.provider ? t.fallback.id : null;
+  }
+
   tierForStage(stage: string, agent: Agent): ModelTier {
     let routed: StageTier | undefined;
     // Exact key, then dotted prefixes ("a.b.c" → "a.b" → "a").

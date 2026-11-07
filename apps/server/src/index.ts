@@ -25,6 +25,9 @@ async function main(): Promise<void> {
   // tier → model → provider, live or mock. Never prints keys or base URLs.
   console.log(`  models (managers on ${config.managerModelTier}, MANAGER_MODEL_TIER):`);
   for (const line of modelSummaryLines(modelConfig, config.managerModelTier)) console.log(`    ${line}`);
+  // The independent checker (validation.ts): another provider's model where one is configured.
+  const checker = app.platform.models.validatorProfile?.() ?? null;
+  console.log(`  checker (VALIDATOR_MODEL): ${checker ?? "the standard tier (no second provider)"} — judges finished objectives against what "done" means`);
   if (config.authRequired) console.log("  auth: bearer token required (APP_AUTH_TOKEN)");
 
   let stopping = false;

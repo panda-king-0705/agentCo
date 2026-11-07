@@ -150,6 +150,12 @@ export interface ModelRouter {
   /** The tier a stage should use, from stage routing config ("agent" = the agent's own tier). */
   tierForStage(stage: string, agent: Agent): ModelTier;
   isLive(): boolean;
+  /**
+   * The model profile the independent validator uses (cognition/brain/metacognition/validation.ts):
+   * VALIDATOR_MODEL, else the standard tier's fallback when it is another provider — a checker that
+   * does not share the leader's model. null = the stage's own tier.
+   */
+  validatorProfile?(): string | null;
 }
 
 /** One provider adapter (openai-compatible, mock, ...). */

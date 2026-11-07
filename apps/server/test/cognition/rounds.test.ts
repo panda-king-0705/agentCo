@@ -519,7 +519,8 @@ test("a step the company can't do is said in the first reply and left to the Boa
   const { ceo } = company(p);
   const r = await new BrainEngine({ maxRevisions: 2 }).run(p.context(ceo, messageInput("Email our investors this month's update.")));
   assert.equal(r.outcome, "completed", r.error ?? r.output);
-  assert.match(r.output, /^Opened T-\d+: Draft the monthly investor update\. I'll work it through and report back here when it's done\. One thing up front: this company can't do this step, so it is left to you: Send the update to the investors\. I'll prepare everything up to it\.$/);
+  // 2026-11-08: the reply also says what "done" means (the contract), then the Board's step.
+  assert.match(r.output, /^Opened T-\d+: Draft the monthly investor update\. I'll work it through and report back here when it's done\.\n\nDone means:\n1\. [^\n]+\n\nThe finished work is checked against exactly these by a model that did not do it\.\n\nOne thing up front: this company can't do this step, so it is left to you: Send the update to the investors\. I'll prepare everything up to it\.$/);
   const [objective] = [...p.taskMap.values()];
   assert.deepEqual(objective!.state.boardSteps, ["Send the update to the investors"]);
   assert.equal(objective!.acceptanceCriteria, "The draft reflects current company results.", "the send is not a criterion");
