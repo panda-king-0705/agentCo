@@ -6,6 +6,15 @@ versioning: [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Model outages (2026-11-07, test 5):
+  - **Account errors skip the provider.** When a provider fails on the account (no credit, quota
+    used up, key refused), the router skips it for 10 minutes and goes straight to the fallback,
+    with one warning in the log and `agentco.primary_skipped` on each span. Before, every call
+    paid a failed round trip first.
+  - **The OpenAI fallback can use tools.** gpt-6.1-sol refuses function tools on chat completions
+    while its default reasoning is on, so every tool step failed. The adapter now retries with
+    `reasoning_effort: "none"` and remembers that per model, the same way it already handles the
+    temperature and response_format quirks.
 - Test 4 (a one-page plan split across four executives) cost $4.59 over 13 tasks and produced no
   page. Five fixes:
   - **Files are shared by default.** A plain path (`launch-plan/gtm.md`) now saves on the company
