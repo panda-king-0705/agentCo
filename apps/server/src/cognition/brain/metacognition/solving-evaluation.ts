@@ -10,7 +10,7 @@
  * gates (truthful / efficient / good) → accept | revise | rollback | escalate,
  * or fail once nothing is left to try (no revision, rollback or escalation).
  */
-import { limitsLine } from "../../../org/capabilities.ts";
+import { limitStops, limitsLine, utcClock } from "../../../org/capabilities.ts";
 import { EDIT_IN_PLACE_RULE, OUTSIDE_DOC_RULE, REPO_SAVED } from "../../../org/rules.ts";
 import type { ModelTier, Task } from "../../../../../../packages/shared/src/index.ts";
 import type { SpanHandle, ToolEffect } from "../../../contracts.ts";
@@ -309,6 +309,10 @@ export async function feedback(
     const hires = run.task ? objectiveHires(run.platform.tasks, run.platform.tasks.get(run.task.id) ?? run.task) : [];
     span.setAttributes({ "agentco.feedback.files": files.map((f) => f.display).join(", "), ...(hires.length ? { "agentco.feedback.hires": hires.length } : {}) });
     // The independent check comes first: the contract and the saved work only (validation.ts).
+    // A service's daily limit that stopped this work and no one can use yet (2026-11-08, trc_7b9b…:
+    // three engineers were out of GitHub calls; the review sent the work back to them anyway).
+    const stops = limitStops(run.platform.limitRefusals?.(run.ctx.run.traceId) ?? [], run.platform.capabilities?.services?.() ?? []);
+    if (stops.length) span.setAttributes({ "agentco.feedback.limit_stops": stops.map((s) => `${s.server} until ${s.until}`).join("; ") });
     const validation = o.contract?.length ? await validateContract(run, span, { contract: o.contract, files: checkFiles, solution: results.length ? null : o.solution, boardSteps: o.boardSteps ?? [] }) : null;
     const json = await llmJson(run, {
       stage: "metacognition.solving_evaluation.feedback",
@@ -319,6 +323,9 @@ export async function feedback(
           ? `What "done" means was fixed before the work started (${contractList(o.contract!)}). An independent checker, who did not do the work, judged the saved work against it:\n${validationBrief(validation)}\n` +
             "Send work back (revise) only for statements the checker found UNMET, and name the statement in each issue (\"A2: …\"). Nothing outside these statements is a reason to revise — at most a note. Statements that need the Board go in openPoints.\n"
           : "") +
+        stops
+          .map((s) => `The ${s.server} daily limit stopped part of this work, and no one can use ${s.server} again until ${utcClock(s.until)}: what it blocked is not a reason to revise — list it in openPoints (it can be finished after that, or sooner if the Board raises the limit).\n`)
+          .join("") +
         // 2026-11-07 (test 6): "No email was sent" was the first shortfall a review reported — for a
         // company that cannot send email.
         (o.boardSteps?.length
@@ -385,6 +392,14 @@ export async function feedback(
       if (decision === "revise") issues.splice(0, issues.length, ...validation.unmet.map((c) => `${c.id} not met (${truncate(c.text, 120)}): ${c.gap || "not shown in the saved work"}`));
       openPointsExtra = validation.board.map((c) => `${truncate(c.text, 140)} — ${c.gap || "needs the Board"}`);
       if (before !== decision) span.setAttributes({ "agentco.validation.decision": `${before}→${decision}` });
+    }
+    // A fix round can't get past a used-up limit: report what is left and when it can go on.
+    if (stops.length) {
+      if (decision === "revise") {
+        decision = "accept";
+        span.setAttributes({ "agentco.feedback.limit_decision": "revise→accept" });
+      }
+      for (const s of stops) openPointsExtra.push(`The ${s.server} daily limit stopped this work before it was finished; the company can use ${s.server} again from ${utcClock(s.until)}. Ask again then, or raise the limit (dailyCallLimit in config/mcp.json).`);
     }
     const summary = str(json.summary, results.length ? `${results.filter((r) => r.status === "done").length}/${results.length} parts delivered.` : truncate(o.solution ?? "", 300), 1200);
     span.setAttributes({ "agentco.score": score, "agentco.decision": decision, "agentco.decision.model": modelDecision, "agentco.accept_threshold": threshold, "agentco.feedback.degraded": degraded });

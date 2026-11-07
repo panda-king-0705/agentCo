@@ -42,6 +42,8 @@ export interface ConnectedService {
   holders: readonly string[];
   /** The founder's note for it (mcp.json "notes"), e.g. which repository is ours. */
   notes?: string;
+  /** Holders who have used up its daily limit, with when each can call again (ISO). */
+  spent?: readonly { name: string; freesAt: string }[];
 }
 
 const label = (c: Capability) => OUTSIDE_STEPS.find((s) => s.capability === c)?.can ?? EXTRA_CAN[c] ?? c;
@@ -55,8 +57,35 @@ const label = (c: Capability) => OUTSIDE_STEPS.find((s) => s.capability === c)?.
 export function servicesLine(services: readonly ConnectedService[]): string {
   const live = services.filter((s) => s.holders.length > 0);
   if (!live.length) return "";
-  const list = live.map((s) => `${s.name}${s.grants.length ? ` (${s.grants.map(label).join("; ")})` : ""} — ${s.holders.slice(0, 6).join(", ")}${s.holders.length > 6 ? ` and ${s.holders.length - 6} more` : ""}${s.notes ? ` [${s.notes}]` : ""}`);
+  const list = live.map((s) => `${s.name}${s.grants.length ? ` (${s.grants.map(label).join("; ")})` : ""} — ${s.holders.slice(0, 6).join(", ")}${s.holders.length > 6 ? ` and ${s.holders.length - 6} more` : ""}${s.notes ? ` [${s.notes}]` : ""}${spentNote(s)}`);
   return `Connected services the company already has: ${list.join("; ")}. A request that names one is work the company can do — give that part to someone who has it (or their manager); it is never a Board step.`;
+}
+
+/** "2026-11-08 14:41 UTC" */
+export function utcClock(iso: string): string {
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+
+/**
+ * Services whose daily limit refused calls on this objective and that no holder can use yet, with the
+ * earliest time someone can call again.
+ */
+export function limitStops(refused: readonly { server: string }[], services: readonly ConnectedService[]): { server: string; until: string }[] {
+  return refused.flatMap((r) => {
+    const s = services.find((x) => x.name === r.server);
+    if (!s?.spent?.length || s.spent.length < s.holders.length) return [];
+    return [{ server: r.server, until: s.spent.map((x) => x.freesAt).sort()[0]! }];
+  });
+}
+
+/**
+ * Who has used up a service's daily limit (2026-11-08, trc_7b9b…: code was handed to two engineers
+ * already out of GitHub calls; each was refused at its first step, and a fix round went to them again).
+ */
+function spentNote(s: ConnectedService): string {
+  if (!s.spent?.length) return "";
+  const all = s.spent.length >= s.holders.length;
+  return ` (daily limit used up — ${s.spent.map((x) => `${x.name} until ${utcClock(x.freesAt)}`).join(", ")}${all ? "; no one can use it until then, so work that needs it waits: say so instead of handing it out" : "; give work that needs it to someone else"})`;
 }
 
 /**

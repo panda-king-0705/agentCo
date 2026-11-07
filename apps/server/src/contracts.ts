@@ -371,7 +371,15 @@ export interface PlatformServices {
   metrics: MetricsView;
   tools: ToolExecutor;
   /** What the company and an agent can do outside it, from the enabled tools (org/capabilities.ts); optional for test wiring. */
-  capabilities?: { company(): ReadonlySet<Capability>; of(agent: Agent): ReadonlySet<Capability>; services?(): ConnectedService[] };
+  capabilities?: {
+    company(): ReadonlySet<Capability>;
+    of(agent: Agent): ReadonlySet<Capability>;
+    services?(): ConnectedService[];
+    /** When the agent can next use a capability, if every connection granting it to them is out of daily calls (ISO); else null. */
+    exhausted?(agent: Agent, capability: Capability): string | null;
+  };
+  /** Services whose daily limit refused calls on this objective, and whose (agent ids). */
+  limitRefusals?(traceId: string): { server: string; agentIds: string[] }[];
   memory: MemoryService;
   tracer: Tracer;
   org: OrgView;

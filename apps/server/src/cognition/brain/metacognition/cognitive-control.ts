@@ -366,10 +366,15 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
       // to Finance, which has no GitHub access — the Python it wrote never reached the repository).
       // Even when the title names another department ("…to Finance limits"), if no one it names can commit.
       if (CODE_PART.test(s.title)) {
-        const committers = candidates.filter((c) => run.platform.capabilities?.of(c.agent).has("git")).map((c) => c.agent.id);
-        if (committers.length && ![...own].some((id) => committers.includes(id))) {
+        const canCommit = candidates.filter((c) => run.platform.capabilities?.of(c.agent).has("git"));
+        // …and still has calls left today (2026-11-08, trc_7b9b…: two engineers out of GitHub calls got
+        // the code and a fix round, and committed nothing).
+        const withCalls = canCommit.filter((c) => !run.platform.capabilities?.exhausted?.(c.agent, "git"));
+        const committers = (withCalls.length ? withCalls : canCommit).map((c) => c.agent.id);
+        if (committers.length) {
+          const named = [...own].filter((id) => committers.includes(id));
           own.clear();
-          for (const id of committers) own.add(id);
+          for (const id of named.length ? named : committers) own.add(id);
         }
       }
       const namedIds = own.size ? own : namedInRequest.size === 1 ? namedInRequest : undefined;

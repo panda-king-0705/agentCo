@@ -35,10 +35,42 @@ export class SpanRepo {
     return row ? toSpan(row) : null;
   }
 
-  /** Calls that ran (status ok) an agent made to tools whose names start with `prefix` since a time (MCP daily limits). */
+  /**
+   * Calls that reached an outside service (status ok) per agent, to tools whose names start with
+   * `prefix`, since a time — with each agent's oldest such call (when their next call frees up). MCP
+   * daily limits: a call sent to the Board for approval, or answered from a shared copy, is not counted.
+   */
+  toolCallsByAgent(prefix: string, sinceIso: string, agentId?: string): Map<string, { n: number; oldest: string }> {
+    const rows = all(
+      this.db,
+      `SELECT agent_id, count(*) AS n, min(started_at) AS oldest FROM spans WHERE kind = 'tool' AND status = 'ok' AND name LIKE ? ESCAPE '\\' AND started_at >= ? AND attributes NOT LIKE ? AND attributes NOT LIKE ?${agentId ? " AND agent_id = ?" : ""} GROUP BY agent_id`,
+      `tool.${prefix.replace(/[%_]/g, (c) => `\\${c}`)}%`,
+      sinceIso,
+      '%"agentco.mcp.approval":true%',
+      '%"agentco.mcp.cached":true%',
+      ...(agentId ? [agentId] : []),
+    );
+    return new Map(rows.map((r) => [String(r.agent_id), { n: Number(r.n), oldest: String(r.oldest) }]));
+  }
+
   countToolCalls(agentId: string, prefix: string, sinceIso: string): number {
-    const row = one(this.db, "SELECT count(*) AS n FROM spans WHERE kind = 'tool' AND status = 'ok' AND agent_id = ? AND name LIKE ? ESCAPE '\\' AND started_at >= ? AND attributes NOT LIKE ?", agentId, `tool.${prefix.replace(/[%_]/g, (c) => `\\${c}`)}%`, sinceIso, '%"agentco.mcp.approval":true%');
-    return Number(row?.n ?? 0);
+    return this.toolCallsByAgent(prefix, sinceIso, agentId).get(agentId)?.n ?? 0;
+  }
+
+  /** Agents refused by a service's daily limit on this objective (span attribute agentco.mcp.limit), per service. */
+  limitRefusals(traceId: string): { server: string; agentIds: string[] }[] {
+    const rows = all(this.db, "SELECT DISTINCT agent_id, attributes FROM spans WHERE trace_id = ? AND kind = 'tool' AND attributes LIKE ?", traceId, '%"agentco.mcp.limit":true%');
+    const by = new Map<string, Set<string>>();
+    for (const r of rows) {
+      let server = "";
+      try {
+        server = String((JSON.parse(String(r.attributes)) as Record<string, unknown>)["agentco.mcp.server"] ?? "");
+      } catch {
+        continue;
+      }
+      if (server) by.set(server, (by.get(server) ?? new Set()).add(String(r.agent_id)));
+    }
+    return [...by].map(([server, ids]) => ({ server, agentIds: [...ids] }));
   }
 
   byTrace(traceId: string): Span[] {

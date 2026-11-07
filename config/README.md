@@ -18,7 +18,7 @@ Copy `mcp.example.json` to `mcp.json`, keep the servers you want, add their keys
 | `access` | Who gets its tools: `roles` (cmo, cto…), `agents` (names or ids), `departments` (marketing, engineering…), `catalog` (specialist catalog ids). Nobody else sees them. |
 | `tools` | Allow-list of the server's tool names (empty = all it lists). Keep it short: every tool costs tokens on every call. |
 | `noApproval` | Tools that change something but may run without your approval. Every other tool that is not read-only goes to Approvals first and runs when you approve it; destructive tools always do. |
-| `dailyCallLimit` | Calls per agent per day to this server (0 = none). |
+| `dailyCallLimit` | Calls per agent per day to this server (0 = none). Only calls that reach the server count: a read someone already made lately is answered from a shared copy (a file for an hour, listings for 15 minutes, dropped as soon as a commit through the connection changes it), and a call sent to the Board counts once it runs. |
 | `notes` | A short note agents are told with the service, e.g. `"Our repository: owner/name — never create another"`. |
 | `protectBranches` | A call whose `branch` is one of these goes to Approvals first, even for a `noApproval` tool. Default for a server that grants `git`: `["main", "master"]` (so only you put changes on main, even where GitHub's own branch protection isn't available — private repositories on the free plan). |
 

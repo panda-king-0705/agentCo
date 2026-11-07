@@ -169,6 +169,49 @@ test("a part that writes code goes to someone who can commit it, not the departm
   assert.deepEqual(p.tasks.children(task.id).map((c) => c.assigneeId), [cto.id]);
 });
 
+// 2026-11-08 (trc_7b9b…): the risk-manager code went to an engineer already out of GitHub calls, and the
+// fix round to him again; a colleague who could still commit sat idle.
+test("code goes to someone who can still commit today, not one out of daily calls", async () => {
+  const plan = {
+    mode: "delegate",
+    subprocesses: [{ title: "Consolidate risk.py and risk_manager.py", description: "Keep one risk manager.", assigneeId: "agt_arjun", value: 300, estCostUsd: 0.05, acceptanceCriteria: "One risk manager." }],
+    candidates: [
+      { name: "high_cost", approach: "a", estCostUsd: 5, expectedValue: 100, meetsCriteria: true },
+      { name: "low_cost", approach: "b", estCostUsd: 0.01, expectedValue: 900, meetsCriteria: true },
+      { name: "low_effort", approach: "c", estCostUsd: 0.02, expectedValue: 100, meetsCriteria: true },
+    ],
+    rationale: "Arjun knows the risk code.",
+  };
+  const mock = new MockProvider({ latencyMs: 0 });
+  const p = new FakePlatform({
+    providers: {
+      mock: {
+        name: "mock",
+        async complete(profile, request, signal) {
+          const r = await mock.complete(profile, request, signal);
+          return readStage(request.messages) === "metacognition.cognitive_control" ? { ...r, content: JSON.stringify(plan) } : r;
+        },
+      },
+    },
+  });
+  p.addDepartment("dep_eng", "engineering", "Engineering");
+  const agent = (id: string, name: string, title: string, managerId: string | null) =>
+    p.addAgent(makeAgent({ id, name, title, departmentId: "dep_eng", managerId, tier: managerId ? "worker" : "manager", cognition: "brain", modelTier: "frontier", tools: ["delegate_task"], identity: { mission: `${title} work.` } as never }));
+  const cto = agent("agt_cto", "Kenji Tanaka", "Chief Technology Officer", null);
+  agent("agt_arjun", "Arjun Mehta", "Backend Engineer", cto.id);
+  const alex = agent("agt_alex", "Alex Morgan", "API Platform Engineer", cto.id);
+  (p as unknown as { capabilities: unknown }).capabilities = {
+    company: () => new Set(["git"]),
+    of: () => new Set(["git"]),
+    services: () => [],
+    exhausted: (a: Agent) => (a.id === "agt_arjun" ? "2026-11-09T05:58:41.000Z" : null),
+  };
+  const task = p.addTask(makeTask({ id: "tsk_339", number: 339, title: "Fix the risk code", description: "Clean it up.", assigneeId: cto.id, createdBy: "system" }));
+  const r = await new BrainEngine().run(p.context(cto, taskInput(task)));
+  assert.equal(r.outcome, "waiting", r.error ?? r.output);
+  assert.deepEqual(p.tasks.children(task.id).map((c) => c.assigneeId), [alex.id]);
+});
+
 test("reviews and the independent check see what was committed to the repository", async () => {
   const seenPrompts: string[] = [];
   const mock = new MockProvider({ latencyMs: 0 });

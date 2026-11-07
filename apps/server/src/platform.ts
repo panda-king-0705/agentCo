@@ -149,8 +149,13 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
       return mcp
         .status()
         .filter((s) => s.connected && s.tools.length > 0)
-        .map((s) => ({ name: s.name, grants: s.grants, holders: agents.filter((a) => s.tools.some((t) => tools.canUse(t, a))).map((a) => a.name), notes: s.notes }));
+        .map((s) => {
+          const holders = agents.filter((a) => s.tools.some((t) => tools.canUse(t, a)));
+          const spent = mcp.spentOn(s.name, holders).map((x) => ({ name: x.agent.name, freesAt: x.freesAt }));
+          return { name: s.name, grants: s.grants, holders: holders.map((a) => a.name), notes: s.notes, ...(spent.length ? { spent } : {}) };
+        });
     },
+    exhausted: (agent: Agent, capability: Capability) => mcp.exhausted(agent, capability),
   };
   const handbookSource: HandbookSource = {
     capabilities,
@@ -209,7 +214,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
         tool: c.name,
         what: oneLine(String(c.attributes["agentco.file.path"] ?? (c.attributes["agentco.mcp.paths"] ? `${c.attributes["agentco.mcp.repo"]}@${c.attributes["agentco.mcp.branch"]}: ${String(c.attributes["agentco.mcp.paths"]).split("\n").join(", ")}` : c.output.replace(/^\[[^\]]*\]\s*/, ""))), 160),
       }));
-  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, drive, capabilities, taskWrites, outsideFiles: (traceId, prefer) => mcp.outsideFiles(traceId, { prefer }), now };
+  const services: PlatformServices = { models, metrics, tools, memory, tracer, org, tasks, agents: org, catalog, handbook, drive, capabilities, taskWrites, outsideFiles: (traceId, prefer) => mcp.outsideFiles(traceId, { prefer }), limitRefusals: (traceId) => repos.spans.limitRefusals(traceId), now };
   const engines = overrides.engines ?? (await loadEngines(config));
   const governor = new ContextGovernor(repos.settings, { dataDir: config.dataDir, triggerPct: config.contextTriggerPct, carryTurns: config.contextCarryTurns }, now);
   const runs = new RunService({

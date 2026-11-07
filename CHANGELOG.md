@@ -5,6 +5,24 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (trc_7b9b…, the scalper follow-up: GitHub's daily limit stopped the work; $3.04, one file committed)
+- **Reads are shared.** A read made through a connection is answered from a shared copy when anyone
+  asks again: a file's contents for an hour, and listings, commits, pull requests and searches for 15
+  minutes. A shared answer doesn't count against the daily limit. A commit through the connection
+  drops the copies it may have changed: the files it wrote, the folders above them, and that
+  repository's listings. A file, folder or branch is the same read however it's spelled. 44% of this
+  run's GitHub calls repeated a read already made, the same file up to eight times. Replayed on the last
+  two runs, 313 calls would have been 196. The review's read-back of committed files uses the same copies.
+- **Code goes to someone who still has calls.** A part that writes code goes to a colleague who can
+  commit and hasn't used up today's limit. Here, two engineers who were out of GitHub calls got the code
+  and then the fix round. The handbook says who is out of calls and until when. When no one has calls
+  left, work that needs that service waits and isn't handed out.
+- **No fix round against a used-up limit.** When a service's daily limit stopped the work and no one can
+  use it yet, the review doesn't send the work back. It reports what is left and when the company can
+  use the service again (or that the Board can raise the limit).
+- **A clearer refusal.** Each refusal says when the agent's next call frees up, that retrying gets the same
+  answer, and that shared reads still work. One engineer had retried 16 times.
+
 ### Fixed (trc_8e3b…, the forex scalper rerun: PR #3 opened, but the check said 1 of 4 met)
 - **The check sees every committed file.** Only the newest eight files committed on an objective
   were read back, so the spec, broker adapter, signal code and settings committed earlier were

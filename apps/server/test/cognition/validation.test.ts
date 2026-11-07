@@ -132,7 +132,7 @@ test("every part's brief carries the statements it must make true; none is left 
   assert.doesNotMatch(fixes[1]!.acceptanceCriteria, /must make true/);
 });
 
-async function runObjective(o: { checks: (n: number) => unknown; leader: (n: number) => unknown; seen?: Seen[]; env?: Record<string, string>; openai?: ModelProvider }) {
+async function runObjective(o: { checks: (n: number) => unknown; leader: (n: number) => unknown; seen?: Seen[]; env?: Record<string, string>; openai?: ModelProvider; setup?: (p: FakePlatform) => void }) {
   const seen = o.seen ?? [];
   const replies = provider(
     {
@@ -144,6 +144,7 @@ async function runObjective(o: { checks: (n: number) => unknown; leader: (n: num
   );
   const p = new FakePlatform({ env: o.env, providers: { mock: replies, openai: o.openai ?? replies } });
   const { ceo } = company(p);
+  o.setup?.(p);
   const task = p.addTask(makeTask({ id: "tsk_300", number: 300, title: "Draft the monthly investor update", description: "Email our investors this month's update.", assigneeId: ceo.id, value: 800, estCostUsd: 0.5 }));
   task.state.contract = CONTRACT;
   const brain = new BrainEngine({ maxRevisions: 2 });
@@ -242,4 +243,28 @@ test("no contract (a part handed down, a heartbeat): the review works as before,
   const heartbeat = p.addTask(makeTask({ id: "tsk_3", number: 3, title: "Heartbeat: CEO reviews OKRs", assigneeId: ceo.id, createdBy: "system" }));
   await new BrainEngine().run(p.context(ceo, taskInput(heartbeat)));
   assert.equal(seen.filter((s) => s.stage === VALIDATION).length, 0);
+});
+
+// 2026-11-08 (trc_7b9b…): three engineers were out of GitHub calls; the review sent the work back to
+// them anyway, and the fix round was refused at its first step too.
+test("a statement unmet because a service's daily limit stopped the work: no fix round — the Board hears when it can go on", async () => {
+  const unmet = { checks: [{ id: "A1", status: "met", evidence: "DRAFT" }, { id: "A2", status: "unmet", gap: "the source files were never read" }, { id: "A3", status: "met", evidence: "Cash: $40,000" }] };
+  const { p, task, second, seen } = await runObjective({
+    checks: () => unmet,
+    leader: () => ({ score: 0.5, truthful: 0.9, good: false, issues: ["Name the sources"], openPoints: [], decision: "revise", summary: "Partly done." }),
+    setup: (p) => {
+      (p as unknown as { limitRefusals: unknown }).limitRefusals = () => [{ server: "github", agentIds: ["agt_cfo"] }];
+      (p as unknown as { capabilities: unknown }).capabilities = {
+        company: () => new Set(["git"]),
+        of: () => new Set(["git"]),
+        services: () => [{ name: "github", grants: ["git"], holders: ["Elena Petrova"], spent: [{ name: "Elena Petrova", freesAt: "2026-11-09T05:58:41.000Z" }] }],
+      };
+    },
+  });
+  assert.equal(second.outcome, "completed", second.error ?? second.output);
+  assert.equal(p.tasks.children(task.id).length, 1, "no fix round while no one can use the service");
+  assert.match(second.output, /- ✗ A2 Every figure in the update names the file it comes from — the source files were never read/);
+  assert.match(second.output, /## Open points for the Board\n(- [^\n]+\n)*- The github daily limit stopped this work before it was finished; the company can use github again from 2026-11-09 05:58 UTC\. Ask again then, or raise the limit \(dailyCallLimit in config\/mcp\.json\)\./);
+  const review = seen.find((s) => s.stage === "metacognition.solving_evaluation.feedback")!;
+  assert.match(review.system, /The github daily limit stopped part of this work, and no one can use github again until 2026-11-09 05:58 UTC/);
 });
