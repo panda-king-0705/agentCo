@@ -821,7 +821,12 @@ export class BrainEngine implements CognitiveEngine {
       ? "\n\nCurrent versions of their files — work from these (older files on the drive are superseded; no need to read these again):\n" +
         files.map((f) => `=== ${f.display} — by ${f.by} (${f.words} words${f.truncated ? "; shown in part, read the rest with workspace_read_file" : ""}) ===\n${f.content}`).join("\n")
       : "";
-    const briefed = pending.map((s) => ({ ...s, description: `${s.description}\n\nRound-1 results to work from:\n${inputs}${attached}` }));
+    // A round-2 step planned before round 1 ran may already be partly done by it (2026-11-07,
+    // trc_617b…: "hire the specialist" went out after round 1 had already made the hire).
+    const briefed = pending.map((s) => ({
+      ...s,
+      description: `${s.description}\n\nRound-1 results to work from (if they show part of this step is already done — a hire made, a file saved — do not redo it: build on it and say so):\n${inputs}${attached}`,
+    }));
     const out = await block(run, "metacognition.solving_evaluation.solving", `Delegating round 2 of T-${task.number}`, async (span) => {
       const r = await delegateParts(run, span, briefed, children.map((c) => c.title));
       span.setAttributes({ "agentco.delegated": r.delegated.length, "agentco.round": 2 });

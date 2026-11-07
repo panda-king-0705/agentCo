@@ -12,6 +12,19 @@ export interface DirectoryEntry {
   managerName: string | null;
   tier: Agent["tier"];
   status: Agent["status"];
+  /** Join date (YYYY-MM-DD). */
+  joined: string;
+  /** Who hired them: a colleague's name, "the Board", or "the founding team". */
+  hiredBy: string;
+  monthlyBudgetUsd: number;
+  catalogId: string | null;
+}
+
+/** Who made the hire, from the agent's createdBy (an agent id, "human" = the Board, "system" = bootstrap). */
+function hirer(org: OrgView, createdBy: string): string {
+  if (createdBy === "human") return "the Board";
+  if (createdBy === "system") return "the founding team";
+  return org.getAgent(createdBy)?.name ?? createdBy;
 }
 
 export function directory(org: OrgView): DirectoryEntry[] {
@@ -26,6 +39,10 @@ export function directory(org: OrgView): DirectoryEntry[] {
       managerName: a.managerId ? (byId.get(a.managerId)?.name ?? null) : null,
       tier: a.tier,
       status: a.status,
+      joined: a.createdAt.slice(0, 10),
+      hiredBy: hirer(org, a.createdBy),
+      monthlyBudgetUsd: a.monthlyBudgetUsd,
+      catalogId: a.catalogId ?? null,
     }))
     .sort((x, y) => tierRank(x.tier) - tierRank(y.tier) || x.department.localeCompare(y.department) || x.name.localeCompare(y.name));
 }
@@ -34,6 +51,16 @@ const tierRank = (t: Agent["tier"]) => (t === "executive" ? 0 : t === "manager" 
 
 export function formatEntry(e: DirectoryEntry): string {
   return `${e.name} — ${e.title}, ${e.department}${e.managerName ? ` (reports to ${e.managerName})` : ""} — id ${e.id}`;
+}
+
+/**
+ * The entry with its hiring record: when they joined, who hired them, their monthly model budget and
+ * catalog role (2026-11-07, trc_617b…: a recruiter spent 25 tool calls searching memory and the
+ * blackboard for who had hired the SEO specialist and at what budget).
+ */
+export function formatEntryDetails(e: DirectoryEntry): string {
+  const facts = [`joined ${e.joined}`, `hired by ${e.hiredBy}`, e.monthlyBudgetUsd > 0 ? `$${e.monthlyBudgetUsd}/month model budget` : "no budget cap of their own", ...(e.catalogId ? [`catalog role ${e.catalogId}`] : [])];
+  return `${formatEntry(e)} — ${facts.join(", ")}`;
 }
 
 /** Common role words → the title they mean ("ceo" → "Chief Executive Officer"). */
@@ -84,9 +111,11 @@ export function searchDirectory(org: OrgView, query: string): DirectoryEntry[] {
   const all = directory(org);
   const q = norm(query);
   if (!q) return all;
+  const byId = all.filter((e) => e.id.toLowerCase() === query.trim().toLowerCase());
+  if (byId.length) return byId;
   const terms = q.split(" ").map((t) => ROLE_WORDS[t] ?? t);
   return all.filter((e) => {
-    const hay = norm(`${e.name} ${e.title} ${e.department}`);
+    const hay = norm(`${e.name} ${e.title} ${e.department} ${e.catalogId ?? ""}`);
     return terms.every((t) => hay.includes(t));
   });
 }

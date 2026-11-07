@@ -11,7 +11,7 @@
  * a subtask of the hiring task — at once, or when the Board approves the hire — so the hiring
  * manager waits for it and reviews it like any delegated part.
  */
-import type { AgentTier, CreateAgentInput } from "../../../../../packages/shared/src/index.ts";
+import type { AgentTier, CreateAgentInput, Task } from "../../../../../packages/shared/src/index.ts";
 import { roleTemplate } from "../../org/templates.ts";
 import type { ToolEffect } from "../../contracts.ts";
 import { EXECUTIVES, fail, ok, type ToolDefinition, type ToolRunContext } from "../types.ts";
@@ -38,6 +38,8 @@ export interface HireRecord {
   agentId?: string;
   name?: string;
   firstTaskId?: string;
+  /** The task the hire was made on, when read across an objective (objectiveHires). */
+  taskNumber?: number;
 }
 
 export function hiresOf(task: { state: Record<string, unknown> } | null | undefined): HireRecord[] {
@@ -52,9 +54,44 @@ export function withHire(list: HireRecord[], rec: HireRecord): HireRecord[] {
 }
 
 export function describeHire(h: HireRecord): string {
-  if (h.status === "hired") return `${h.name ?? h.agentId ?? "someone"} (${h.role}${h.agentId ? `, ${h.agentId}` : ""}) has joined${h.firstTaskId ? "; their first task is assigned" : ""}`;
-  if (h.status === "requested") return `a ${h.role} hire is waiting for the Board's approval`;
-  return `the Board declined the ${h.role} hire`;
+  const on = h.taskNumber !== undefined ? ` (on T-${h.taskNumber})` : "";
+  if (h.status === "hired") return `${h.name ?? h.agentId ?? "someone"} (${h.role}${h.agentId ? `, ${h.agentId}` : ""}) has joined${on}${h.firstTaskId ? "; their first task is assigned" : ""}`;
+  if (h.status === "requested") return `a ${h.role} hire is waiting for the Board's approval${on}`;
+  return `the Board declined the ${h.role} hire${on}`;
+}
+
+/**
+ * Hire records across the whole objective — every task under the same root — each with the task it
+ * was made on (2026-11-07, trc_617b…: the CMO hired on T-229, then a round-2 task, T-231, asked for
+ * the same specialist again; the per-task record did not see the first hire).
+ */
+export function objectiveHires(view: { get(id: string): Task | null; children(id: string): Task[] }, task: Task | null | undefined): HireRecord[] {
+  if (!task) return [];
+  const root = task.rootTaskId === task.id ? task : (view.get(task.rootTaskId) ?? task);
+  const out: HireRecord[] = [];
+  const seen = new Set<string>();
+  const queue: Task[] = [root];
+  while (queue.length && seen.size < 500) {
+    const t = queue.shift()!;
+    if (seen.has(t.id)) continue;
+    seen.add(t.id);
+    const fresh = t.id === task.id ? task : t;
+    for (const h of hiresOf(fresh)) out.push({ ...h, taskNumber: fresh.number });
+    queue.push(...view.children(t.id));
+  }
+  return out;
+}
+
+/**
+ * The monthly budget the request sets for the hire ("with a $10 monthly budget", "$10/month"), when it
+ * states exactly one (2026-11-07: the Board said $10; a plan turned it into "no more than $10" and an
+ * old memory made it $8).
+ */
+export function requestedMonthlyBudget(text: string): number | null {
+  const re = /\$\s?(\d+(?:\.\d{1,2})?)\s*(?:\/\s*mo(?:nth)?\b|(?:a|per)\s+month\b|monthly\b)|monthly\s+(?:model\s+)?budget\s+of\s+\$\s?(\d+(?:\.\d{1,2})?)/gi;
+  const found = new Set<number>();
+  for (const m of text.matchAll(re)) found.add(Number(m[1] ?? m[2]));
+  return found.size === 1 ? [...found][0]! : null;
 }
 
 export function readFirstTask(v: unknown): FirstTask | null {
@@ -82,7 +119,12 @@ export const hireAgent: ToolDefinition = {
       departmentId: { type: "string" },
       managerId: { type: "string" },
       tier: { type: "string", enum: ["executive", "manager", "worker"] },
-      justification: { type: "string", maxLength: 4000 },
+      justification: {
+        type: "string",
+        maxLength: 4000,
+        description: "Why this hire, in your own words. Say who recommended the pick only if they actually did (their message or file); never credit a recommendation to someone who did not make it.",
+      },
+      additional: { type: "boolean", description: "true only when the request explicitly asks for another person in a role your team already has (say why in justification)." },
       monthlyBudgetUsd: { type: "number", minimum: 0, maximum: MAX_HIRE_BUDGET_USD, description: "Monthly model budget in USD (0 = no per-agent cap)." },
       firstTask: {
         type: "object",
@@ -138,16 +180,41 @@ export const hireAgent: ToolDefinition = {
       label = `${String(args.title)} (${String(args.tier)})`;
     }
 
-    if (typeof args.monthlyBudgetUsd === "number") input = { ...input, monthlyBudgetUsd: Math.round(args.monthlyBudgetUsd * 100) / 100 };
     const firstTask = readFirstTask(args.firstTask);
     if (args.firstTask !== undefined && !firstTask) return fail("firstTask needs a title and a description.");
     if (firstTask && !ctx.taskId) return fail("firstTask can only be assigned from a task (it becomes a subtask of it).");
-
-    // One hire per role per task: never hire (or ask the Board for) the same role twice.
     const caller = ctx.taskId ? ctx.services.tasks.get(ctx.taskId) : null;
+
+    // The budget the request states is the budget (not a lower one).
+    const root = caller ? (caller.rootTaskId === caller.id ? caller : ctx.services.tasks.get(caller.rootTaskId)) : null;
+    const asked = root ? requestedMonthlyBudget(`${root.title}\n${root.description}`) : null;
+    const given = typeof args.monthlyBudgetUsd === "number" ? Math.round(args.monthlyBudgetUsd * 100) / 100 : null;
+    if (asked !== null && asked <= MAX_HIRE_BUDGET_USD && given !== null && Math.abs(given - asked) >= 0.01) {
+      return fail(`The request sets a $${asked} monthly budget for this hire. Call hire_agent again with monthlyBudgetUsd ${asked} (not ${given}).`);
+    }
+    const budget = given ?? (asked !== null && asked <= MAX_HIRE_BUDGET_USD ? asked : null);
+    if (budget !== null) input = { ...input, monthlyBudgetUsd: budget };
+
+    // One hire per role per objective: never hire (or ask the Board for) the same role twice.
     const role = input.catalogId ?? input.title ?? "agent";
-    const already = hiresOf(caller).find((h) => h.role === role && h.status !== "declined");
-    if (already) return fail(`Already done for this task: ${describeHire(already)}. Do not hire again — work with them (they report to their manager). If you truly need a second ${role}, explain why to your manager.`);
+    const already = objectiveHires(ctx.services.tasks, caller).find((h) => h.role === role && h.status !== "declined");
+    if (already) {
+      const here = already.taskNumber === caller?.number;
+      return fail(
+        `Already done ${here ? "for this task" : "on this objective"}: ${describeHire(here ? { ...already, taskNumber: undefined } : already)}. Do not hire again — work with them (they report to their manager). If you truly need a second ${role}, explain why to your manager.`,
+      );
+    }
+    // Someone on the receiving team already holds this catalog role: give them the work.
+    if (input.catalogId && args.additional !== true) {
+      const managerId = input.managerId ?? ctx.agent.id;
+      const holder = org.listActiveAgents().find((a) => a.catalogId === input.catalogId && a.managerId === managerId);
+      if (holder) {
+        return fail(
+          `${holder.name} (${holder.title}, ${holder.id}) already holds ${input.catalogId} on ${managerId === ctx.agent.id ? "your" : "that"} team. Give them the work instead of hiring again. ` +
+            "Only if the request explicitly asks for another person in this role, call hire_agent again with additional: true and say why in justification.",
+        );
+      }
+    }
 
     const settings = company.settings();
     const atCap = org.listActiveAgents().length >= settings.maxHeadcount;

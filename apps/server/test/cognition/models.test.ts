@@ -181,6 +181,24 @@ test("router: provider error → error span, retry once on the fallback profile 
   assert.equal(platform.budget.entries.length, 1);
 });
 
+// 2026-11-07 (trc_617b…): a dropped hotspot made both providers fail with "fetch failed"; that is an
+// outage the platform waits out (models/outage.ts), not a task failure.
+test("router: no provider reachable → ProviderOutageError; one unreachable with an answer from the other → no error", async () => {
+  const down = (p: string) => new Error(`${p} request to https://api.${p}.com/v1/chat/completions failed: fetch failed`);
+  const both = scripted([down("openai"), down("deepseek")]);
+  const p1 = new FakePlatform({ env: liveEnv, providers: { "openai-compatible": both } });
+  await assert.rejects(p1.models.chat(req(), ctx(p1)), (err: Error) => err.name === "ProviderOutageError" && /^AI providers unreachable \(.*fetch failed; .*fetch failed\)/.test(err.message));
+  const one = scripted([down("openai"), { content: "from fallback" }]);
+  const p2 = new FakePlatform({ env: liveEnv, providers: { "openai-compatible": one } });
+  assert.equal((await p2.models.chat(req(), ctx(p2))).content, "from fallback");
+  const solo = scripted([down("openai")]);
+  const p3 = new FakePlatform({ env: liveEnv, providers: { "openai-compatible": solo } });
+  await assert.rejects(p3.models.chat(req({ tier: "economy" }), ctx(p3)), (err: Error) => err.name === "ProviderOutageError", "no fallback: the only provider is unreachable");
+  const busy = scripted([new Error("HTTP 503 upstream"), new Error("HTTP 503 upstream")]);
+  const p4 = new FakePlatform({ env: liveEnv, providers: { "openai-compatible": busy } });
+  await assert.rejects(p4.models.chat(req(), ctx(p4)), (err: Error) => err.name !== "ProviderOutageError" && /503/.test(err.message), "a provider that answers with an error is not an outage");
+});
+
 test("router: error without a fallback propagates", async () => {
   const provider = scripted([new Error("boom")]);
   const platform = new FakePlatform({ env: liveEnv, providers: { "openai-compatible": provider } });

@@ -4,7 +4,7 @@ import { newId } from "../../db/ids.ts";
 import type { Task } from "../../../../../packages/shared/src/index.ts";
 import type { ToolEffect } from "../../contracts.ts";
 import { truncate } from "../../cognition/text.ts";
-import { directory, formatEntry, resolveAgent, searchDirectory } from "../../org/directory.ts";
+import { directory, formatEntry, formatEntryDetails, resolveAgent, searchDirectory } from "../../org/directory.ts";
 import { ALL_TIERS, fail, LEADS, ok, type ToolDefinition, type ToolRunContext } from "../types.ts";
 
 export const sendMessage: ToolDefinition = {
@@ -35,18 +35,26 @@ export const sendMessage: ToolDefinition = {
 export const companyDirectory: ToolDefinition = {
   name: "company_directory",
   description:
-    "The company directory: every active agent's name, title, department, manager and id (their address for send_message, delegate_task and escalations). " +
-    "query filters by name, title, department or role word (e.g. \"finance\", \"cfo\", \"Kenji\"); empty = everyone.",
+    "The company directory: every active agent's name, title, department, manager and id (their address for send_message, delegate_task and escalations), " +
+    "plus when they joined, who hired them, their monthly model budget and catalog role. " +
+    "query filters by name, title, department, role word or catalog role (e.g. \"finance\", \"cfo\", \"Kenji\", \"seo-specialist\"), or looks up an agent id; empty = everyone.",
   parameters: { type: "object", properties: { query: { type: "string", maxLength: 200 } } },
   tiers: ALL_TIERS,
   universal: true,
   run(args, ctx) {
     const query = typeof args.query === "string" ? args.query : "";
     const entries = query.trim() ? searchDirectory(ctx.services.org, query) : directory(ctx.services.org);
-    if (!entries.length) return ok(`No one matches "${query}". Try a department (finance, engineering, marketing…) or leave query empty.`, [], { entries: [] });
+    if (!entries.length) {
+      // An id from an old record may belong to someone who has left.
+      const gone = ctx.services.org.getAgent(query.trim());
+      if (gone && gone.status === "terminated") {
+        return ok(`${gone.id} was ${gone.name} (${gone.title}, ${ctx.services.org.departmentName(gone.departmentId)}), removed ${(gone.terminatedAt ?? gone.updatedAt).slice(0, 10)} — no longer in the company.`, [], { entries: [] });
+      }
+      return ok(`No one matches "${query}". Try a department (finance, engineering, marketing…) or leave query empty.`, [], { entries: [] });
+    }
     const shown = entries.slice(0, 60);
     return ok(
-      `${entries.length} ${entries.length === 1 ? "person" : "people"}${query.trim() ? ` matching "${query}"` : ""}:\n${shown.map((e) => `- ${formatEntry(e)}`).join("\n")}${entries.length > shown.length ? `\n…and ${entries.length - shown.length} more; narrow the query.` : ""}`,
+      `${entries.length} ${entries.length === 1 ? "person" : "people"}${query.trim() ? ` matching "${query}"` : ""}:\n${shown.map((e) => `- ${formatEntryDetails(e)}`).join("\n")}${entries.length > shown.length ? `\n…and ${entries.length - shown.length} more; narrow the query.` : ""}`,
       [],
       { entries: shown },
     );

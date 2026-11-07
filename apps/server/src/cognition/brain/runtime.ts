@@ -3,6 +3,7 @@
  * the block runner (span with `agentco.brain.block` + setActivity), and the
  * JSON/text model-call helpers that put the identity charter in every prompt.
  */
+import { isProviderOutage } from "../../models/outage.ts";
 import type { Agent, BrainBlockId, ModelTier, Task } from "../../../../../packages/shared/src/index.ts";
 import type { ChatMessage, ChatResponse, EngineContext, PlatformServices, SpanHandle } from "../../contracts.ts";
 import type { SpanAttributes } from "../../../../../packages/shared/src/index.ts";
@@ -283,5 +284,5 @@ export function toolContext(run: BrainRun, span: SpanHandle) {
 
 /** Errors a block must never swallow. */
 export function mustPropagate(err: unknown, signal: AbortSignal): boolean {
-  return isBudgetError(err) || isAbortError(err, signal) || err instanceof YieldSignal;
+  return isBudgetError(err) || isAbortError(err, signal) || err instanceof YieldSignal || isProviderOutage(err);
 }

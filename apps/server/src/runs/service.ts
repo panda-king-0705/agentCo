@@ -24,6 +24,7 @@ import type { TaskService } from "../tasks/service.ts";
 import type { ContextGovernor } from "../memory/compaction.ts";
 import { ABORT_MESSAGES, RunAbortedError, type AbortReason, type RunControl } from "./abort.ts";
 import { MAX_MESSAGE_CHARS, type ConversationService } from "./conversations.ts";
+import { isProviderOutage, type OutageGate } from "../models/outage.ts";
 
 export const RECOVERY_NOTICE = (runId: string): string =>
   `Run ${runId} was terminated before it reported a result, so its side effects may be fully applied, partially applied, or absent. ` +
@@ -46,6 +47,8 @@ export interface RunServiceDeps {
   isPaused: () => boolean;
   /** Company-wide cap on concurrent runs (settings.maxConcurrentRuns); absent = uncapped. */
   maxConcurrentRuns?: () => number;
+  /** Tripped when a run could not reach any AI provider; the scheduler waits on it (models/outage.ts). */
+  outage?: OutageGate;
   now: () => Date;
 }
 
@@ -505,6 +508,10 @@ export class RunService implements RunControl {
       return "idle";
     }
     if (thrown !== null) {
+      if (isProviderOutage(thrown)) {
+        this.holdForOutage(task, errorText(thrown));
+        return "idle";
+      }
       if (isBudgetExceeded(thrown)) {
         const approval = approvals.requestBudgetIncrease({
           scope: thrown.scope,
@@ -548,11 +555,24 @@ export class RunService implements RunControl {
         return "blocked";
       }
       case "failed":
+        if (error && isProviderOutage(error)) {
+          this.holdForOutage(task, error);
+          return "idle";
+        }
         this.failTask(task, error ?? "the engine reported a failure", agent, run, state);
         return "error";
     }
     return null;
   }
+
+  /** No provider could be reached: the task waits (attempt refunded) and the scheduler holds all work. */
+  private holdForOutage(task: Task, error: string): void {
+    this.deps.tasks.holdForOutage(task.id, `Waiting for the AI providers to be reachable again: ${error}`);
+    this.deps.outage?.trip(error);
+  }
+
+  /** Chat messages already told that their answer waits for the providers (told once each). */
+  private readonly outageNoted = new Set<string>();
 
   private failTask(task: Task, error: string, agent: Agent | null, run: Run, state?: Record<string, unknown>): void {
     const failed = this.deps.tasks.fail(task.id, error, state);
@@ -611,6 +631,23 @@ export class RunService implements RunControl {
       // An abort that is not the message's fault puts it back in the queue; destroy/interrupt leave it answered.
       if ((reason === "pause" || reason === "company_pause" || reason === "shutdown") && active.messageId) conversations.attachRun(active.messageId, null);
       else if (reason === "timeout") reply(`I hit an error: ${error ?? "the run timed out"}`);
+      return;
+    }
+    const outage = thrown !== null ? isProviderOutage(thrown) : !!error && isProviderOutage(error);
+    if (outage) {
+      // The message goes back in the queue and is answered once a provider is reachable again.
+      this.deps.outage?.trip(error ?? errorText(thrown));
+      if (active.messageId) {
+        conversations.attachRun(active.messageId, null);
+        if (!this.outageNoted.has(active.messageId)) {
+          this.outageNoted.add(active.messageId);
+          try {
+            conversations.postAs(run.conversationId, "system", "Couldn't reach the AI providers just now (is the network down?). Your message is kept and will be answered as soon as they are reachable again.");
+          } catch {
+            // the chat was deleted meanwhile
+          }
+        }
+      }
       return;
     }
     if (thrown !== null) {

@@ -14,7 +14,7 @@ import { candidatePool, namedCandidates, scoreCandidates, type Candidate } from 
 import type { Competence } from "./self-ability.ts";
 import type { ProblemDefinition, Understanding } from "./target-understanding.ts";
 import { isHiringRequest } from "./solving-evaluation.ts";
-import { describeHire, hiresOf } from "../../../tools/builtins/hiring.ts";
+import { describeHire, objectiveHires } from "../../../tools/builtins/hiring.ts";
 
 export interface Subprocess {
   /**
@@ -157,7 +157,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
   const owners = canDelegate && task.state.kind !== "escalation" && delivered.length === 0 ? namedOwners(run, reports, `${task.title} ${task.description}`) : [];
   const named = owners.map((o) => o.agent);
   const max = maxSubprocessesFor(c, run.drives.essentialOnly, named.length);
-  const hires = hiresOf(run.platform.tasks.get(task.id) ?? task).filter((h) => h.status !== "declined");
+  const hires = objectiveHires(run.platform.tasks, run.platform.tasks.get(task.id) ?? task).filter((h) => h.status !== "declined");
   const hiring = canDelegate && isHiringRequest(`${task.title} ${task.description}`) && hires.length === 0;
   // What is already on the drive, so the plan names paths that update existing documents in place
   // (2026-11-07, test 4 rerun: briefs named no path, and every section got a second and third copy).
@@ -188,9 +188,10 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
                 : "") +
               // Founder, 2026-11-07: "managers hire, recruiter sources".
               (hiring
-                ? "Hiring: the head of the team the new hire joins makes the hire — hire_agent places people only in the hirer's own team and takes monthlyBudgetUsd and firstTask (their first assignment, with the exact file path). The budget is the new hire's monthly model budget, set by the hirer: the catalog has no prices. A recruiter in People finds and recommends the candidate first (catalog id and why). Plan the recommendation as round 1 (to the head of People, for their recruiter) and the hire — with budget and first task — as round 2 (to the receiving department's head). "
+                ? "Hiring: the head of the team the new hire joins makes the hire — hire_agent places people only in the hirer's own team and takes monthlyBudgetUsd and firstTask (their first assignment, with the exact file path). The budget is the new hire's monthly model budget, set by the hirer: the catalog has no prices. A recruiter in People finds and recommends the candidate first (catalog id and why). Plan the recommendation as round 1 (to the head of People, for their recruiter) and the hire — with budget and first task — as round 2 (to the receiving department's head). The recommendation step only recommends; the hire step uses the request's own budget and first task word for word (a \"$10 monthly budget\" is $10, not \"up to $10\"). "
                 : "") +
-              (hires.length ? `Already done for this task: ${hires.map(describeHire).join("; ")}. Do not plan another hire. ` : "") +
+              (hires.length ? `Already done on this objective: ${hires.map(describeHire).join("; ")}. Do not plan another hire. ` : "") +
+              "Carry the request's own figures into the parts word for word — budgets, word counts, dates, file paths. " +
               "Name the exact file path each part saves to in its description (e.g. launch-plan/finance.md), and the path of the combined document in the round-2 step. If the same document already exists on the drive (listed below), reuse its path: saving replaces it and keeps the previous version. Never ask for a second copy of a document under another name. " +
               'Parts that need other parts\' output — assembling, merging, reconciling, reviewing, final QA — are round 2 ("round":2): they are handed out only after every round-1 part is done, and their owner gets those results. You may instead do the assembly yourself: you are resumed with every part\'s result when they finish. ' +
               "Work that spans several departments' expertise (e.g. marketing + pricing + engineering) is delegated: one part per owning report — do not write other departments' parts yourself; reports run on cheaper models, so delegating is usually cheaper than doing it all yourself. " +
@@ -313,12 +314,23 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
     // A department/role named in the request (the Board's words) routes a subprocess that names none itself.
     const task = run.task;
     const ownDepartment = run.platform.org.departmentName(run.agent.departmentId);
-    const namedInRequest = task && task.state.kind !== "escalation" ? namedCandidates(`${task.title} ${task.description}`, candidates, { ownDepartment }) : new Set<string>();
+    const people = candidates.map((x) => x.agent);
+    const requestText = task && task.state.kind !== "escalation" ? `${task.title} ${task.description}` : "";
+    const namedInRequest = requestText ? namedCandidates(requestText, candidates, { ownDepartment }) : new Set<string>();
+    // A person the request names outside the leader's reports ("Jasmine should…") names their team's
+    // head too — otherwise "Marketing" was the only name and took every part (2026-11-07, trc_617b…).
+    if (requestText) for (const o of namedOwners(run, people, requestText)) if (o.via) namedInRequest.add(o.agent.id);
     for (const s of subprocesses) {
       if (candidates.length === 0) break;
       // The part's TITLE says whose it is ("Engineering scope…"); descriptions mention other departments in passing.
       const own = namedCandidates(s.title, candidates, { ownDepartment });
-      for (const o of namedOwners(run, candidates.map((x) => x.agent), s.title)) if (o.via) own.add(o.agent.id);
+      for (const o of namedOwners(run, people, s.title)) if (o.via) own.add(o.agent.id);
+      // The leader's pick stands when the part names a person on that pick's team ("Have Jasmine Lee
+      // run the catalog search" → her head of People), even if the request also names another department.
+      if (own.size === 0 && s.suggestedAssigneeId) {
+        const viaPerson = namedOwners(run, people, `${s.title} ${s.description}`).filter((o) => o.via).map((o) => o.agent.id);
+        if (viaPerson.includes(s.suggestedAssigneeId)) own.add(s.suggestedAssigneeId);
+      }
       const namedIds = own.size ? own : namedInRequest.size === 1 ? namedInRequest : undefined;
       const scores = scoreCandidates(`${s.title} ${s.description}`, candidates, { suggestedId: s.suggestedAssigneeId, usedCounts: used, fallbackDepartment: run.facts.department, ...(namedIds ? { namedIds } : {}) });
       const best = scores[0]!;

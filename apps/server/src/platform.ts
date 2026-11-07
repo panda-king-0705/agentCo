@@ -5,6 +5,7 @@
  *   createPlatform(config, overrides) is the only place concrete classes meet;
  *   tests inject fake engines / a fake model router through `overrides`.
  */
+import { OutageGate, watchOutages } from "./models/outage.ts";
 import { ChatCleanup } from "./runs/chat-cleanup.ts";
 import type { Agent, CognitionKind, CompanySnapshot, ModelsInfo } from "../../../packages/shared/src/index.ts";
 import type { AppConfig } from "./config.ts";
@@ -66,6 +67,8 @@ export interface Platform {
   conversations: ConversationService;
   /** Deleting chats, and what removing an agent clears (runs/chat-cleanup.ts). */
   chats: ChatCleanup;
+  /** Whether the AI providers can be reached; work waits while they can't (models/outage.ts). */
+  outage: OutageGate;
   memory: MemoryServiceImpl;
   tasks: TaskService;
   approvals: ApprovalService;
@@ -142,9 +145,11 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
 
   const modelConfig = overrides.createRouter && overrides.modelsInfo ? null : loadModelConfig(env);
   const routerDeps: ModelRouterDeps = { config: modelConfig, tracer, budget, getAgent: (id) => org.getAgent(id) };
-  const models = overrides.createRouter
+  const outage = new OutageGate(() => now().getTime());
+  // A provider that answers ends an outage (models/outage.ts).
+  const models = watchOutages(overrides.createRouter
     ? overrides.createRouter(routerDeps)
-    : createModelRouter({ ...routerDeps, config: modelConfig as NonNullable<typeof modelConfig>, ...(overrides.providers ? { providers: overrides.providers } : {}) });
+    : createModelRouter({ ...routerDeps, config: modelConfig as NonNullable<typeof modelConfig>, ...(overrides.providers ? { providers: overrides.providers } : {}) }), outage);
   const modelsInfo = overrides.modelsInfo ?? (() => buildModelsInfo(modelConfig ?? loadModelConfig(env)));
 
   const metrics = new MetricsService(repos, now);
@@ -170,12 +175,27 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
     runTimeoutMs: config.runTimeoutMs,
     isPaused: () => company.settings().paused,
     maxConcurrentRuns: () => company.settings().maxConcurrentRuns,
+    outage,
     now,
   });
   org.attachRunControl(runs);
   const chats = new ChatCleanup({ repos, bus, governor, runs, approvals });
   org.attachRemovalCleanup((agent) => chats.removeAgent(agent));
-  const scheduler = new Scheduler({ repos, bus, org, company, conversations, runs, tickMs: config.schedulerTickMs });
+  const scheduler = new Scheduler({ repos, bus, org, company, conversations, runs, tickMs: config.schedulerTickMs, outage });
+  // An outage that lasts (a second failed try) is told to the Board once, and its end too.
+  const clock = (ms: number) => new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  outage.onChange((event, s) => {
+    const room = repos.conversations.boardroom();
+    if (event === "held") {
+      if (s.strikes < 2 || s.notified) return;
+      outage.markNotified();
+      if (room) conversations.postAs(room.id, "system", `The company can't reach its AI providers (since ${clock(s.since)}; is the network down?). All work is on hold, nothing is lost and no attempts are used up. It resumes on its own once they answer; next try at ${clock(s.until)}.`);
+      console.warn(`[outage] AI providers unreachable since ${new Date(s.since).toISOString()}: ${s.reason}`);
+    } else {
+      if (s.notified && room) conversations.postAs(room.id, "system", `The AI providers are reachable again (down ${clock(s.since)}–${clock(now().getTime())}). Work has resumed.`);
+      if (s.notified) console.log("[outage] AI providers reachable again");
+    }
+  });
   runs.setSettledHook(() => scheduler.nudge());
 
   const bootstrapResult = overrides.bootstrap === false ? null : bootstrapCompany(repos, org, company.settings().orgTemplate, now, catalog);
@@ -205,7 +225,7 @@ export async function createPlatform(config: AppConfig, overrides: PlatformOverr
   let lastBeat = now().getTime();
 
   const platform: Platform = {
-    config, db, repos, bus, tracer, company, budget, org, conversations, chats, memory, tasks, approvals, tools, models, metrics,
+    config, db, repos, bus, tracer, company, budget, org, conversations, chats, outage, memory, tasks, approvals, tools, models, metrics,
     traces: new TraceService(repos), runs, scheduler, workspaces, catalog, services, bootstrapResult, modelsInfo,
     snapshot() {
       const at = now();
