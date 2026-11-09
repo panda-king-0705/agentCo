@@ -133,7 +133,9 @@ export async function validateContract(
         (o.boardSteps.length ? `Left to the Board (this company cannot do these; never count them): ${o.boardSteps.join("; ")}\n\n` : "") +
         `The saved work${o.files.some((f) => /^[\w.-]+\/[\w.-]+@/.test(f.display)) ? ` (${REPO_SAVED.trim()})` : ""}:\n${work}\n\n` +
         "For each statement give status: met (evidence: the file and a short quote that shows it), unmet (gap: exactly what is missing for THIS statement — nothing it does not ask for), or board (it can only be met with something only the Board can give: data no one in the company has, a decision, an outside step). " +
-        "Judge substance only: formatting, wording style, sign-offs and small count differences never make a statement unmet. A figure honestly marked as not available, where no file in the company has it, is the Board's, not unmet. Do not add requirements, and do not trust claims — only what the saved work shows.",
+        "Judge substance only: formatting, wording style, sign-offs and small count differences never make a statement unmet. A figure honestly marked as not available, where no file in the company has it, is the Board's, not unmet. " +
+        "A statement that something stays unchanged is met when nothing in the saved work shows it changed (the list of committed files says which files were touched) — never unmet only because an earlier version is not shown. " +
+        "Do not add requirements, and do not trust claims — only what the saved work shows.",
       shape: '{"checks":[{"id":"A1","status":"met"|"unmet"|"board","evidence":string,"gap":string}]}',
       context: { mode: "validation", contract: o.contract, files: o.files.map((f) => f.display) },
       maxOutputTokens: 300 + 120 * o.contract.length,

@@ -53,6 +53,8 @@ export interface OutsideFile {
   truncated: boolean;
   words: number;
   lines: number;
+  /** The contract names this file (or its folder): reviews give it more room. */
+  named?: boolean;
 }
 
 export interface McpServerStatus {
@@ -173,6 +175,10 @@ export class McpTools {
           const note = `shared copy: read through ${server.name} by ${shared.by === ctx.agent.name ? "you" : shared.by} at ${clock(shared.at)}; nothing was committed to it through the connection since. It did not count against the daily limit.`;
           return ok(wrapResult(server.name, tool.name, shared.text, note), [], { server: server.name, tool: tool.name, shared: true });
         }
+        if (!readOnly) {
+          const escaped = escapedTwice(args);
+          if (escaped) return fail(`Nothing was sent: ${escaped} looks escaped twice — \\"\\"\\" where """ was meant, or \\n written out instead of new lines. Send the file's text exactly as it should read.`);
+        }
         if (server.dailyCallLimit > 0) {
           const frees = this.freesAt(ctx.agent.id, server);
           if (frees !== null) {
@@ -228,13 +234,21 @@ export class McpTools {
     const all = [...latest.values()];
     if (all.length === 0) return [];
     const prefer = (o.prefer ?? []).join("\n");
-    // A path named whole, or its folder ("docs/fx/"), never as part of a longer path ("fx/" inside "docs/fx/").
-    const mentions = (s: string) => new RegExp(`(^|[^\\w./-])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(prefer);
+    // A path named whole, or its folder named as a folder ("docs/fx/" on its own) — never as part of a
+    // longer path: "fx/" inside "docs/fx/", or "fx/" in "fx/risk.py" (that names only risk.py).
+    const mentions = (s: string) => new RegExp(`(^|[^\\w./-])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(prefer);
     const named = (path: string) => mentions(path) || (path.includes("/") && mentions(`${path.slice(0, path.lastIndexOf("/"))}/`));
     // The ones the contract names, then the newest; shown named first, each group in commit order.
     const picked = new Set([...all.filter((f) => named(f.path)), ...all.filter((f) => !named(f.path)).reverse()].slice(0, maxFiles));
     const chosen = [...all.filter((f) => picked.has(f) && named(f.path)), ...all.filter((f) => picked.has(f) && !named(f.path))];
-    const perFile = Math.max(1200, Math.min(o.perFile ?? 5000, Math.floor((o.total ?? 48_000) / chosen.length)));
+    // The files the contract names get room to be read whole (up to 12,000 characters each, three
+    // quarters of the budget between them); the rest share what is left (trc_061a…: an 8 KB risk.py cut
+    // to 2,000 characters, so "the sizing logic is unchanged" could not be seen either way).
+    const total = o.total ?? 48_000;
+    const namedCount = chosen.filter((f) => named(f.path)).length;
+    const namedEach = namedCount ? Math.max(2000, Math.min(12_000, Math.floor((total * 0.75) / namedCount))) : 0;
+    const restCount = chosen.length - namedCount;
+    const perFile = Math.max(1200, Math.min(o.perFile ?? 5000, Math.floor((total - namedEach * namedCount) / Math.max(1, restCount))));
 
     const out: OutsideFile[] = [];
     const byPlace = new Map<string, string[]>();
@@ -260,9 +274,11 @@ export class McpTools {
             if (r.ok) this.remember(f.server, tool.name, readArgs, r.text, "the review");
             body = r.ok ? r.text : `(could not be read back: ${entry.client.redact(r.text).slice(0, 200)})`;
           }
-          const content = body.length > perFile ? body.slice(0, perFile) : body;
+          const isNamed = named(f.path);
+          const room = isNamed ? namedEach : perFile;
+          const content = body.length > room ? body.slice(0, room) : body;
           const words = content.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).length;
-          return { display: `${f.repo}@${f.branch || "default"}:${f.path}`, by: "the repository", content, truncated: body.length > perFile, words, lines: content.split("\n").length };
+          return { display: `${f.repo}@${f.branch || "default"}:${f.path}`, by: "the repository", content, truncated: body.length > room, words, lines: content.split("\n").length, ...(isNamed ? { named: true } : {}) };
         } catch (error) {
           this.log(`[mcp] reading back ${f.repo}:${f.path} failed: ${entry.client.redact(error instanceof Error ? error.message : String(error))}`);
           return null;
@@ -400,6 +416,29 @@ function wrapResult(server: string, tool: string, text: string, note?: string): 
 function clock(ms: number): string {
   const iso = new Date(ms).toISOString();
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+
+/** Source files, where an escaped quote or new line is never what the author meant. */
+const CODE_FILE = /\.(py|pyi|js|mjs|cjs|ts|tsx|jsx|sh|rb|go|rs|java|kt|ya?ml|toml|ini|cfg)$/i;
+
+/**
+ * The first code file in a write whose text was escaped twice, or null (2026-11-08, trc_061a…: a
+ * commit put \"\"\" where """ was meant in executor.py — a syntax error that took two fix rounds,
+ * a restore and a second branch to undo). Either an escaped triple quote, or a file written out on
+ * one line with its line breaks as \n.
+ */
+export function escapedTwice(args: Record<string, unknown>): string | null {
+  const files: { path: string; content: string }[] = [];
+  if (typeof args.path === "string" && typeof args.content === "string") files.push({ path: args.path, content: args.content });
+  if (Array.isArray(args.files)) for (const f of args.files) if (f && typeof f === "object" && typeof (f as { path?: unknown }).path === "string" && typeof (f as { content?: unknown }).content === "string") files.push(f as { path: string; content: string });
+  for (const f of files) {
+    if (!CODE_FILE.test(f.path)) continue;
+    if (/\\"\\"\\"|\\'\\'\\'/.test(f.content)) return f.path;
+    const breaks = (f.content.match(/\n/g) ?? []).length;
+    const written = (f.content.match(/\\n/g) ?? []).length;
+    if (breaks < 2 && written >= 3) return f.path;
+  }
+  return null;
 }
 
 /** owner/repo a call is about, or "". */

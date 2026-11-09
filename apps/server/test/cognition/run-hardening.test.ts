@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { ReflexEngine } from "../../src/cognition/reflex.ts";
 import { BrainEngine } from "../../src/cognition/brain/index.ts";
 import { withinBudget } from "../../src/cognition/brain/metacognition/solving-evaluation.ts";
+import { withoutCheckOnly } from "../../src/cognition/brain/metacognition/cognitive-control.ts";
 import { MockProvider } from "../../src/models/providers/mock.ts";
 import { readStage } from "../../src/models/protocol.ts";
 import type { ChatRequest, ModelProvider, ToolCall, ToolResult } from "../../src/contracts.ts";
@@ -247,5 +248,32 @@ test("the leader's review gets a share of the repository files; the list of comm
   const out = withinBudget([file("acme/bot@fx — committed files", 5000), ...Array.from({ length: 9 }, (_, i) => file(`acme/bot@fx:f${i}.py`, 5000))], 24_000);
   assert.equal(out[0]!.content.length, 5000);
   assert.ok(out.slice(1).every((f) => f.content.length === 2400 && f.truncated));
+  const named = withinBudget([{ ...file("acme/bot@fx:risk.py", 9000), named: true }, file("acme/bot@fx:b.py", 9000), file("acme/bot@fx:c.py", 9000)], 24_000);
+  assert.deepEqual(named.map((f) => f.content.length), [9000, 6000, 6000], "the file the contract names keeps twice the share");
   assert.deepEqual(withinBudget([file("a@b:c", 100)], 24_000)[0]!.truncated, false);
+});
+
+// 2026-11-08 (trc_061a…): a two-file cleanup became 27 tasks, ten of them verifying, confirming or
+// inventorying colleagues' commits ($1.50 and three escalations); the review and the independent check
+// already read every saved and committed file.
+test("parts that only re-check others' work are dropped, unless checking is the task", () => {
+  const parts = [
+    { title: "Port risk_manager.py requirements into risk.py" },
+    { title: "Independent check of T-371 port: spec coverage" },
+    { title: "Fix: Verify T-371 commits: coverage, stale notes" },
+    { title: "Inventory the main...t-308-fx-scalper diff" },
+    { title: "Confirm the PR #4 baseline and the main head" },
+    { title: "Re-run the diff inventory" },
+    { title: "Reconcile the complete live commit and file inventory" },
+    { title: "Independently verify behavior and test-status claims" },
+    { title: "Open the PR to main and write the description file" },
+    { title: "Checkout flow copy for the pricing page" },
+    { title: "Confirm figures, finalize draft and recipient list" },
+  ];
+  const task = { title: "Make risk.py the single risk manager", description: "Keep one risk manager.", parentTaskId: "tsk_1" };
+  assert.deepEqual(withoutCheckOnly(parts, task).map((p) => p.title), ["Port risk_manager.py requirements into risk.py", "Open the PR to main and write the description file", "Checkout flow copy for the pricing page", "Confirm figures, finalize draft and recipient list"]);
+  assert.equal(withoutCheckOnly(parts, { ...task, title: "Review the risk code before the merge" }).length, parts.length, "a review asked for stays");
+  assert.equal(withoutCheckOnly(parts, { ...task, parentTaskId: null, description: "Have Finance check the commission value." }).length, parts.length, "…as does one the founder asked for");
+  const onlyChecks = parts.slice(1, 3);
+  assert.equal(withoutCheckOnly(onlyChecks, task).length, 2, "a plan of nothing but checks is left alone");
 });

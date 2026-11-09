@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { parseMcpConfig } from "../../src/mcp/config.ts";
+import { escapedTwice } from "../../src/mcp/tools.ts";
 import { needsBoardStep } from "../../src/org/capabilities.ts";
 import { callTool, createTestApp, done, rootTask, waitFor } from "./helpers/harness.ts";
 
@@ -287,15 +288,18 @@ test("every committed file is listed, the ones the contract names are read first
     cto = t.agentByRole("cto").id;
     rootTask(t, cto, "Write the bot");
     await t.drain();
-    const files = await t.app.platform.mcp.outsideFiles(traceId, { prefer: ["docs/fx/spec.md states the pairs and the session hours"] });
+    const files = await t.app.platform.mcp.outsideFiles(traceId, { prefer: ["docs/fx/spec.md states the pairs and the session hours", "fx/part_03.big sizes the trades."] });
     const [list, ...read] = files;
     assert.equal(list!.display, "acme/bot@fx — committed files");
     assert.equal(list!.content.split("\n").filter((l) => l.startsWith("- ")).length, 30, "the list names every committed file");
     assert.equal(read.length, 24);
-    assert.equal(read[0]!.display, "acme/bot@fx:docs/fx/spec.md", "the file the contract names is read first, though committed first");
+    assert.deepEqual(read.slice(0, 2).map((f) => f.display), ["acme/bot@fx:docs/fx/spec.md", "acme/bot@fx:fx/part_03.big"], "the files the contract names are read first");
+    assert.ok(read.slice(0, 2).every((f) => f.named) && !read.slice(2).some((f) => f.named), "naming fx/part_03.big names no other file in fx/");
     assert.ok(read.some((f) => f.display.endsWith("fx/part_27.big")), "then the newest");
     assert.ok(!read.some((f) => f.display.endsWith("fx/part_00.big")));
-    assert.ok(read.every((f) => f.content.length <= 2000) && read.some((f) => f.truncated), "each file keeps its share of the budget");
+    // trc_061a…: an 8 KB file the contract named was cut to 2,000 characters, so the check could not see it.
+    assert.equal(read[1]!.truncated, false, "a named file is read whole");
+    assert.ok(read.slice(2).every((f) => f.content.length <= 1200 && f.truncated), "the others share what is left");
   } finally {
     await t.close();
     await fake.close();
@@ -374,4 +378,15 @@ test("a read made lately is shared: answered free of the limit until a commit ch
     await t.close();
     await fake.close();
   }
+});
+
+// 2026-11-08 (trc_061a…): a commit put \"\"\" where """ was meant in executor.py — a syntax error that
+// took two fix rounds, a restore and a second branch to undo.
+test("code escaped twice is refused before it is committed", () => {
+  const py = 'def f():\n    """Doc."""\n    return 1\n';
+  assert.equal(escapedTwice({ path: "fx/a.py", content: py }), null);
+  assert.equal(escapedTwice({ path: "fx/a.py", content: 'def f():\n    \\"\\"\\"Doc.\\"\\"\\"\n    return 1\n' }), "fx/a.py");
+  assert.equal(escapedTwice({ files: [{ path: "README.md", content: 'say \\"\\"\\"' }, { path: "fx/b.py", content: "import os\\nimport sys\\n\\nprint(1)\\n" }] }), "fx/b.py", "a file on one line with its breaks written out");
+  assert.equal(escapedTwice({ path: "docs/x.md", content: 'a \\"\\"\\" b' }), null, "only code files");
+  assert.equal(escapedTwice({ path: "fx/c.py", content: 'print("a\\nb")\nprint("c\\nd")\nprint("e\\nf")\n' }), null, "\\n inside strings of a normal file is fine");
 });

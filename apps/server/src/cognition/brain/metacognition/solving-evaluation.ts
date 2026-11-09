@@ -444,11 +444,18 @@ export function integrateResults(
     .join("\n\n");
 }
 
-/** Files cut to a total size, each keeping its share (the list of committed files always whole). */
-export function withinBudget<T extends ReviewFile>(files: readonly T[], total: number): T[] {
+/**
+ * Files cut to a total size, each keeping its share (the list of committed files always whole); the
+ * files the contract names keep twice the share of the others.
+ */
+export function withinBudget<T extends ReviewFile & { named?: boolean }>(files: readonly T[], total: number): T[] {
   if (files.length === 0) return [];
-  const each = Math.max(800, Math.floor(total / files.length));
-  return files.map((f) => (f.content.length <= each || f.display.endsWith("committed files") ? f : { ...f, content: f.content.slice(0, each), truncated: true }));
+  const weight = files.reduce((n, f) => n + (f.named ? 2 : 1), 0);
+  const each = Math.max(800, Math.floor(total / weight));
+  return files.map((f) => {
+    const room = f.named ? each * 2 : each;
+    return f.content.length <= room || f.display.endsWith("committed files") ? f : { ...f, content: f.content.slice(0, room), truncated: true };
+  });
 }
 
 /**

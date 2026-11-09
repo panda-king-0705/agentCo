@@ -205,6 +205,11 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
                 ? `What "done" means for this objective — fixed before the work starts; an independent checker judges the finished work against exactly these: ${contractList(a.contract)}. Give every part "covers": the ids of the statements it makes true; together the parts cover all of them, and each part's acceptance criteria come from its statements. `
                 : "") +
               "A part that writes code goes to someone who can commit to the repository, and is small enough for one sitting — one module and its tests; a bigger build is several such parts in order (round 1 the foundations, round 2 what builds on them), never one part for a whole package. " +
+              // trc_061a…: a cleanup became 27 tasks, ten of them verifying, confirming or inventorying others' commits.
+              "Every part makes or changes something. Don't plan parts that only verify, check, confirm, inventory or re-read others' work: when the parts finish, your own review reads everything they saved and committed, and an independent check follows. " +
+              (run.platform.capabilities && !run.platform.capabilities.company().has("code")
+                ? "No one in the company can run code or tests: never brief anyone to run them; a part that changes code says its tests were not run. "
+                : "") +
               "Carry the request's own figures into the parts word for word — budgets, word counts, dates, file paths. " +
               "A document for outsiders (investors, customers) holds only what they should read: never brief anyone to add review notes, condition lists or change logs to it — those go in the review file. A part that changes an existing document names the section(s) to change; its owner edits them in place. " +
               "Name the exact file path each part saves to in its description (e.g. launch-plan/finance.md), and the path of the combined document in the round-2 step. If the same document already exists on the drive (listed below), reuse its path: saving replaces it and keeps the previous version. Never ask for a second copy of a document under another name. " +
@@ -231,7 +236,9 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
         // Room for the whole plan: a cut-off reply lost every subprocess (json.ts now returns null for it).
         maxOutputTokens: 1200 + 350 * max,
       });
-      const subprocesses = coerceSubprocesses(json, max, Math.max(50, Math.round(task.value / Math.max(1, max))));
+      const planned = coerceSubprocesses(json, max, Math.max(50, Math.round(task.value / Math.max(1, max))));
+      const subprocesses = withoutCheckOnly(planned, task);
+      if (subprocesses.length < planned.length) span.setAttributes({ "agentco.decomposition.dropped_checks": planned.filter((s) => !subprocesses.includes(s)).map((s) => truncate(s.title, 60)).join("; ") });
       // A part handed out in a fix round is a fix: its owner reports what is still short instead of
       // starting a fix round of their own (brain/index.ts, reworkRounds). A part titled exactly like
       // one already delivered stays as it is: that is a redo, which delegation refuses.
@@ -395,6 +402,28 @@ export async function arrangeRoles(run: BrainRun, subprocesses: Subprocess[], re
       ...(independent.length ? { "agentco.role_arrangement.independent_review": independent.join("; ") } : {}),
     });
   });
+}
+
+/**
+ * A part that only re-checks others' work: "Verify …", "Independent check of …", "Confirm …",
+ * "Inventory …", "Re-run …", "Reconcile …" (2026-11-08, trc_061a…: ten such parts, $1.50 and three
+ * escalations on a cleanup of two files; the leader's review and the independent check already read
+ * every saved and committed file).
+ */
+export const CHECK_ONLY = /^(?:fix:\s*)?(?:an?\s+|the\s+)?(?:independent(?:ly)?\s+)?(?:verify|verification|re-?verify|check|cross[- ]check|double[- ]check|confirm|inventory|re-?run|reconcile|audit|validate)\b/i;
+const ASKS_FOR_CHECK = /\b(review|verif|check|audit|confirm|validat|inventory|reconcil|qa)\w*/i;
+/** …but "Confirm the figures and finalize the draft" also makes something: it stays. */
+const ALSO_MAKES = /\b(write|draft|finali[sz]e|fix|update|add|build|implement|create|change|edit|apply|move|remove|replace|send|save|merge|prepare|rewrite|restore)\b/i;
+
+/**
+ * The plan without its check-only parts — unless the task itself is a check (its title asks for one,
+ * or the founder's own request does), or every part is one.
+ */
+export function withoutCheckOnly<T extends { title: string }>(parts: T[], task: { title: string; description: string; parentTaskId: string | null; createdBy?: string }): T[] {
+  const asked = ASKS_FOR_CHECK.test(task.title) || (!task.parentTaskId && ASKS_FOR_CHECK.test(task.description));
+  if (asked) return parts;
+  const kept = parts.filter((p) => !CHECK_ONLY.test(p.title.trim()) || ALSO_MAKES.test(p.title.trim().replace(/^fix:\s*/i, "")));
+  return kept.length ? kept : parts;
 }
 
 /** "Fix: …" — a part handed out in a fix round. */

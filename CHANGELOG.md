@@ -5,6 +5,20 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (trc_061a…, the risk-manager cleanup: $5.75, 27 tasks, 385 GitHub calls, and it still wasn't done)
+- **No parts that only re-check.** Plans no longer include parts that only verify, check, confirm,
+  inventory, reconcile or re-run colleagues' work. Ten such parts cost about $1.50 and three
+  escalations, and the leader's review and the independent check already read every saved and
+  committed file. They stay when checking is the task itself, or when the founder asked for one. The
+  planning prompt also says, when no one can run code, not to brief anyone to run tests.
+- **Code escaped twice is refused.** A commit of a code file containing `\"\"\"`, or a whole file
+  written on one line with `\n`, is refused before it reaches the repository. A broken executor.py
+  docstring had cost two fix rounds, a restore and a second branch.
+- **The check can read the files the contract names.** Those files get up to 12,000 characters each, and
+  the leader's review gives them twice the share of other files. An 8 KB risk.py had been cut to 2,000
+  characters. Naming one file no longer counts its whole folder as named. "X stays unchanged" is met
+  unless the saved work shows a change.
+
 ### Changed
 - **Daily call limits: GitHub 1000, Firecrawl 50 per agent** (the founder, 2026-11-08). The example
   config now uses these, and the README documents the limits, what counts toward them and how to change them.
