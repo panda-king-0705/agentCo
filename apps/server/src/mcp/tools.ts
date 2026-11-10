@@ -151,12 +151,14 @@ export class McpTools {
     // Commits through this connection carry the token owner's name (2026-11-08, trc_92d7…: a retried
     // engineer took his own earlier commit for the founder's and stopped to ask).
     const authorship = !readOnly && server.grants.includes("git") ? " (Commits made through this connection show the Board's GitHub account as author — including earlier ones by you or a colleague.)" : "";
+    const newBranch = BRANCH_TOOL.test(tool.name);
     return {
       name,
       description:
         `[${server.name}] ${(tool.description || tool.title || tool.name).slice(0, 900)}` +
         (needsApproval ? " (Changes something outside the company: the call is sent to the Board and runs when approved.)" : "") +
         (branchArg ? ` (Work on your own branch and open a pull request: a change to ${server.protectBranches.join(" or ")} goes to the Board first.)` : "") +
+        (newBranch ? " (One branch per objective: if this work already has a branch — named in the request, or committed to by you or a colleague — commit there instead. Name a new branch for the work, not for your task number.)" : "") +
         authorship,
       parameters: stripSchemaMeta(schema),
       tiers: ALL_TIERS,
@@ -174,6 +176,19 @@ export class McpTools {
           ctx.span.setAttributes({ "agentco.mcp.cached": true });
           const note = `shared copy: read through ${server.name} by ${shared.by === ctx.agent.name ? "you" : shared.by} at ${clock(shared.at)}; nothing was committed to it through the connection since. It did not count against the daily limit.`;
           return ok(wrapResult(server.name, tool.name, shared.text, note), [], { server: server.name, tool: tool.name, shared: true });
+        }
+        // One branch per objective (2026-11-10: every task opened its own branch — t-387-remove-stale-…
+        // beside t-308-fx-scalper — and the pull request went to the wrong base).
+        if (newBranch) {
+          const current = this.objectiveBranch(server.name, args, ctx.taskId, ctx.traceId);
+          const wanted = typeof args.branch === "string" ? args.branch.trim() : "";
+          if (current && wanted && current.branch.toLowerCase() !== wanted.toLowerCase()) {
+            ctx.span.setAttributes({ "agentco.mcp.branch_refused": `${wanted} (objective's: ${current.branch})` });
+            return fail(
+              `No new branch: this objective already works on branch ${current.branch} (${current.why}). Commit to ${current.branch} — one branch per objective, and its pull request is opened from it. ` +
+                `If ${current.branch} no longer exists (merged and deleted), create it again under that same name.`,
+            );
+          }
         }
         if (!readOnly) {
           const escaped = escapedTwice(args);
@@ -329,6 +344,26 @@ export class McpTools {
     return latest === null ? null : new Date(latest).toISOString();
   }
 
+  /**
+   * The branch this objective already works on in a repository: the last one committed to through this
+   * connection on the objective, else one its request names ("on branch t-308-fx-scalper"). Never a
+   * default branch (main, master).
+   */
+  private objectiveBranch(server: string, args: Record<string, unknown>, taskId: string | null, traceId: string): { branch: string; why: string } | null {
+    const repo = repoOf(args);
+    if (!repo) return null;
+    const committed = this.deps.repos.spans
+      .repoWrites(traceId)
+      .filter((w) => w.server === server && w.repo.toLowerCase() === repo && w.branch && !DEFAULT_BRANCH.test(w.branch))
+      .map((w) => w.branch);
+    if (committed.length) return { branch: committed[committed.length - 1]!, why: "this objective's commits are there" };
+    const task = taskId ? this.deps.repos.tasks.get(taskId) : null;
+    const root = task ? (task.rootTaskId === task.id ? task : this.deps.repos.tasks.get(task.rootTaskId)) : null;
+    const named = root ? NAMED_BRANCH.exec(`${root.title}\n${root.description}`)?.[1]?.replace(/[.,;:)]+$/, "") : undefined;
+    if (named && !DEFAULT_BRANCH.test(named)) return { branch: named, why: "the request names it" };
+    return null;
+  }
+
   private sharedRead(server: string, tool: string, args: Record<string, unknown>): SharedRead | null {
     const key = sharedKey(server, tool, args);
     const r = this.reads.get(key);
@@ -417,6 +452,12 @@ function clock(ms: number): string {
   const iso = new Date(ms).toISOString();
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
+
+/** Tools that open a new branch. */
+const BRANCH_TOOL = /(^|_)create_branch$/;
+const DEFAULT_BRANCH = /^(main|master|trunk|develop)$/i;
+/** "on branch t-308-fx-scalper", "on the branch `fx`" in a request. */
+const NAMED_BRANCH = /\bon (?:the )?branch\s+[`'"]?([A-Za-z0-9][\w./-]*)/i;
 
 /** Source files, where an escaped quote or new line is never what the author meant. */
 const CODE_FILE = /\.(py|pyi|js|mjs|cjs|ts|tsx|jsx|sh|rb|go|rs|java|kt|ya?ml|toml|ini|cfg)$/i;

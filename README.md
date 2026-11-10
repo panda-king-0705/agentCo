@@ -104,6 +104,16 @@ calls **each agent** may make to it in any 24 hours (a rolling window, not a cal
 - **To change a limit:** edit `config/mcp.json`, then run `docker compose restart`. The file is read at
   start-up, and no rebuild is needed.
 
+**Test results from CI.** The agents can't run code. Instead, the code repository runs its tests on GitHub
+Actions for every push and pull request (`.github/workflows/tests.yml` there). The `actions` toolset
+lets engineers read the run for their branch and its job log (`actions_list`, `actions_get`,
+`get_job_logs`), and the server's `notes` tell them to report that result. `actions_run_trigger` is
+excluded, so they can't start, re-run or cancel workflows.
+
+**One branch per objective.** Once an objective has committed to a branch, or its request names one ("on
+branch t-308-fx-scalper"), an attempt to create a different branch in that repository is refused, and
+the agent commits to the objective's branch. New work still gets its own branch.
+
 ## Architecture in one page
 
 ```

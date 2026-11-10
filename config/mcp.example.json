@@ -15,15 +15,17 @@
       "url": "https://api.githubcopilot.com/mcp/",
       "headers": {
         "Authorization": "Bearer ${GITHUB_TOKEN}",
-        "X-MCP-Toolsets": "repos,pull_requests",
-        "X-MCP-Exclude-Tools": "merge_pull_request,delete_file,create_repository,fork_repository"
+        "X-MCP-Toolsets": "repos,pull_requests,actions",
+        "X-MCP-Exclude-Tools": "merge_pull_request,delete_file,create_repository,fork_repository,actions_run_trigger"
       },
       "grants": ["git"],
+      "notes": "Our repository: OWNER/REPO - the only one. One branch per objective. Tests run on GitHub Actions on every push: after committing, read the run for your branch (actions tools) and its job log - never claim tests pass without it.",
       "access": { "departments": ["engineering"] },
       "tools": [
         "get_file_contents", "list_branches", "list_commits", "get_commit", "search_code",
         "list_pull_requests", "pull_request_read", "create_branch", "create_or_update_file",
-        "push_files", "create_pull_request", "update_pull_request"
+        "push_files", "create_pull_request", "update_pull_request",
+        "actions_list", "actions_get", "get_job_logs"
       ],
       "noApproval": ["create_branch", "create_or_update_file", "push_files", "create_pull_request", "update_pull_request"],
       "dailyCallLimit": 1000

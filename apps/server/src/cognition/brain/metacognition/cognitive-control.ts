@@ -208,7 +208,7 @@ export async function cognitiveControl(run: BrainRun, a: DecomposeArgs): Promise
               // trc_061a…: a cleanup became 27 tasks, ten of them verifying, confirming or inventorying others' commits.
               "Every part makes or changes something. Don't plan parts that only verify, check, confirm, inventory or re-read others' work: when the parts finish, your own review reads everything they saved and committed, and an independent check follows. " +
               (run.platform.capabilities && !run.platform.capabilities.company().has("code")
-                ? "No one in the company can run code or tests: never brief anyone to run them; a part that changes code says its tests were not run. "
+                ? "No one in the company can run code: never brief anyone to run tests themselves. Where the repository runs them on every push (the connection's note says so), the part that changes code reads that result before it reports; otherwise it says its tests were not run. "
                 : "") +
               "Carry the request's own figures into the parts word for word — budgets, word counts, dates, file paths. " +
               "A document for outsiders (investors, customers) holds only what they should read: never brief anyone to add review notes, condition lists or change logs to it — those go in the review file. A part that changes an existing document names the section(s) to change; its owner edits them in place. " +

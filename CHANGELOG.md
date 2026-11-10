@@ -5,6 +5,19 @@ versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Test results from CI.** The code repository now runs pytest on GitHub Actions for every push and pull
+  request. The GitHub connection's `actions` toolset (`actions_list`, `actions_get`, `get_job_logs`)
+  lets engineers read the results. Starting or cancelling workflows (`actions_run_trigger`) is excluded.
+  Plans now tell the part that changes code to read that result, not to say "not run".
+
+### Fixed
+- **One branch per objective.** Every task had been opening its own branch, for example
+  `t-387-remove-stale-conflict-notes` next to `t-308-fx-scalper`, and the pull request then went to the
+  wrong base. Now, once an objective has committed to a branch in a repository, or its request names one,
+  creating any other branch there is refused with the branch to use. Re-creating that same branch (if it
+  was merged and deleted) is still allowed. The `create_branch` tool's description says so up front.
+
 ### Fixed (trc_061a…, the risk-manager cleanup: $5.75, 27 tasks, 385 GitHub calls, and it still wasn't done)
 - **No parts that only re-check.** Plans no longer include parts that only verify, check, confirm,
   inventory, reconcile or re-run colleagues' work. Ten such parts cost about $1.50 and three
